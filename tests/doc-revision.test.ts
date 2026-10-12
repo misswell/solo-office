@@ -93,8 +93,8 @@ describe("docx 修订：写回与往返", () => {
     const first = paragraphs(doc)[0]!;
     first.inlines = [{ text: "未修订的段落改过了" }];
     const xml = body(doc);
-    expect(xml).toContain('<w:ins w:id="1" w:author="顾峰" w:date="2026-03-01T08:00:00Z"><w:r><w:t xml:space="preserve">插入的字</w:t></w:r></w:ins>');
-    expect(xml).toContain('<w:del w:id="2" w:author="林晓" w:date="2026-03-01T08:00:00Z"><w:r><w:delText xml:space="preserve">删掉的字</w:delText></w:r></w:del>');
+    expect(xml).toContain('<w:ins w:id="1" w:author="顾峰" w:date="2026-03-01T08:00:00Z"><w:r><w:t>插入的字</w:t></w:r></w:ins>');
+    expect(xml).toContain('<w:del w:id="2" w:author="林晓" w:date="2026-03-01T08:00:00Z"><w:r><w:delText>删掉的字</w:delText></w:r></w:del>');
     expect(xml).toContain('<w:ins w:id="6"');
   });
 
@@ -151,7 +151,7 @@ describe("docx 修订：接受与拒绝", () => {
     doc.resolveRevisions("reject", 2);
     const xml = body(doc);
     expect(xml).not.toContain("<w:delText");
-    expect(xml).toContain("<w:t xml:space=\"preserve\">删掉的字</w:t>");
+    expect(xml).toContain("<w:t>删掉的字</w:t>");
   });
 
   it("counts as an edit, so the save regenerates the body", () => {
@@ -220,7 +220,7 @@ describe("docx 修订：修订套在修订里", () => {
     const out = body(marked);
     const markers = (s: string): number => (s.match(/commentRangeStart|commentRangeEnd|commentReference/g) ?? []).length;
     expect(markers(out)).toBe(markers(source));
-    expect(out).toContain('<w:delText xml:space="preserve">');
+    expect(out).toContain('<w:delText>');
     expect(markers(out)).toBeGreaterThan(0);
   });
 });
@@ -579,7 +579,7 @@ describe("docx 修订：本机签在段落上的记录写出后再读仍是同�
     // `w:jc` then `w:rPr` then nothing: the order CT_PPr asks for, with the mark inside the run
     // properties of the paragraph the break terminates.
     expect(paraXml(doc, "居中的")).toBe(
-      '<w:p><w:pPr><w:jc w:val="center"/><w:rPr><w:ins w:id="920" w:author="审阅者甲" w:date="2026-04-02T10:00:00Z"/></w:rPr></w:pPr><w:r><w:t xml:space="preserve">居中的</w:t></w:r></w:p>',
+      '<w:p><w:pPr><w:jc w:val="center"/><w:rPr><w:ins w:id="920" w:author="审阅者甲" w:date="2026-04-02T10:00:00Z"/></w:rPr></w:pPr><w:r><w:t>居中的</w:t></w:r></w:p>',
     );
     const again = open(writeDocx(doc));
     expect(marks(again)).toBe("ins:920");

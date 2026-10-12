@@ -445,8 +445,8 @@ describe("docx 批注：富正文编辑", () => {
     expect(rich.paragraphs[0][0].bold).toBe(true);
     expect(doc.setCommentRuns(1, [[{ text: "改过的加粗", bold: true }, { text: "与正文" }], [{ text: "第二段" }]])).toBe(true);
     const body = OpcPackage.from(writeDocx(doc)).text("word/comments.xml")!;
-    expect(body).toContain('<w:rPr><w:b/></w:rPr><w:t xml:space="preserve">改过的加粗</w:t>');
-    expect(body).toContain('<w:t xml:space="preserve">与正文</w:t>');
+    expect(body).toContain('<w:rPr><w:b/></w:rPr><w:t>改过的加粗</w:t>');
+    expect(body).toContain('<w:t>与正文</w:t>');
     const again = open(writeDocx(doc)).comments.find((c) => c.id === 1)!;
     expect(again.paragraphs[0][0].bold).toBe(true);
     expect(again.paragraphs[0][1].bold).toBeUndefined();
@@ -461,8 +461,8 @@ describe("docx 批注：富正文编辑", () => {
     rich.paragraphs = [before[0].map((r, i) => ({ ...r, bold: i === 1 })), before[1]];
     expect(doc.edited).toBe(true);
     const body = OpcPackage.from(writeDocx(doc)).text("word/comments.xml")!;
-    expect(body).toContain('<w:t xml:space="preserve">加粗说明</w:t>');
-    expect(body).toContain('<w:rPr><w:b/></w:rPr><w:t xml:space="preserve">与正文</w:t>');
+    expect(body).toContain('<w:t>加粗说明</w:t>');
+    expect(body).toContain('<w:rPr><w:b/></w:rPr><w:t>与正文</w:t>');
   });
 
   it("does not rebuild a comment whose runs only got re-split", () => {

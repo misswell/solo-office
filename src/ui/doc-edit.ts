@@ -205,7 +205,7 @@ function readParagraphRevisions(el: Element, p: Paragraph): void {
   }
 }
 
-const CARRIED: (keyof Inline)[] = ["bold", "italic", "underline", "strike", "sizePt", "color", "highlight", "font", "vertAlign", "hyperlink", "break", "tab"];
+const CARRIED: (keyof Inline)[] = ["bold", "italic", "underline", "strike", "sizePt", "color", "highlight", "font", "vertAlign", "hyperlink", "break", "brXml", "tab"];
 
 /** Two runs join only if they share their revision, or an edit would rewrite someone's tracked change. */
 const sameRevision = (a?: Revision, b?: Revision): boolean =>

@@ -302,22 +302,43 @@ function revisedRunProps(inline: Inline): string {
 function textRun(inline: Inline): string {
   if (inline.image) return imageRun(inline, inline.image.width, inline.image.height, "");
   const props = revisedRunProps(inline);
-  const body = inline.tab ? "<w:tab/>" : inline.break ? "<w:br/>" : inline.rev?.kind === "del" ? delTextTag(inline.text) : textTag(inline.text);
+  const body = inline.tab ? "<w:tab/>" : inline.break ? breakXml(inline) : inline.rev?.kind === "del" ? delTextTag(inline.text) : textTag(inline.text);
   return `<w:r>${props}${body}</w:r>`;
 }
 
-const textTag = (text: string): string => (text === "" ? "" : `<w:t xml:space="preserve">${XML_ESC(text)}</w:t>`);
+/** A break goes back as the file wrote it — its type, its `w:clear`, all of it. Ours own is the plain soft return. */
+const breakXml = (inline: Inline): string => inline.brXml ?? "<w:br/>";
+
+/**
+ * `xml:space="preserve"` is written when the text would otherwise lose something at its edges, which is the
+ * rule WPS follows: of the 5,382 `w:t` in the local corpus it puts the attribute on 960. Spelling it on every
+ * one is not a wrong document, it is a different one — and "same bytes when nothing moved" is what an
+ * untouched save is measured against here.
+ */
+const preserve = (text: string): string => (/^\s|\s$/.test(text) ? ' xml:space="preserve"' : "");
+
+const textTag = (text: string): string => (text === "" ? "" : `<w:t${preserve(text)}>${XML_ESC(text)}</w:t>`);
 
 /** Deleted text is spelled `w:delText`, not `w:t` — Word reads the two differently. */
-const delTextTag = (text: string): string => (text === "" ? "" : `<w:delText xml:space="preserve">${XML_ESC(text)}</w:delText>`);
+const delTextTag = (text: string): string => (text === "" ? "" : `<w:delText${preserve(text)}>${XML_ESC(text)}</w:delText>`);
 
 function imageRun(inline: Inline, width: number, height: number, rid: string): string {
   const img = inline.image!;
+  // The drawing the file wrote travels whole while nothing about the picture has moved. Five fields describe
+  // where a picture sits and how big it is; the frame it floats in, its wrap, its shadow, its crop and the
+  // blip's own extension list are not among them, and re-spelling the drawing from the fields downgraded
+  // every floating picture to an inline one and dropped the rest. Only the relationship id is the writer's.
+  const carried = inline.drawing;
+  if (rid && carried && carried.width === width && carried.height === height && carried.name === img.name) {
+    return `<w:r>${revisedRunProps(inline)}${remapEmbed(carried.xml, carried.embed, rid)}</w:r>`;
+  }
   const cx = Math.round(width * EMU_PER_PX);
   const cy = Math.round(height * EMU_PER_PX);
   const name = XML_ESC(img.name || "图片");
   const drawing =
-    `<w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0">` +
+    // Our own drawing declares the prefixes it uses where they are used: a document whose root the file
+    // wrote without `xmlns:a` keeps that root, and a picture inserted into it still resolves.
+    `<w:drawing><wp:inline xmlns:wp="${NS_WP}" xmlns:a="${NS_A}" xmlns:pic="${NS_PIC}" xmlns:r="${NS_R}" distT="0" distB="0" distL="0" distR="0">` +
     `<wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="1" name="${name}"/>` +
     `<wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>` +
     `<a:graphic><a:graphicData uri="${NS_PIC}"><pic:pic>` +
@@ -327,6 +348,21 @@ function imageRun(inline: Inline, width: number, height: number, rid: string): s
     `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>` +
     `</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>`;
   return `<w:r>${revisedRunProps(inline)}${drawing}</w:r>`;
+}
+
+/**
+ * A carried drawing's citation, pointed at the relationship id this save issued. Everything else in its bytes
+ * goes back untouched — the id is the only thing in a drawing that belongs to the package rather than to the
+ * picture, and a save that renumbered its relationships would otherwise leave the shape citing nothing.
+ */
+function remapEmbed(xml: string, from: string | undefined, rid: string): string {
+  if (!from || from === rid) return xml;
+  let out = xml;
+  for (const attr of ["r:embed", "r:link"]) {
+    const needle = `${attr}="${from}"`;
+    if (out.includes(needle)) out = out.split(needle).join(`${attr}="${rid}"`);
+  }
+  return out;
 }
 
 /**
@@ -479,14 +515,29 @@ function tablePropsXml(t: Table): string {
 
 function tableXml(t: Table, rels: RelBuilder): string {
   // A row that somebody added or removed signs itself on the row, before any of the row's cells.
-  // Whatever else the row held after its cells — a `w:tblPrEx` band — goes back after them, where the schema puts it.
+  const between = t.betweenRows ?? [];
+  const after = (i: number): string =>
+    between
+      .filter((s) => s.afterRow === i)
+      .map((s) => s.xml)
+      .join("");
   const rows = t.rows
-    .map((cells) => {
+    .map((cells, i) => {
       const row = cells[0]?.row;
-      return `<w:tr${row?.attrsXml ?? ""}>${rowPropsXml(row)}${cells.map((c) => cellXml(c, rels)).join("")}${(row?.extras ?? []).map((s) => s.xml).join("")}</w:tr>`;
+      // The row's unmodelled children go back between the siblings they were read next to. WPS puts the
+      // `w:tblPrEx` band first, ahead of `w:trPr`, so a save that returns it after the cells rewrites
+      // every row of every table in the wrong order.
+      const ex = row?.extras ?? [];
+      const head = ex.filter((s) => s.beforeProps).map((s) => s.xml).join("");
+      const mid = ex.filter((s) => !s.beforeProps && s.afterCells === 0).map((s) => s.xml).join("");
+      const afterCell = (n: number): string => ex.filter((s) => !s.beforeProps && s.afterCells === n).map((s) => s.xml).join("");
+      const orphaned = ex.filter((s) => !s.beforeProps && s.afterCells > cells.length).map((s) => s.xml).join("");
+      return `<w:tr${row?.attrsXml ?? ""}>${head}${rowPropsXml(row)}${mid}${cells.map((c, n) => cellXml(c, rels) + afterCell(n + 1)).join("")}${orphaned}</w:tr>${after(i)}`;
     })
     .join("");
-  return `<w:tbl>${tablePropsXml(t)}${gridXml(t)}${rows}</w:tbl>`;
+  // Markup that sat before the first row keeps that place; markup past the last row the table has now (its
+  // rows were deleted) still goes back at the end rather than vanishing with the row it followed.
+  return `<w:tbl>${tablePropsXml(t)}${gridXml(t)}${after(-1)}${rows}${between.filter((s) => s.afterRow >= t.rows.length).map((s) => s.xml).join("")}</w:tbl>`;
 }
 
 function blockXml(block: Block, rels: RelBuilder): string {
@@ -544,8 +595,14 @@ function documentXml(doc: WordDocument, rels: RelBuilder): string {
   if (ignorable && !declared.has("mc")) declared.set("mc", NS_MC);
   const namespaces = [...declared].map(([prefix, uri]) => ` xmlns:${prefix}="${XML_ESC(uri)}"`).join("");
   const skip = ignorable ? ` mc:Ignorable="${XML_ESC(ignorable)}"` : "";
+  // `w:` and `r:` are in every body this writer builds. The drawing prefixes go back only where the file
+  // itself declared them on the root: 14 of the 86 table-bearing files declare `a` on the drawing rather than
+  // on `w:document`, and a save that "helpfully" lifts it to the root has invented a declaration the file
+  // never wrote. Markup this writer generates carries its own declarations (see `imageRun`), so it needs none.
+  const fromSource = new Set(Object.keys(doc.documentNamespaces()));
+  const declares = (prefix: string, uri: string): string => (fromSource.has(prefix) ? ` xmlns:${prefix}="${XML_ESC(uri)}"` : "");
   return (
-    `${DECL}<w:document xmlns:w="${NS_W}" xmlns:r="${NS_R}" xmlns:wp="${NS_WP}" xmlns:a="${NS_A}" xmlns:pic="${NS_PIC}"${namespaces}${skip}>` +
+    `${DECL}<w:document xmlns:w="${NS_W}" xmlns:r="${NS_R}"${declares("wp", NS_WP)}${declares("a", NS_A)}${declares("pic", NS_PIC)}${namespaces}${skip}>` +
     `<w:body>${body}</w:body></w:document>`
   );
 }
@@ -631,7 +688,59 @@ class RelBuilder {
   }
 }
 
-function contentTypesXml(paths: { path: string; type?: string }[]): string {
+/**
+ * The content types as the package wrote them, plus only the declarations this save actually needs.
+ * `[Content_Types].xml` is a *set of promises*, not a per-part listing: one `Default Extension="rels"`
+ * covers every relationship part, and one `Default Extension="xml" ContentType="application/xml"` covers
+ * every plain-XML part the document has no special type for. Spelling the table again from part names
+ * invents an `Override` for each of those (`/_rels/.rels`, `/word/settings.xml`) and drops a `Default`
+ * this writer has no template entry for — `bin`, `wmf`, a thumbnail format — which un-types bytes the
+ * package still carries. So the source table travels: an `Override` leaves only when its part leaves the
+ * package, and only a part this package never had gets a new promise, the narrowest one that fits.
+ */
+function contentTypesXml(carried: string, partsAtRead: Set<string>, paths: { path: string; type?: string }[]): string {
+  const decl = /^<\?xml[\s\S]*?\?>/.exec(carried)?.[0];
+  const rest = carried.slice((decl ?? "").length);
+  // Whitespace between the declaration and the root is the source's own, and it stays. The root match has to
+  // start at the root rather than at that whitespace, or this falls through to spelling the table again.
+  const gap = /^\s*/.exec(rest)?.[0] ?? "";
+  const inner = rest.slice(gap.length);
+  const root = /^<[^>]*>/.exec(inner)?.[0];
+  const close = inner.lastIndexOf("</");
+  if (!root || close < 0) return spellContentTypes(paths);
+  const attr = (xml: string, name: string): string => new RegExp(`\\s${name}="([^"]*)"`).exec(xml)?.[1] ?? "";
+  const extOf = (path: string): string => (path.includes(".") ? path.slice(path.lastIndexOf(".") + 1).toLowerCase() : "");
+  const spans = childSpans(inner.slice(root.length, close));
+  const kept = spans.filter((s) =>
+    // An extension-wide promise covers a *kind* of part, not one part: it stays whether or not this save
+    // still has a part of that extension, because the source wrote it and nothing about it moved.
+    s.tag === "Default" ? true : s.tag === "Override" ? paths.some((p) => `/${p.path}` === attr(s.xml, "PartName")) : true,
+  );
+  const defaults = new Map(kept.filter((s) => s.tag === "Default").map((s) => [attr(s.xml, "Extension").toLowerCase(), attr(s.xml, "ContentType")]));
+  const overridden = new Set(kept.filter((s) => s.tag === "Override").map((s) => attr(s.xml, "PartName")));
+  const added: string[] = [];
+  for (const { path, type } of paths) {
+    if (partsAtRead.has(path)) continue; // the source table already made this promise; re-spelling it is not fidelity
+    const part = `/${path}`;
+    if (overridden.has(part)) continue;
+    const ext = extOf(path);
+    const resolved = type ?? fallbackType(path);
+    if (!resolved) continue;
+    const covered = defaults.get(ext);
+    if (covered === resolved) continue;
+    if (ext in CONTENT_TYPES && CONTENT_TYPES[ext] === resolved && !path.endsWith(".xml")) {
+      defaults.set(ext, resolved);
+      added.push(`<Default Extension="${ext}" ContentType="${resolved}"/>`);
+      continue;
+    }
+    overridden.add(part);
+    added.push(`<Override PartName="${part}" ContentType="${resolved}"/>`);
+  }
+  return `${decl ?? DECL}${gap}${root}${kept.map((s) => s.xml).join("")}${added.join("")}</Types>`;
+}
+
+/** A package this writer built from scratch: no source table to travel, so the names spell the set. */
+function spellContentTypes(paths: { path: string; type?: string }[]): string {
   const defaults = ["rels", "xml"].map((ext) => `<Default Extension="${ext}" ContentType="${ext === "rels" ? "application/vnd.openxmlformats-package.relationships+xml" : "application/xml"}"/>`);
   const mediaExt = new Set<string>();
   const overrides: string[] = [];
@@ -709,13 +818,20 @@ export function writeDocx(doc: WordDocument): Uint8Array {
 
   files["word/_rels/document.xml.rels"] = strToU8(relsXml(rels));
 
+  // A picture the model holds is written from the model's own bytes and wins over the copy that travelled
+  // with the package — the model is the thing that was edited. Media the model holds no inline for came
+  // through the passthrough above and keeps its bytes, which is what the body's `r:embed` still cites.
+  const fromModel = new Set<string>();
   for (const inline of everyInline(doc)) {
     const img = inline.image;
-    if (img && !(img.path in files)) files[img.path] = bytesOfDataUrl(img.src);
+    if (!img || fromModel.has(img.path)) continue;
+    fromModel.add(img.path);
+    files[img.path] = bytesOfDataUrl(img.src);
   }
 
   const paths = Object.keys(files).map((path) => ({ path, type: passthrough.find((p) => p.path === path)?.type }));
-  files["[Content_Types].xml"] = strToU8(contentTypesXml(paths));
+  const partsAtRead = new Set(src ? [...src.parts.keys()] : []);
+  files["[Content_Types].xml"] = strToU8(contentTypesXml(src?.text("[Content_Types].xml") ?? "", partsAtRead, paths));
   return zipSync(files, { level: 6 });
 }
 

@@ -40,7 +40,22 @@ export interface Inline extends RunStyle {
   text: string;
   hyperlink?: string;
   image?: { src: string; width: number; height: number; name: string; path: string };
+  /**
+   * The `w:drawing` this picture came from, exactly as the file wrote it, alongside the fields the page draws
+   * from. A shape carries far more than a picture's bytes — the frame it floats in, its wrap, its effects, the
+   * crop and the fill's own extension list — and five fields cannot hold any of that, so a save returns these
+   * bytes while the size and name it reads them for have not moved. `width`/`height`/`name` are the snapshot
+   * that decides it; `embed` is the relationship id the source used, which the writer remaps to its own.
+   */
+  drawing?: { xml: string; width: number; height: number; name: string; embed?: string };
   break?: boolean;
+  /**
+   * The `w:br` this break came from, as the file wrote it. A break carries more than its kind — `w:clear`
+   * says whether it also clears the floating shapes beside it — and the model edits none of that, so the
+   * token travels whole instead of being re-spelled from a field list that only knows `w:type`. Absent on a
+   * break this editor inserts, which is the soft return Word writes with no attribute at all.
+   */
+  brXml?: string;
   tab?: boolean;
   /**
    * A comment anchor sitting between runs: `w:commentRangeStart`, `w:commentRangeEnd`
@@ -436,10 +451,13 @@ export interface RowInfo {
   slots?: PropSlot[];
   /**
    * The row's own children that are neither `w:trPr` nor `w:tc` — the `w:tblPrEx` band, which says this row
-   * draws with table borders and shading of its own rather than the table's. It sits after the cells and the
-   * schema lets it repeat, so each one comes back under the tag it arrived with.
+   * draws with table borders and shading of its own rather than the table's. Across the 86 real WPS tables
+   * it is always the row's FIRST child (6257 rows put it before `w:trPr`, 123 before the first cell when the
+   * row has no properties at all), so where it sits is carried too: a save that returns it after the cells
+   * rewrites 6380 rows in the wrong order. `afterCells` counts the cells it followed and `beforeProps` says
+   * whether it preceded `w:trPr`.
    */
-  extras?: PropSlot[];
+  extras?: RowExtra[];
   /** The attributes on this row's own `w:tr` opening tag, exactly as written — see `Paragraph.attrsXml`. */
   attrsXml?: string;
 }
@@ -452,6 +470,14 @@ export interface RowInfo {
 export interface PropSlot {
   tag: string;
   xml: string;
+}
+
+/** A row child the model has no field for, kept with the siblings it was read between. See `RowInfo.extras`. */
+export interface RowExtra extends PropSlot {
+  /** How many `w:tc` preceded it when it was read. */
+  afterCells: number;
+  /** True when it came before this row's `w:trPr`. */
+  beforeProps: boolean;
 }
 
 export interface Table {
@@ -486,6 +512,15 @@ export interface Table {
    * field for are carried once rather than re-spelled from a partial set.
    */
   revFormat?: TableFormatRevision;
+  /**
+   * Children of `w:tbl` the model has no fields for, each with the row it sat after (`-1` = before the first
+   * row, which is where the schema puts them once the grid is closed). The OOXML table allows range markup and
+   * containers between its rows, and WPS does use it: a `w:bookmarkEnd` written between two rows is how a
+   * bookmark that started in the paragraph above the table gets closed. Ten of the 86 table-bearing files in
+   * the corpus carry one, and without this slot the start survives a save while the end goes, leaving a
+   * bookmark no reader can pair.
+   */
+  betweenRows?: { afterRow: number; tag: string; xml: string }[];
 }
 
 /**
@@ -604,7 +639,14 @@ export class WordDocument {
   private commentsPartPath = "word/comments.xml";
   private commentsTarget = "comments.xml";
   private commentsRoot = NEW_COMMENTS_ROOT;
-  private commentsAtRead = "";
+  /**
+   * The comments as they were when read, in the shape `commentsDirty` compares against. A package with no
+   * comments part read *no* comments, and that is a state, not a blank: left as `""` every document without
+   * comments looks dirty, and the first save invents a `word/comments.xml` part, a content-type override and
+   * a relationship for a list nobody has.
+   * relationship for a list nobody has.
+   */
+  private commentsAtRead = "[]";
   private commentsXmlAtRead = "";
   private commentsExXmlAtRead = "";
   private commentIdsXmlAtRead = "";
@@ -641,10 +683,14 @@ export class WordDocument {
     return this.pkg !== undefined && this.fingerprint() !== this.readFingerprint;
   }
 
-  /** Image data URLs and preserved comment markup would dwarf the document; a save does not rewrite either. */
+  /**
+   * Image bytes are counted by length rather than hashed: a data URL would dwarf the document. A picture
+   * replaced in place still has to read as an edit, though, because a regenerated save writes its media part
+   * from the model — leaving the length out would keep the old bytes on the disc behind a new picture.
+   */
   private fingerprint(): string {
     return (
-      JSON.stringify(this.blocks, (key, value) => (key === "src" ? undefined : value)) +
+      JSON.stringify(this.blocks, (key, value) => (key === "src" && typeof value === "string" ? value.length : value)) +
       JSON.stringify([this.header?.paragraphs ?? null, this.footer?.paragraphs ?? null]) +
       JSON.stringify(this.comments.map(commentState))
     );
@@ -933,15 +979,21 @@ export class WordDocument {
     };
     const out: Inline[] = [];
     let unmodelled = false;
-    for (const child of children(r)) {
-      switch (child.name) {
+    // The run's children come paired with the part's own text, not just off the parsed tree: a drawing's
+    // frame and effects live below the fields the model reads, and the only faithful copy of them is the
+    // bytes the file wrote.
+    for (const child of this.childSteps(r, span)) {
+      switch (child.tag) {
         case "t":
         case "delText":
           out.push({ ...base, text: typeof child.node === "string" ? child.node : (child.node["#text"] ?? "") });
           break;
-        case "br":
-          out.push({ ...base, text: "", break: child.node?.["@_type"] !== "page" });
+        case "br": {
+          // Every `w:br` is a break — a page break no less than a soft return. Which one it was is the file's
+          // own business: the token travels as it came rather than being inferred from `w:type` alone.
+          out.push({ ...base, text: "", break: true, ...(child.span ? { brXml: child.span.xml } : {}) });
           break;
+        }
         case "tab":
           out.push({ ...base, text: "", tab: true });
           break;
@@ -958,11 +1010,27 @@ export class WordDocument {
         case "drawing":
         case "pict": {
           const img = imageOf(child.node, rels, this.media, this.pkg);
-          if (img) out.push({ ...base, text: "", image: img });
+          if (img) {
+            const embed = child.span ? embedOf(child.span.xml) : undefined;
+            out.push({
+              ...base,
+              text: "",
+              image: img,
+              ...(child.span
+                ? { drawing: { xml: child.span.xml, width: img.width, height: img.height, name: img.name, ...(embed ? { embed } : {}) } }
+                : {}),
+            });
+            break;
+          }
+          // A picture this reader cannot resolve — an external `r:link`, a frame it does not know — still has
+          // bytes, and the run that holds them is not empty. Carrying the drawing keeps the shape on the page
+          // and the citation in the body intact; reading it as nothing would delete both.
+          if (child.span)
+            out.push({ ...base, text: "", carry: { key: this.carryKey++, tag: child.tag, xml: child.span.xml, show: carriedText(child.span.xml) } });
           break;
         }
         default:
-          if (child.name !== "rPr") unmodelled = true;
+          if (child.tag !== "rPr") unmodelled = true;
       }
     }
     // A run built around something the model has no case for — a shape wrapped in `mc:AlternateContent`, an
@@ -986,9 +1054,23 @@ export class WordDocument {
     const rows = asArray(tbl.tr).map((tr: any, r: number): TableCell[] => {
       const rowSpan = trSpans[r];
       const rowOwn = rowSpan ? childSpans(elementContent(rowSpan.xml)) : [];
-      // A row is `w:trPr`, its cells, and whatever else the schema lets it hold after the cells — `w:tblPrEx`.
-      // The model has no fields for that last group, so it travels as the source text it came in with.
-      const extras = rowOwn.filter((s) => s.tag !== "trPr" && s.tag !== "tc").map((s) => ({ tag: s.tag, xml: s.xml }));
+      // A row is whatever else it holds (`w:tblPrEx`, which WPS puts first), its `w:trPr`, and its cells.
+      // The model has no fields for that first group, so it travels as the source text it came in with,
+      // anchored to the siblings it was read between.
+      let cellsSoFar = 0;
+      let sawProps = false;
+      const extras: RowExtra[] = [];
+      for (const s of rowOwn) {
+        if (s.tag === "tc") {
+          cellsSoFar += 1;
+          continue;
+        }
+        if (s.tag === "trPr") {
+          sawProps = true;
+          continue;
+        }
+        extras.push({ tag: s.tag, xml: s.xml, afterCells: cellsSoFar, beforeProps: !sawProps });
+      }
       const slots = slotsOf(childSpans(elementContent(elementOf(rowOwn, "trPr"))));
       const info = rowInfoOf(tr.trPr, slots, ownAttrs(rowSpan?.xml), extras);
       // A row's `w:trPrChange` is one of the slots the model carries rather than a field it owns, so it is
@@ -1012,6 +1094,16 @@ export class WordDocument {
       });
     });
     const table: Table = { kind: "table", rows, columns: Math.max(1, ...rows.map((r) => r.length)), ...tableStyleOf(tbl.tblPr) };
+    // The schema lets range markup and containers sit between a table's rows, and WPS does write them there:
+    // a `w:bookmarkEnd` closing a bookmark that started above the table. These have no fields to read, so each
+    // travels with the row it followed.
+    const betweenRows: { afterRow: number; tag: string; xml: string }[] = [];
+    let rowsSoFar = -1;
+    for (const s of own) {
+      if (s.tag === "tr") rowsSoFar += 1;
+      else if (s.tag !== "tblPr" && s.tag !== "tblGrid") betweenRows.push({ afterRow: rowsSoFar, tag: s.tag, xml: s.xml });
+    }
+    if (betweenRows.length) table.betweenRows = betweenRows;
     const grid = spanOf("tblGrid");
     if (grid) table.gridXml = grid;
     if (columnWidths.length) table.columnWidths = columnWidths;
@@ -2079,11 +2171,19 @@ export class WordDocument {
    * Saving regenerates only the parts the model edits and copies the rest through, so a
    * property we cannot show yet is not silently dropped from the user's file.
    */
+  /**
+   * Every part this writer does not own, with its bytes and its declared type as the package had them.
+   * Media belongs in this list. The pictures the model holds are rewritten from their own data below, but
+   * the media a *carried* drawing, an OLE object or a letterhead header points at has no model entry, and
+   * dropping it leaves the relationship the body still cites pointing at a part that is no longer there.
+   * An image the user deleted therefore leaves its bytes behind: an orphan costs a few kilobytes, a dangling
+   * citation costs the picture next to every other one when a reader repairs the file.
+   */
   untouchedParts(): { path: string; bytes: Uint8Array; type?: string }[] {
     if (!this.pkg) return [];
     const owned = new Set(["[Content_Types].xml", "word/document.xml", "word/_rels/document.xml.rels"]);
     return [...this.pkg.parts]
-      .filter(([path]) => !owned.has(path) && !path.startsWith("word/media/"))
+      .filter(([path]) => !owned.has(path) && !path.endsWith("/"))
       .map(([path, bytes]) => ({ path, bytes, type: this.pkg!.contentType(path) }));
   }
 }
@@ -2093,6 +2193,15 @@ interface Rel2 {
   type: string;
   target: string;
   targetMode: string;
+}
+
+/**
+ * The relationship id a drawing cites its picture through, as the source wrote it. A save swaps this for the id
+ * its own relationship builder hands out and returns the rest of the drawing untouched — this one token is all
+ * of the drawing that is the writer's to change.
+ */
+function embedOf(xml: string): string | undefined {
+  return /\br:(?:embed|link)="([^"]+)"/.exec(xml)?.[1];
 }
 
 function imageOf(node: any, rels: Map<string, Rel2>, media: Map<string, string>, pkg?: OpcPackage): Inline["image"] {
@@ -2371,7 +2480,7 @@ function bordersOf(set: any): BorderSet | undefined {
 }
 
 /** What a row says about itself: its own revision, its height, whether it repeats or may split. */
-function rowInfoOf(trPr: any, slots?: PropSlot[], attrs?: string, extras?: PropSlot[]): RowInfo | undefined {
+function rowInfoOf(trPr: any, slots?: PropSlot[], attrs?: string, extras?: RowExtra[]): RowInfo | undefined {
   const info: RowInfo = { ...rowStyleOf(trPr) };
   const rev = trPr?.ins ? revisionOf("ins", trPr.ins) : trPr?.del ? revisionOf("del", trPr.del) : undefined;
   if (rev) info.rev = rev;

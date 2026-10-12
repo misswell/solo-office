@@ -1,0 +1,26 @@
+{
+  "name": "solo-office",
+  "version": "0.1.1",
+  "private": true,
+  "type": "module",
+  "description": "OOXML office suite (spreadsheet / document / presentation) implemented independently from ECMA-376; desktop shell on Electron.",
+  "main": "app/main.cjs",
+  "scripts": {
+    "build": "rm -rf app && mkdir -p app && esbuild src/ui/renderer.ts --bundle --format=esm --outfile=app/renderer.js --log-level=warning && esbuild src/main/preload.ts --bundle --platform=node --format=cjs --external:electron --outfile=app/preload.cjs --log-level=warning && esbuild src/main/main.ts --bundle --platform=node --format=cjs --external:electron --outfile=app/main.cjs --log-level=warning && cp src/ui/index.html app/index.html",
+    "start": "npm run build && electron .",
+    "package": "npm run build && node scripts/pack.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.0.6",
+    "fflate": "^0.8.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "electron": "^33.2.1",
+    "esbuild": "^0.24.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

@@ -1,0 +1,7 @@
+node_modules/
+app/
+dist/
+.scratch/
+.DS_Store
+*.log
+.qoder/

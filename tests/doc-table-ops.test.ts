@@ -1,0 +1,344 @@
+import { describe, expect, it } from "vitest";
+import type { Block, Table, TableCell } from "../src/core/docx.js";
+import { WordDocument } from "../src/core/docx.js";
+import { writeDocx } from "../src/core/write-docx.js";
+import { renderWord } from "../src/core/render.js";
+import { OpcPackage, text } from "../src/core/opc.js";
+import {
+  cellRect,
+  columnStarts,
+  deleteColumnHere,
+  deleteRowHere,
+  gridColumns,
+  insertCellHere,
+  insertColumnHere,
+  insertRowHere,
+  mergeHere,
+  splitHere,
+} from "../src/core/doc-table-ops.js";
+import { makeMergedTableDocx, makeNestedTableDocx, makeOpsGridDocx, makeTableFidelityDocx } from "./helpers/make-tables.js";
+
+const open = (bytes: Uint8Array): WordDocument => WordDocument.openBytes(bytes);
+const saved = (doc: WordDocument): string => text(OpcPackage.from(writeDocx(doc)).bytes("word/document.xml")!);
+const tableOf = (doc: WordDocument): Table => doc.blocks.find((b) => b.kind === "table") as Table;
+
+/** The grid every command here is checked against: three columns of 1000/2000/3000, last row spans two. */
+const grid = (): Table => tableOf(open(makeOpsGridDocx()));
+const withDoc = (t: Table): WordDocument => {
+  const doc = WordDocument.blank();
+  doc.blocks.push(t);
+  return doc;
+};
+/** A table written out and read back, so a command's shape is proved against the file and not only the model. */
+const reloaded = (t: Table): Table => tableOf(open(writeDocx(withDoc(t))));
+
+/** Each row as `row:start,start|width x colspanVmerge` — the geometry a structural command has to leave right. */
+const shape = (t: Table): string[] =>
+  t.rows.map(
+    (row, r) =>
+      `${r}:${columnStarts(row).join(",")}=${row
+        .map((c) => `${c.widthTwips ?? 0}x${c.spanCols ?? 1}${c.spanRows === undefined ? "" : `v${c.spanRows}`}`)
+        .join(" ")}`,
+  );
+const body = (cell: TableCell): string =>
+  cell.paragraphs
+    .map((p: Block) => (p.kind === "table" ? "[表]" : p.kind === "carried" ? "[容器]" : p.inlines.map((i) => i.text).join("")))
+    .join("/");
+
+/** Every grid column of every row is covered, by something, exactly once — the rule a merge cannot break. */
+const tilesTheGrid = (t: Table): boolean =>
+  t.rows.every((row) => row.reduce((n, c) => n + Math.max(1, c.spanCols ?? 1), 0) === gridColumns(t));
+
+describe("docx table structure commands", () => {
+  it("inserts a row that copies the grid it lands in and leaves the file's grid untouched", () => {
+    const t = grid();
+    const carried = t.gridXml;
+    expect(insertRowHere(t, { row: 0, col: 2 }, "below")).toEqual({ ok: true, at: { row: 1, col: 0 } });
+    expect(t.rows).toHaveLength(4);
+    expect(t.rows[1].map(body)).toEqual(["", "", ""]);
+    expect(t.rows[1].map((c) => c.widthTwips)).toEqual([1000, 2000, 3000]);
+    expect(t.gridXml).toBe(carried);
+    expect(saved(withDoc(t)).match(/<w:tr[ >]/g)).toHaveLength(4);
+    expect(shape(reloaded(t))).toEqual(shape(t));
+    expect(tilesTheGrid(t)).toBe(true);
+  });
+
+  it("inserts a row inside a merged band and makes that band taller", () => {
+    const t = tableOf(open(makeMergedTableDocx()));
+    expect(insertRowHere(t, { row: 0, col: 1 }, "below")).toEqual({ ok: true, at: { row: 1, col: 0 } });
+    expect(t.rows[1][0]).toMatchObject({ spanRows: 0 });
+    expect(t.rows[1][1]!.spanRows).toBeUndefined();
+    expect(renderWord(withDoc(t))).toContain('rowspan="3"');
+    expect(shape(reloaded(t))).toEqual(shape(t));
+  });
+
+  it("splits the column a new one lands in front of, and pays for it out of the cells that own it", () => {
+    const t = grid();
+    expect(insertColumnHere(t, { row: 0, col: 1 }, "left")).toEqual({ ok: true, at: { row: 0, col: 1 } });
+    expect(gridColumns(t)).toBe(4);
+    expect(t.columnWidths).toEqual([1000, 1000, 1000, 3000]);
+    expect(t.gridXml).toBe('<w:tblGrid><w:gridCol w:w="1000"/><w:gridCol w:w="1000"/><w:gridCol w:w="1000"/><w:gridCol w:w="3000"/></w:tblGrid>');
+    // The cell the seam starts inside keeps the host column's remainder; the one running through gains span only.
+    expect(t.rows[0].map((c) => [c.widthTwips, c.spanCols ?? 1])).toEqual([[1000, 1], [1000, 1], [1000, 1], [3000, 1]]);
+    expect(t.rows[2].map((c) => [c.widthTwips, c.spanCols ?? 1])).toEqual([[3000, 3], [3000, 1]]);
+    expect(t.rows[2][0]!.tcPrXml).toContain('<w:gridSpan w:val="3"/>');
+    expect(t.rows[2][0]!.tcPrXml).not.toContain('w:val="2"');
+    expect(tilesTheGrid(t)).toBe(true);
+    expect(shape(reloaded(t))).toEqual(shape(t));
+  });
+
+  it("keeps a cell's own borders, shading and margins byte for byte while the grid moves", () => {
+    const t = grid();
+    const untouched = t.rows[0]![0]!.tcPrXml!;
+    insertColumnHere(t, { row: 0, col: 1 }, "left");
+    expect(t.rows[0]![0]!.tcPrXml).toBe(untouched);
+
+    const other = grid();
+    const before = other.rows[0]![0]!.tcPrXml!;
+    insertColumnHere(other, { row: 0, col: 0 }, "left");
+    expect(other.rows[0]![1]!.tcPrXml).toBe(before.replace('w:w="1000"', 'w:w="500"'));
+    expect(other.rows[0]![1]!.tcPrXml).toContain('<w:bottom w:val="dotted" w:sz="4" w:space="0" w:color="0070C0"/>');
+    expect(other.rows[0]![1]!.tcPrXml).toContain('<w:shd w:val="clear" w:color="auto" w:fill="FFF2CC"/>');
+    expect(other.rows[0]![1]!.tcPrXml).toContain('<w:tcMar><w:top w:w="60" w:type="dxa"/></w:tcMar>');
+    expect(other.columnWidths).toEqual([500, 500, 2000, 3000]);
+  });
+
+  it("takes a column out and one column of span off the cell that covered it", () => {
+    const t = grid();
+    expect(deleteColumnHere(t, { row: 0, col: 0 })).toEqual({ ok: true, at: { row: 0, col: 0 } });
+    expect(gridColumns(t)).toBe(2);
+    expect(t.columnWidths).toEqual([2000, 3000]);
+    expect(t.rows.map((row) => row.length)).toEqual([2, 2, 2]);
+    expect(t.rows[2][0]).toMatchObject({ spanCols: undefined, widthTwips: 2000 });
+    expect(t.rows[2][0]!.tcPrXml).not.toContain("gridSpan");
+    expect(t.rows.map((row) => row.reduce((n, c) => n + (c.widthTwips ?? 0), 0))).toEqual([5000, 5000, 5000]);
+    expect(tilesTheGrid(t)).toBe(true);
+    expect(shape(reloaded(t))).toEqual(shape(t));
+  });
+
+  it("deletes a row and hands a merge that lost its start to the row below", () => {
+    const t = tableOf(open(makeMergedTableDocx()));
+    insertRowHere(t, { row: 0, col: 0 }, "below");
+    expect(deleteRowHere(t, { row: 0, col: 1 }).ok).toBe(true);
+    expect(t.rows).toHaveLength(3);
+    expect(t.rows[0][0]!.spanRows).toBe(1);
+    expect(t.rows[0][0]!.spanRows).toBe(1);
+    expect(body(t.rows[0]![0]!)).toBe("");
+    expect(saved(withDoc(t))).toContain('<w:vMerge w:val="restart"/>');
+    expect(renderWord(withDoc(t))).toContain('rowspan="2"');
+    expect(shape(reloaded(t))).toEqual(shape(t));
+  });
+
+  it("merges two cells in a row into one and keeps both bodies in reading order", () => {
+    const t = grid();
+    expect(mergeHere(t, { row: 0, col: 1 }, { row: 0, col: 2 })).toEqual({ ok: true, at: { row: 0, col: 1 } });
+    expect(t.rows[0]).toHaveLength(2);
+    expect(t.rows[0][1]).toMatchObject({ spanCols: 2, widthTwips: 5000 });
+    expect(t.rows[0][1]!.spanRows).toBeUndefined();
+    expect(body(t.rows[0][1]!)).toBe("乙一/丙一");
+    expect(t.rows[0][1]!.tcPrXml).toContain('<w:gridSpan w:val="2"/>');
+    expect(t.rows[0][1]!.tcPrXml).not.toContain("vMerge");
+    expect(saved(withDoc(t)).match(/<w:tc>/g)).toHaveLength(7);
+    expect(tilesTheGrid(t)).toBe(true);
+    expect(shape(reloaded(t))).toEqual(shape(t));
+  });
+
+  it("merges a rectangle down as a start with a continuation under it", () => {
+    const t = grid();
+    expect(mergeHere(t, { row: 0, col: 2 }, { row: 1, col: 2 })).toEqual({ ok: true, at: { row: 0, col: 2 } });
+    expect(t.rows[0][2]).toMatchObject({ spanRows: 1, spanCols: undefined, widthTwips: 3000 });
+    expect(t.rows[1][2]).toMatchObject({ spanRows: 0 });
+    expect(body(t.rows[0][2]!)).toBe("丙一/丙二");
+    expect(body(t.rows[1][2]!)).toBe("");
+    expect(t.rows[1][2]!.tcPrXml).toBe('<w:tcPr><w:tcW w:w="3000" w:type="dxa"/><w:vMerge/></w:tcPr>');
+    const html = renderWord(withDoc(t));
+    expect(html).toContain('rowspan="2"');
+    expect(html.match(/<td/g)).toHaveLength(8);
+    expect(shape(reloaded(t))).toEqual(shape(t));
+  });
+
+  it("refuses a merge that would cut through a merge nobody selected", () => {
+    const t = grid();
+    const before = shape(t);
+    expect(mergeHere(t, { row: 1, col: 1 }, { row: 2, col: 1 })).toEqual({
+      ok: false,
+      reason: "选区压到了已有合并的边界",
+    });
+    expect(shape(t)).toEqual(before);
+    expect(mergeHere(t, { row: 0, col: 0 })).toEqual({ ok: false, reason: "已经是一个单元格了" });
+    expect(splitHere(t, { row: 0, col: 0 })).toEqual({ ok: false, reason: "这个单元格没有合并" });
+    expect(insertRowHere(t, { row: 9, col: 0 }, "above")).toEqual({ ok: false, reason: "这一行不在表格里" });
+  });
+
+  it("splits a cell that spans columns back into the grid it came from", () => {
+    const t = grid();
+    expect(splitHere(t, { row: 2, col: 0 })).toEqual({ ok: true, at: { row: 2, col: 0 } });
+    expect(t.rows[2].map((c) => [body(c), c.widthTwips])).toEqual([["跨两列", 1500], ["", 1500], ["丙三", 3000]]);
+    expect(t.rows[2].every((c) => c.spanCols === undefined)).toBe(true);
+    expect(t.rows[2][0]!.tcPrXml).not.toContain("gridSpan");
+    expect(t.columnWidths).toEqual([1000, 2000, 3000]);
+    expect(tilesTheGrid(t)).toBe(true);
+    expect(shape(reloaded(t))).toEqual(shape(t));
+  });
+
+  it("splits a vertical merge back into ordinary cells, in every row it covered", () => {
+    const t = tableOf(open(makeMergedTableDocx()));
+    expect(splitHere(t, { row: 0, col: 0 })).toEqual({ ok: true, at: { row: 0, col: 0 } });
+    expect(t.rows.map((row) => row.map((c) => c.spanRows))).toEqual([
+      [undefined, undefined],
+      [undefined, undefined],
+      [1, undefined],
+    ]);
+    // The third row started a merge of its own; splitting the one above has no business with it.
+    expect(saved(withDoc(t)).match(/<w:vMerge/g)).toHaveLength(1);
+    expect(renderWord(withDoc(t))).not.toContain("rowspan");
+    expect(shape(reloaded(t))).toEqual(shape(t));
+  });
+
+  it("keeps a table that would be emptied, and a percent-wide cell the file sized", () => {
+    const single = reloaded({ kind: "table", columns: 1, rows: [[{ paragraphs: [], widthTwips: 4513 }]] });
+    expect(deleteColumnHere(single, { row: 0, col: 0 })).toEqual({ ok: false, reason: "表格至少得有一列" });
+    expect(deleteRowHere(single, { row: 0, col: 0 })).toEqual({ ok: false, reason: "表格至少得有一行" });
+
+    // A `pct` width is measured against the text column, not against `w:tblGrid`, so twips arithmetic has no
+    // business touching it: the cell keeps saying percent and the seam simply does not pay it any twips.
+    const t = grid();
+    const pct = t.rows[0]![1]!;
+    pct.tcPrXml = '<w:tcPr><w:tcW w:w="2500" w:type="pct"/></w:tcPr>';
+    pct.widthType = "pct";
+    const before = pct.tcPrXml;
+    expect(insertColumnHere(t, { row: 0, col: 1 }, "left").ok).toBe(true);
+    expect(pct.tcPrXml).toBe(before);
+    expect(saved(withDoc(t))).toContain('<w:tcW w:w="2500" w:type="pct"/>');
+  });
+
+  it("writes a row's own properties in the order the schema gives them", () => {
+    const t = grid();
+    const row = { keepTogether: true, heightTwips: 600, heightRule: "atLeast", header: true };
+    t.rows[1].forEach((c) => (c.row = row));
+    expect(saved(withDoc(t))).toContain('<w:trPr><w:cantSplit/><w:trHeight w:val="600" w:hRule="atLeast"/><w:tblHeader/></w:trPr>');
+  });
+});
+
+describe("插入单元格（InsertCells）：一个格，旁边的格让位", () => {
+  it("右移：这一行多一个空格，其余的行只多盖一列", () => {
+    const t = grid();
+    expect(insertCellHere(t, { row: 0, col: 1 }, "right")).toEqual({ ok: true, at: { row: 0, col: 1 } });
+    expect(gridColumns(t)).toBe(4);
+    expect(t.columnWidths).toEqual([1000, 1000, 1000, 3000]);
+    expect(t.gridXml).toBe(
+      '<w:tblGrid><w:gridCol w:w="1000"/><w:gridCol w:w="1000"/><w:gridCol w:w="1000"/><w:gridCol w:w="3000"/></w:tblGrid>',
+    );
+    // The row that asked for a cell pays for it; the rows that did not gain a column of span and no width,
+    // because the column they now cover is one they already owned.
+    expect(shape(t)).toEqual([
+      "0:0,1,2,3=1000x1 1000x1 1000x1 3000x1",
+      "1:0,1,3=1000x1 2000x2 3000x1",
+      "2:0,3=3000x3 3000x1",
+    ]);
+    expect(t.rows[0].map(body)).toEqual(["甲一", "", "乙一", "丙一"]);
+    expect(t.rows.map((row) => row.reduce((n, c) => n + (c.widthTwips ?? 0), 0))).toEqual([6000, 6000, 6000]);
+    expect(tilesTheGrid(t)).toBe(true);
+    expect(shape(reloaded(t))).toEqual(shape(t));
+    expect(saved(withDoc(t)).match(/<w:tc>/g)).toHaveLength(9);
+  });
+
+  it("右移落在跨两列的格上：它让出宽度，不让出跨列", () => {
+    const t = grid();
+    expect(insertCellHere(t, { row: 2, col: 0 }, "right")).toEqual({ ok: true, at: { row: 2, col: 0 } });
+    expect(t.columnWidths).toEqual([500, 500, 2000, 3000]);
+    expect(shape(t)).toEqual([
+      "0:0,2,3=1000x2 2000x1 3000x1",
+      "1:0,2,3=1000x2 2000x1 3000x1",
+      "2:0,1,3=500x1 2500x2 3000x1",
+    ]);
+    expect(t.rows[2][0]!.paragraphs).toEqual([{ kind: "paragraph", inlines: [] }]);
+    expect(t.rows[2][1]!.tcPrXml).toContain('<w:gridSpan w:val="2"/>');
+    expect(t.rows[2][1]!.tcPrXml).toContain('w:w="2500"');
+    expect(tilesTheGrid(t)).toBe(true);
+    expect(shape(reloaded(t))).toEqual(shape(t));
+  });
+
+  it("右移不动按百分比定宽的格，那一条缝不该用 twips 付", () => {
+    const t = grid();
+    const pct = t.rows[0]![1]!;
+    pct.tcPrXml = '<w:tcPr><w:tcW w:w="2500" w:type="pct"/></w:tcPr>';
+    pct.widthType = "pct";
+    const before = pct.tcPrXml;
+    expect(insertCellHere(t, { row: 0, col: 1 }, "right").ok).toBe(true);
+    expect(pct.tcPrXml).toBe(before);
+    expect(saved(withDoc(t))).toContain('<w:tcW w:w="2500" w:type="pct"/>');
+  });
+
+  it("下移：一格的内容往下走一格，最后一行把没有去处的那格收下", () => {
+    const t = tableOf(open(makeMergedTableDocx()));
+    const carried = t.gridXml;
+    expect(insertCellHere(t, { row: 0, col: 1 }, "down")).toEqual({ ok: true, at: { row: 0, col: 1 } });
+    expect(t.rows.map((row) => row.map(body))).toEqual([
+      ["占两行", ""],
+      ["", "第一行右"],
+      ["新的一格", "第二行右/第三行右"],
+    ]);
+    // A cell is added to the column, not a row to the table: the grid and every cell's own properties stay.
+    expect(t.gridXml).toBe(carried);
+    expect(t.columnWidths).toEqual([2000, 3000]);
+    expect(t.rows[0][1]!.tcPrXml).toBe('<w:tcPr><w:tcW w:w="3000" w:type="dxa"/></w:tcPr>');
+    expect(saved(withDoc(t)).match(/<w:vMerge/g)).toHaveLength(3);
+    expect(renderWord(withDoc(t))).toContain('rowspan="2"');
+    const back = reloaded(t);
+    expect(shape(back)).toEqual(shape(t));
+    expect(back.rows.map((row) => row.map(body))).toEqual(t.rows.map((row) => row.map(body)));
+  });
+
+  it("下移把格子里的表一起带走，写出的件里格子仍以段落收尾", () => {
+    const t = tableOf(open(makeNestedTableDocx()));
+    expect(insertCellHere(t, { row: 0, col: 1 }, "down")).toEqual({ ok: true, at: { row: 0, col: 1 } });
+    expect(gridColumns(t)).toBe(2);
+    expect(t.rows[0][1]!.paragraphs.map((b) => b.kind)).toEqual(["paragraph"]);
+    expect(t.rows[1][1]!.paragraphs.map((b) => b.kind)).toEqual(["paragraph", "table", "paragraph"]);
+    const xml = saved(withDoc(t));
+    expect(xml).not.toContain("</w:tbl></w:tc>");
+    const back = tableOf(open(writeDocx(withDoc(t))));
+    expect(back.rows[1]![1]!.paragraphs.map((b) => b.kind)).toEqual(["paragraph", "table", "paragraph"]);
+    expect((back.rows[1]![1]!.paragraphs[1] as Table).rows.map((row) => row.map(body).join("|"))).toEqual([
+      "内一|内二",
+      "内三|内四",
+    ]);
+  });
+
+  it("下移在装不下的地方停下，并且什么都不动", () => {
+    const merged = tableOf(open(makeMergedTableDocx()));
+    const before = shape(merged);
+    expect(insertCellHere(merged, { row: 2, col: 1 }, "down")).toEqual({ ok: false, reason: "下面没有可让位的单元格" });
+    expect(insertCellHere(merged, { row: 0, col: 0 }, "down")).toEqual({
+      ok: false,
+      reason: "这一列上有纵向合并的单元格，下移会把它挪位",
+    });
+    expect(insertCellHere(merged, { row: 1, col: 0 }, "down")).toEqual({
+      ok: false,
+      reason: "这一列上有纵向合并的单元格，下移会把它挪位",
+    });
+    expect(shape(merged)).toEqual(before);
+
+    const t = grid();
+    const gridBefore = shape(t);
+    expect(insertCellHere(t, { row: 0, col: 1 }, "down")).toEqual({
+      ok: false,
+      reason: "这一列上有横向合并的单元格，下移会让它装不进来",
+    });
+    expect(shape(t)).toEqual(gridBefore);
+    expect(insertCellHere(t, { row: 9, col: 0 }, "down")).toEqual({ ok: false, reason: "这里没有单元格" });
+    expect(insertCellHere(t, { row: 9, col: 0 }, "right")).toEqual({ ok: false, reason: "这里没有单元格" });
+  });
+});
+
+describe("cell geometry", () => {
+  it("finds the grid rectangle each cell covers", () => {
+    const t = grid();
+    expect(cellRect(t, { row: 0, col: 0 })).toEqual({ c0: 0, c1: 1, r0: 0, r1: 1 });
+    expect(cellRect(t, { row: 2, col: 0 })).toEqual({ c0: 0, c1: 2, r0: 2, r1: 3 });
+    const merged = tableOf(open(makeMergedTableDocx()));
+    expect(cellRect(merged, { row: 0, col: 0 })).toEqual({ c0: 0, c1: 1, r0: 0, r1: 2 });
+    expect(cellRect(merged, { row: 1, col: 0 })).toEqual({ c0: 0, c1: 1, r0: 1, r1: 2 });
+  });
+});

@@ -375,7 +375,7 @@ function anchorXml(anchor: NonNullable<Inline["anchor"]>, from: Inline): string 
   return `<w:r>${props}<w:commentReference w:id="${anchor.id}"/></w:r>`;
 }
 
-/** Consecutive inlines sharing a link become one `w:hyperlink`, which needs a relationship id. */
+/** Consecutive inlines sharing a link become one `w:hyperlink`. */
 function inlinesXml(inlines: Inline[], rels: RelBuilder): string {
   const out: string[] = [];
   let i = 0;
@@ -410,10 +410,18 @@ function inlinesXml(inlines: Inline[], rels: RelBuilder): string {
     const group: Inline[] = [];
     while (i < inlines.length && inlines[i].hyperlink === link) group.push(inlines[i++]);
     const inner = group.map((r) => runXml(r, rels)).join("");
-    out.push(`<w:hyperlink r:id="${rels.hyperlink(link)}">${inner}</w:hyperlink>`);
+    out.push(`<w:hyperlink ${linkAttrs(link, rels)}>${inner}</w:hyperlink>`);
   }
   return out.join("");
 }
+
+/**
+ * A link to a place inside this document is spelled `w:anchor` and has no relationship at all; a link to
+ * the outside is a relationship id. Writing an in-document link as `r:id` points the reader at a file
+ * address instead of the bookmark, which is how a table of contents entry stops being one after a save.
+ */
+const linkAttrs = (link: string, rels: RelBuilder): string =>
+  link.startsWith("#") ? `w:anchor="${XML_ESC(link.slice(1))}"` : `r:id="${rels.hyperlink(link)}"`;
 
 const runXml = (r: Inline, rels: RelBuilder): string =>
   r.image ? imageRun(r, r.image.width, r.image.height, rels.image(r.image.path)) : textRun(r);
@@ -422,7 +430,7 @@ const runXml = (r: Inline, rels: RelBuilder): string =>
 const runWrapped = (r: Inline, rels: RelBuilder): string =>
   // Carried bytes are the element as it came. Inside a revision they belong in the wrapper rather than beside
   // it, because a run put outside is read as text nobody revised and the record next to it loses its cover.
-  r.carry ? r.carry.xml : r.hyperlink ? `<w:hyperlink r:id="${rels.hyperlink(r.hyperlink)}">${runXml(r, rels)}</w:hyperlink>` : runXml(r, rels);
+  r.carry ? r.carry.xml : r.hyperlink ? `<w:hyperlink ${linkAttrs(r.hyperlink, rels)}>${runXml(r, rels)}</w:hyperlink>` : runXml(r, rels);
 
 const sameRevision = (a: Inline["rev"], b: Inline["rev"]): boolean =>
   a !== undefined && b !== undefined && a.kind === b.kind && a.move === b.move && a.id === b.id && a.author === b.author;

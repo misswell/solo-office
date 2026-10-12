@@ -1382,9 +1382,9 @@ export class WordDocument {
       } else if (isRevision(name)) {
         this.revisionRuns(step.node, rels, para.inlines, revisionOf(name, step.node), step.span?.xml);
       } else if (name === "hyperlink") {
-        const id = step.node["@_id"];
+        const target = this.linkTarget(step.node, rels);
         for (const inline of this.linkRuns(step.node, rels, step.span?.xml)) {
-          if (id) inline.hyperlink = this.hyperlinks.get(String(id)) ?? rels.get(String(id))?.target;
+          if (target) inline.hyperlink = target;
           linkLook(inline);
           para.inlines.push(inline);
         }
@@ -1468,13 +1468,25 @@ export class WordDocument {
         continue;
       }
       if (child.tag !== "hyperlink") continue;
-      const id = child.node["@_id"];
+      const target = this.linkTarget(child.node, rels);
       for (const inline of this.linkRuns(child.node, rels, child.span?.xml)) {
-        if (id) inline.hyperlink = this.hyperlinks.get(String(id)) ?? rels.get(String(id))?.target;
+        if (target) inline.hyperlink = target;
         linkLook(inline);
         into.push({ ...inline, rev });
       }
     }
+  }
+
+  /**
+   * Where a `w:hyperlink` points. A link to the outside arrives through its relationship; a link to a place
+   * in this document has no relationship and is spelled `w:anchor`, which this model carries as a `#`-prefixed
+   * target so the writer can tell the two apart and put the bookmark name back.
+   */
+  private linkTarget(node: any, rels: Map<string, Rel2>): string | undefined {
+    const id = node["@_id"];
+    const throughRel = id === undefined ? undefined : this.hyperlinks.get(String(id)) ?? rels.get(String(id))?.target;
+    const anchor = node["@_anchor"];
+    return throughRel ?? (anchor === undefined || anchor === "" ? undefined : `#${String(anchor)}`);
   }
 
   private run(r: any, rels: Map<string, Rel2>, span?: string): Inline[] {

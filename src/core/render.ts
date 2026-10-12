@@ -24,7 +24,10 @@ export function renderInline(inline: Inline): string {
   if (inline.vertAlign) css += `vertical-align:${inline.vertAlign === "superscript" ? "super" : "sub"};font-size:.75em;`;
   let html = inline.text === "" ? "" : `<span${css ? ` style="${css}"` : ""}>${esc(inline.text)}</span>`;
   if (html === "" && !css) html = esc(inline.text);
-  if (inline.hyperlink) html = `<a href="${esc(inline.hyperlink)}" target="_blank" rel="noreferrer">${html || esc(inline.text)}</a>`;
+  // A link to a place in this document keeps its window to itself: `target="_blank"` on a `#name` href hands
+  // the app's own page address to the system browser, where nobody has the bookmark open.
+  if (inline.hyperlink)
+    html = `<a href="${esc(inline.hyperlink)}"${inline.hyperlink.startsWith("#") ? "" : ' target="_blank" rel="noreferrer"'}>${html || esc(inline.text)}</a>`;
   // A tracked change is marked by class, never by inline style: the editor reads inline styles
   // back into the run, and "underlined because inserted" must not become "underlined because bold".
   const rev = inline.rev;

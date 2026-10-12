@@ -94,6 +94,37 @@ export const FIRST_SECTION_HEADER =
 export const LAST_SECTION_HEADER =
   `${XML_DECL}<w:hdr xmlns:w="${NS_W}"><w:p><w:r><w:t>结尾页眉</w:t></w:r></w:p></w:hdr>`;
 
+/** A footer part holding whatever paragraphs the test names. */
+export const footerPart = (body: string): string => `${XML_DECL}<w:ftr xmlns:w="${NS_W}" xmlns:r="${NS_R}">${body}</w:ftr>`;
+
+/** A field marker run, spelled the way the files spell it. */
+const fldChar = (stage: "begin" | "separate" | "end"): string => `<w:r><w:fldChar w:fldCharType="${stage}"/></w:r>`;
+
+/** The instruction run, with the spaces at its edges kept by `xml:space="preserve"` as the corpus does. */
+const instr = (text: string): string => `<w:r><w:instrText xml:space="preserve">${text}</w:instrText></w:r>`;
+
+/**
+ * A page field as the local WPS corpus writes one — and as `insertPageNumber` writes one: `begin`, the
+ * instruction, `separate`, the number it last showed, `end`. Of that corpus's 21 fields that sit at run level
+ * in a header or footer part, 16 spell the instruction exactly this way, 2 spell `PAGE` with no switch at
+ * all, and all 21 cache a digit.
+ */
+export const pageFieldRuns = (instruction = " PAGE  \\* MERGEFORMAT ", cached = "1"): string =>
+  `${fldChar("begin")}${instr(instruction)}${fldChar("separate")}<w:r><w:t>${cached}</w:t></w:r>${fldChar("end")}`;
+
+/** 「第 」, a page field, 「 页」 — the shape those 4 corpus paragraphs that are not field-only take. */
+export const PAGE_FOOTER = footerPart(
+  `<w:p><w:pPr><w:pStyle w:val="Footer"/></w:pPr><w:r><w:t xml:space="preserve">第 </w:t></w:r>${pageFieldRuns()}<w:r><w:t xml:space="preserve"> 页</w:t></w:r></w:p><w:p><w:r><w:t>普通一行</w:t></w:r></w:p>`,
+);
+
+/** A footer whose only content is the field, which is 17 of the 21 in that corpus. */
+export const PAGE_ONLY_FOOTER = footerPart(`<w:p>${pageFieldRuns()}</w:p>`);
+
+/** The field alone in its paragraph, with the paragraph's formatting on the run that carries the digit. */
+export const PAGE_ONLY_FOOTER_STYLED = footerPart(
+  `<w:p><w:pPr><w:pStyle w:val="Footer"/></w:pPr><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGE  \\* MERGEFORMAT </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>1</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>`,
+);
+
 /**
  * A document with two sections: the break hanging off the first paragraph ends the opening one, and the
  * body's own `sectPr` is the closing one. Each carries its own header and its own page box — portrait first,
@@ -139,3 +170,39 @@ export function makeTwoSectionDocx(o: { firstRef?: string; lastRef?: string; fir
   );
 }
 
+
+const NS_WP = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+const NS_A = "http://schemas.openxmlformats.org/drawingml/2006/main";
+const NS_PIC = "http://schemas.openxmlformats.org/drawingml/2006/picture";
+const NS_V = "urn:schemas-microsoft-com:vml";
+
+/** The anchored picture the corpus writes: `mc:Choice` carries the DrawingML, `mc:Fallback` the VML. */
+const anchored = (inside: string): string =>
+  `<mc:AlternateContent><mc:Choice Requires="wps"><w:drawing><wp:anchor simplePos="0" relativeHeight="251659264" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">` +
+  `<wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:align>right</wp:align></wp:positionH>` +
+  `<wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent cx="1000000" cy="500000"/><wp:effectExtent l="0" t="0" r="0" b="0"/>${inside}` +
+  `<wp:docPr id="7" name="信头徽标"/><a:graphic><a:graphicData uri="${NS_PIC}"><pic:pic><pic:nvPicPr><pic:cNvPr id="7" name="徽标"/></pic:nvPicPr>` +
+  `<pic:blipFill><a:blip r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>` +
+  `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="500000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic>` +
+  `</wp:anchor></w:drawing></mc:Choice><mc:Fallback><w:pict><v:shape id="Logo"/></w:pict></mc:Fallback></mc:AlternateContent>`;
+
+/** The picture alone: no `w:t` anywhere in it, which is what lets the band carry it as one piece. */
+export const LOGO_RUN = `<w:r><w:rPr><w:noProof/></w:rPr>${anchored("<wp:wrapNone/>")}</w:r>`;
+
+/**
+ * The shape all 16 of these runs in the local corpus have: the floating box, not the paragraph, holds the
+ * page number, so the drawing contains `w:txbxContent` with text in it. A chip over that would replace a
+ * number the page shows with a label.
+ */
+export const LOGO_RUN_WITH_TEXT = `<w:r><w:rPr><w:noProof/></w:rPr>${anchored(
+  `<wp:wrapNone/><w:txbxContent><w:p><w:r><w:t>第 </w:t></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGE  \\* MERGEFORMAT </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>1</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r><w:r><w:t> 页</w:t></w:r></w:p></w:txbxContent>`,
+)}</w:r>`;
+
+/** A footer whose first paragraph is one of those runs and whose second is text the user can type in. */
+export function makeLogoFooterDocx(logo: string): Uint8Array {
+  const part =
+    `${XML_DECL}<w:ftr xmlns:w="${NS_W}" xmlns:r="${NS_R}" xmlns:mc="${NS_MC}" xmlns:wp="${NS_WP}" xmlns:a="${NS_A}" xmlns:pic="${NS_PIC}" xmlns:v="${NS_V}" mc:Ignorable="wp">` +
+    `<w:p><w:pPr><w:pStyle w:val="Footer"/></w:pPr>${logo}</w:p>` +
+    `<w:p><w:r><w:t>联系文字</w:t></w:r></w:p></w:ftr>`;
+  return makeFooterDocx(part);
+}

@@ -5,10 +5,18 @@ import { OpcPackage, text } from "../src/core/opc.js";
 import { renderWord } from "../src/core/render.js";
 import {
   LAST_SECTION_HEADER,
+  PAGE_FOOTER,
+  PAGE_ONLY_FOOTER,
+  PAGE_ONLY_FOOTER_STYLED,
+  footerPart,
+  LOGO_RUN,
+  LOGO_RUN_WITH_TEXT,
   makeFooterDocx,
+  makeLogoFooterDocx,
   makeHeaderFooterDocx,
   makeStyledHeaderDocx,
   makeTwoSectionDocx,
+  pageFieldRuns,
   REFERENCE_FIRST_PAGE_ONLY,
   REFERENCE_ID_FIRST,
   REFERENCE_TYPE_FIRST,
@@ -294,3 +302,236 @@ describe("docx 页眉页脚：多节文档按节取", () => {
   });
 });
 
+
+describe("docx page fields in a header or footer", () => {
+  /** One paragraph of a fixture part, cut out whole, so a save can be compared against the bytes it kept. */
+  const paragraphAt = (part: string, n: number): string => {
+    const from = [...part.matchAll(/<w:p[\s>]/g)][n]!.index;
+    return part.slice(from, part.indexOf("</w:p>", from) + "</w:p>".length);
+  };
+
+  it("reads a run-level PAGE field as one carried piece, not a reason to refuse the part", () => {
+    const doc = WordDocument.openBytes(makeFooterDocx(PAGE_FOOTER));
+    expect(doc.footer?.editable).toBe(true);
+    // The number the field cached is not text the reader typed, so it never joins the paragraph's text.
+    expect(doc.footer?.paragraphs).toEqual(["第  页", "普通一行"]);
+    expect(doc.footer?.segments?.[0]?.map((s) => (s.carry ? `[${s.carry.tag}:${s.carry.show}]` : s.text))).toEqual([
+      "第 ",
+      "[fldChar:页码]",
+      " 页",
+    ]);
+    expect(doc.footer?.segments?.[0]?.[1]?.carry?.xml).toBe(pageFieldRuns());
+    // The second paragraph is read the same way, as text with nothing carried in it.
+    expect(doc.footer?.segments?.[1]).toEqual([{ text: "普通一行" }]);
+  });
+
+  it("saves a part that carries a field and was not typed in byte for byte", () => {
+    for (const part of [PAGE_FOOTER, PAGE_ONLY_FOOTER, PAGE_ONLY_FOOTER_STYLED]) {
+      expect(footerOf(writeDocx(WordDocument.openBytes(makeFooterDocx(part))))).toBe(part);
+    }
+  });
+
+  it("leaves the field's paragraph as its bytes when another one is edited", () => {
+    const doc = WordDocument.openBytes(makeFooterDocx(PAGE_FOOTER));
+    const fieldPara = doc.footer?.segments?.[0];
+    expect(fieldPara && doc.setHeaderSegments("footer", [fieldPara, [{ text: "普通一行改" }]])).toBe(true);
+    const out = footerOf(writeDocx(doc));
+    expect(out).toContain(paragraphAt(PAGE_FOOTER, 0));
+    expect(out).toContain("普通一行改");
+  });
+
+  it("gives the field back inside a paragraph the user retyped, where it stood", () => {
+    const doc = WordDocument.openBytes(makeFooterDocx(PAGE_FOOTER));
+    const field = doc.footer?.segments?.[0]?.[1];
+    expect(field && doc.setHeaderSegments("footer", [[{ text: "共 " }, field, { text: " 页完" }], [{ text: "普通一行" }]])).toBe(true);
+    const out = footerOf(writeDocx(doc));
+    expect(out).toContain(field!.carry!.xml);
+    expect(out.indexOf("共 ")).toBeLessThan(out.indexOf('<w:fldChar w:fldCharType="begin"'));
+    expect(out.indexOf('<w:fldChar w:fldCharType="end"')).toBeLessThan(out.indexOf(" 页完"));
+    // The paragraph's own properties and the text run's typeface survive the rebuild.
+    expect(out).toContain('<w:pStyle w:val="Footer"/>');
+    expect(doc.footer?.paragraphs).toEqual(["共  页完", "普通一行"]);
+  });
+
+  it("sets retyped text in the paragraph's own run, not in the field's marker", () => {
+    const doc = WordDocument.openBytes(makeFooterDocx(PAGE_ONLY_FOOTER_STYLED));
+    const field = doc.footer?.segments?.[0]?.[0];
+    expect(field && doc.setHeaderSegments("footer", [[field, { text: "改过的字" }]])).toBe(true);
+    expect(footerOf(writeDocx(doc))).toContain('<w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>改过的字</w:t></w:r>');
+  });
+
+  it("refuses a flat text write on a part that carries a field", () => {
+    const doc = WordDocument.openBytes(makeFooterDocx(PAGE_FOOTER));
+    // Flat text cannot say which side of the field it goes, and guessing would drop the field.
+    expect(doc.setHeaderTexts("footer", ["第  页", "普通一行改"])).toBe(false);
+    expect(doc.footer?.paragraphs).toEqual(["第  页", "普通一行"]);
+  });
+
+  it("refuses an instruction it cannot spell back, and keeps the part as its own bytes", () => {
+    const part = footerPart(`<w:p><w:r><w:t>时间</w:t></w:r>${pageFieldRuns(" TIME ", "08:00")}</w:p>`);
+    const doc = WordDocument.openBytes(makeFooterDocx(part));
+    expect(doc.footer?.editable).toBe(false);
+    expect(doc.footer?.segments).toBeUndefined();
+    expect(footerOf(writeDocx(doc))).toBe(part);
+  });
+
+  it("refuses a field that never closes, and one nested in another", () => {
+    const unclosed = footerPart(
+      `<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>1</w:t></w:r></w:p>`,
+    );
+    expect(WordDocument.openBytes(makeFooterDocx(unclosed)).footer?.editable).toBe(false);
+    const nested = footerPart(
+      `<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>` +
+        `<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> NUMPAGES </w:instrText></w:r>` +
+        `<w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>1</w:t></w:r>` +
+        `<w:r><w:fldChar w:fldCharType="end"/></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>`,
+    );
+    expect(WordDocument.openBytes(makeFooterDocx(nested)).footer?.editable).toBe(false);
+  });
+
+  it("still refuses a field shut inside a container", () => {
+    const part = footerPart(`<w:sdt><w:sdtPr/><w:sdtContent><w:p>${pageFieldRuns()}</w:p></w:sdtContent></w:sdt>`);
+    expect(WordDocument.openBytes(makeFooterDocx(part)).footer?.editable).toBe(false);
+  });
+
+  it("labels a page count by what it counts", () => {
+    const doc = WordDocument.openBytes(makeFooterDocx(footerPart(`<w:p>${pageFieldRuns(" NUMPAGES ", "12")}</w:p>`)));
+    expect(doc.footer?.segments?.[0]?.[0]?.carry?.show).toBe("总页数");
+    expect(doc.footer?.paragraphs).toEqual([""]);
+  });
+
+  it("takes the field out when the page says it is gone", () => {
+    const doc = WordDocument.openBytes(makeFooterDocx(PAGE_FOOTER));
+    const kept = (doc.footer?.segments?.[0] ?? []).filter((s) => !s.carry);
+    expect(doc.setHeaderSegments("footer", [kept, [{ text: "普通一行" }]])).toBe(true);
+    const out = footerOf(writeDocx(doc));
+    expect(out).not.toContain("fldChar");
+    expect(out).toContain("第 ");
+  });
+
+  it("inserts a page number spelled the way these files write one", () => {
+    const doc = WordDocument.openBytes(makeFooterDocx(footerPart(`<w:p><w:pPr><w:pStyle w:val="Footer"/></w:pPr><w:r><w:t>机密</w:t></w:r></w:p>`)));
+    expect(doc.insertPageNumber("footer")).toBe(true);
+    expect(footerOf(writeDocx(doc))).toContain(
+      '<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGE  \\* MERGEFORMAT </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>1</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>',
+    );
+    // The text the user had is still the text the model holds, and the cached digit did not join it.
+    expect(doc.footer?.paragraphs).toEqual(["机密"]);
+  });
+
+  it("reads back a page number it inserted, and saves the same bytes twice", () => {
+    const doc = WordDocument.openBytes(makeFooterDocx(footerPart(`<w:p><w:r><w:t>机密</w:t></w:r></w:p>`)));
+    doc.insertPageNumber("footer");
+    const once = writeDocx(doc);
+    const again = WordDocument.openBytes(once);
+    expect(again.footer?.editable, "an inserted field must not be a reason to refuse the footer later").toBe(true);
+    expect(again.footer?.paragraphs).toEqual(["机密"]);
+    expect(again.footer?.segments?.[0]?.at(-1)?.carry?.show).toBe("页码");
+    expect(footerOf(writeDocx(again))).toBe(footerOf(once));
+  });
+
+  it("puts the field where the text said, not at the end", () => {
+    const doc = WordDocument.openBytes(makeFooterDocx(footerPart(`<w:p><w:r><w:t>机密文件</w:t></w:r></w:p>`)));
+    expect(doc.insertPageNumber("footer", 0, 2)).toBe(true);
+    expect(doc.footer?.segments?.[0]?.map((s) => (s.carry ? "·" : s.text))).toEqual(["机密", "·", "文件"]);
+    expect(doc.footer?.paragraphs).toEqual(["机密文件"]);
+  });
+
+  it("refuses to insert where the part cannot be edited", () => {
+    const doc = WordDocument.openBytes(makeFooterDocx(footerPart(`<w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>表</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:p>`)));
+    expect(doc.footer?.editable).toBe(false);
+    expect(doc.insertPageNumber("footer")).toBe(false);
+  });
+
+  it("creates a footer to hold the page number when the document had none", () => {
+    const doc = WordDocument.openBytes(makeTwoSectionDocx());
+    expect(doc.footer).toBeUndefined();
+    expect(doc.ensureHeaderFooter("footer")).toBeDefined();
+    expect(doc.insertPageNumber("footer")).toBe(true);
+    const out = writeDocx(doc);
+    expect(footerOf(out)).toContain('<w:instrText xml:space="preserve"> PAGE  \\* MERGEFORMAT </w:instrText>');
+    const again = WordDocument.openBytes(out);
+    expect(again.footer?.part).toBe("word/footer1.xml");
+    expect(again.footer?.editable).toBe(true);
+    expect(again.footer?.paragraphs).toEqual([""]);
+    expect(again.footer?.segments?.[0]?.length).toBe(1);
+  });
+
+  it("draws the field as one box the caret cannot enter, and the band's command beside it", () => {
+    // The footer band is the last thing the page draws, so it is the tail of the markup.
+    const band = (bytes: Uint8Array): string => {
+      const html = renderWord(WordDocument.openBytes(bytes));
+      const at = html.lastIndexOf('<div class="hf hf-footer');
+      return at < 0 ? "" : html.slice(at);
+    };
+    expect(band(makeFooterDocx(PAGE_FOOTER))).toContain('contenteditable="false"');
+    expect(band(makeFooterDocx(PAGE_FOOTER))).toContain('data-carry="');
+    expect(band(makeFooterDocx(PAGE_FOOTER))).toContain(">页码</span>");
+    // The number the field cached is not on the page, so nothing can read it back as typed text.
+    expect(band(makeFooterDocx(PAGE_FOOTER))).not.toContain(">1<");
+    expect(band(makeFooterDocx(PAGE_FOOTER))).toContain('<button class="hf-page" data-hf-page="footer"');
+    // A band that holds a plain line still offers the command; one nobody can edit offers nothing.
+    expect(band(makeFooterDocx(footerPart("<w:p><w:r><w:t>x</w:t></w:r></w:p>")))).toContain('data-hf-page="footer"');
+    expect(band(makeFooterDocx(footerPart("<w:p><w:br/></w:p>")))).not.toContain("hf-page");
+  });
+
+  describe("a picture in a header or footer band", () => {
+    const logo = (): string => WordDocument.openBytes(makeLogoFooterDocx(LOGO_RUN)).footer?.segments?.[0]?.[0]?.carry?.xml ?? "";
+
+    it("carries a textless logo as one piece and leaves the words beside it editable", () => {
+      const d = WordDocument.openBytes(makeLogoFooterDocx(LOGO_RUN));
+      expect(d.footer?.editable).toBe(true);
+      // The drawing shows the page no text, so the paragraph's text view stays empty rather than inventing one.
+      expect(d.footer?.paragraphs).toEqual(["", "联系文字"]);
+      expect(logo()).toContain("<w:drawing>");
+      expect(renderWord(d)).toContain(">图片</span>");
+      expect(renderWord(d)).toContain("data-hf-page");
+    });
+
+    it("hands the logo paragraph back byte for byte when only the other paragraph is typed in", () => {
+      const d = WordDocument.openBytes(makeLogoFooterDocx(LOGO_RUN));
+      const segs = (d.footer?.segments ?? []).map((p) => p.map((s) => ({ ...s })));
+      segs[1] = [{ text: "改成别的" }];
+      expect(d.setHeaderSegments("footer", segs)).toBe(true);
+      const out = footerOf(writeDocx(d));
+      expect(out).toContain(`<w:p><w:pPr><w:pStyle w:val="Footer"/></w:pPr>${logo()}</w:p>`);
+      expect(out).toContain("<w:t>改成别的</w:t>");
+    });
+
+    it("writes a change that moves no typed character at all", () => {
+      const d = WordDocument.openBytes(makeLogoFooterDocx(LOGO_RUN));
+      // Deleting the chip takes a piece out of the model and nothing out of the text view: hashing only the
+      // texts left `edited` false, and the save handed back the bytes it read with the logo still in it.
+      expect(d.setHeaderSegments("footer", [[], [{ text: "联系文字" }]])).toBe(true);
+      expect(footerOf(writeDocx(d))).not.toContain("<w:drawing>");
+      expect(footerOf(writeDocx(d))).toContain('<w:pStyle w:val="Footer"/>');
+    });
+
+    it("keeps its shape through a save and a re-read", () => {
+      const d = WordDocument.openBytes(makeLogoFooterDocx(LOGO_RUN));
+      const again = WordDocument.openBytes(writeDocx(d));
+      expect(again.footer?.editable).toBe(true);
+      expect(again.footer?.segments?.[0]?.[0]?.carry?.xml).toBe(logo());
+    });
+
+    it("inserts a page number into the words beside a logo, leaving the logo alone", () => {
+      const d = WordDocument.openBytes(makeLogoFooterDocx(LOGO_RUN));
+      expect(d.insertPageNumber("footer")).toBe(true);
+      const out = footerOf(writeDocx(d));
+      expect(out).toContain(logo());
+      expect(out).toContain('fldCharType="begin"');
+      const again = WordDocument.openBytes(writeDocx(d));
+      expect((again.footer?.segments ?? []).flat().filter((s) => s.carry).length).toBe(2);
+    });
+
+    it("refuses the band the corpus really writes, where the box holds the page number", () => {
+      const d = WordDocument.openBytes(makeLogoFooterDocx(LOGO_RUN_WITH_TEXT));
+      // All 16 of these runs in the local corpus are this shape. A chip would swap a number the page shows
+      // for a label, so the part stays held as its own bytes — and its words still reach the page as text.
+      expect(d.footer?.editable).toBe(false);
+      expect(d.footer?.paragraphs.join("")).toContain("第");
+      expect(renderWord(d)).toContain("联系文字");
+      expect(renderWord(d)).not.toContain("hf-page");
+    });
+  });
+});

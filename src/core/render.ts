@@ -102,6 +102,20 @@ function carryTag(carry: CarriedInline): string {
   return `<span class="${RUN_CARRY_CLASS}" data-carry="${carry.key}" data-tag="${esc(carry.tag)}" contenteditable="false">${esc(carry.show)}</span>`;
 }
 
+/**
+ * A page field inside a header/footer band, drawn as a labelled box. A page number that reads like the text
+ * beside it would be typed over and deleted by accident; `页码` says it is one thing, and the caret cannot
+ * enter it. Inline style, because the page's stylesheet is not this module's to change — and the label, not
+ * the number the field cached, because this product has no pagination to say which page it would be.
+ */
+function hfFieldTag(carry: CarriedInline): string {
+  return `<span class="${RUN_CARRY_CLASS}" data-carry="${carry.key}" data-tag="${esc(carry.tag)}" contenteditable="false" style="border:1px dashed #9aa3b0;border-radius:3px;padding:0 5px;margin:0 2px;background:#f2f5fa;color:#3b4453">${esc(carry.show)}</span>`;
+}
+
+/** The band's own row of commands, and the button that matches the page's other small buttons. */
+const HF_BAR_STYLE = "display:flex;gap:6px;margin-top:4px";
+const HF_BTN_STYLE = "font:inherit;font-size:11px;padding:2px 8px;border:1px solid #c3c9d2;border-radius:5px;background:#f2f4f7;color:#26292e;cursor:pointer";
+
 /** Runs between an open range's markers are wrapped, so the anchored text reads as one block. */
 function wordRuns(inlines: Inline[], state: CommentState): string {
   const out: string[] = [];
@@ -385,16 +399,28 @@ export function renderWord(doc: WordDocument): string {
     const area = which === "header" ? doc.header : doc.footer;
     if (!area) return "";
     // `.hf-p` is `white-space: pre-wrap`, so a tab the part holds stays a tab on screen and comes back as
-    // one when the line is read out of the page again.
-    const paras = area.paragraphs.map((t) => `<div class="hf-p">${esc(t) || "<br>"}</div>`).join("") || '<div class="hf-p"><br></div>';
+    // one when the line is read out of the page again. A paragraph that holds a field is drawn piece by
+    // piece, because the field is not text and the order the two sit in is the file's, not the reader's.
+    const paras =
+      area.paragraphs
+        .map((_, i) => {
+          const segs = area.segments?.[i] ?? [{ text: area.paragraphs[i] ?? "" }];
+          return `<div class="hf-p">${segs.map((s) => (s.carry ? hfFieldTag(s.carry) : esc(s.text ?? ""))).join("") || "<br>"}</div>`;
+        })
+        .join("") || '<div class="hf-p"><br></div>';
     const name = which === "header" ? "页眉" : "页脚";
     const tip = area.editable ? `点击编辑${name}` : `此${name}含表格或图片等富内容，暂不支持编辑`;
+    // The command the band carries, drawn outside the paragraphs so reading them back never picks it up as
+    // text. Inline styles again: the page's stylesheet is not this module's to change.
+    const bar = area.editable
+      ? `<div class="hf-bar" contenteditable="false" style="${HF_BAR_STYLE}"><button class="hf-page" data-hf-page="${which}" style="${HF_BTN_STYLE}" title="在此${name}插入页码域">插入页码</button></div>`
+      : "";
     // `hf-bottom` is the rule that puts a footer's padding under its text instead of above it. The band
     // travels with the page's own box variables: it sits beside `.page`, not inside it, so without them the
     // stylesheet answers with its 794px fallback and a landscape section gets a portrait header — same page,
     // two widths. The horizontal padding is overridden to the section's margins so the band's text starts at
     // the same column as the body's.
-    return `<div class="hf hf-${which}${which === "footer" ? " hf-bottom" : ""}" data-hf="${which}" style="${style};padding-left:var(--pad-l);padding-right:var(--pad-r)" title="${tip}">${paras}</div>`;
+    return `<div class="hf hf-${which}${which === "footer" ? " hf-bottom" : ""}" data-hf="${which}" style="${style};padding-left:var(--pad-l);padding-right:var(--pad-r)" title="${tip}">${paras}${bar}</div>`;
   };
   return `${hf("header")}<div class="page" style="${style}">${renderBlocks(doc.blocks, doc, new Map(), {
     open: new Set(),

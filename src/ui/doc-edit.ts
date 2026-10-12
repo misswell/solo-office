@@ -1,4 +1,4 @@
-import type { Block, Carried, FormatRevision, Inline, ParaStyle, Paragraph, ParagraphFormatRevision, PropSlot, Revision, RevisionEntry, RowInfo, RunStyle, Table, TableCell, WordDocument } from "../core/docx.js";
+import type { Block, Carried, CarriedInline, FormatRevision, HfSegment, Inline, ParaStyle, Paragraph, ParagraphFormatRevision, PropSlot, Revision, RevisionEntry, RowInfo, RunStyle, Table, TableCell, WordDocument } from "../core/docx.js";
 import type { CommentAnchor, DocComment } from "../core/comments.js";
 import { bodyShape, commentTexts } from "../core/comments.js";
 import { RUN_STYLE_KEYS, paraStyleOf, runStyleOf, stampNow, syncParaSlots, twipsToPx } from "../core/docx.js";
@@ -457,6 +457,14 @@ export class DocEditor {
     for (const el of this.host.querySelectorAll<HTMLElement>(".hf")) {
       el.addEventListener("click", () => this.editHF(el));
     }
+    for (const btn of this.host.querySelectorAll<HTMLElement>("[data-hf-page]")) {
+      // The band opens for editing on a click anywhere in it; this button is a command, not the caret.
+      btn.addEventListener("mousedown", (e) => e.preventDefault());
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.insertPageNumber(btn.dataset.hfPage === "header" ? "header" : "footer");
+      });
+    }
   }
 
   /** Click a header/footer area to edit it; blur commits the paragraph texts. */
@@ -474,14 +482,86 @@ export class DocEditor {
       () => {
         el.contentEditable = "false";
         if (this.hfEditing === el) this.hfEditing = null;
-        const paragraphs = [...el.querySelectorAll(".hf-p")].map((p) => (p.textContent ?? "").replace(/\u00a0/g, " "));
-        const before = which === "header" ? this.doc.header : this.doc.footer;
-        if (!before || JSON.stringify(before.paragraphs) === JSON.stringify(paragraphs)) return;
-        this.doc.setHeaderTexts(which, paragraphs);
-        this.hooks.changed();
+        this.commitHF(el, which);
       },
       { once: true },
     );
+  }
+
+  /**
+   * The band's paragraphs as the model holds them: every direct child of the band is one paragraph — what
+   * the page writes is `.hf-p`, and what the browser adds when the user presses Enter is a bare `div`, which
+   * is the same paragraph by a different name and must not be read as nothing — and inside it the text the
+   * page shows, with a field coming back by its key rather than by the label drawn for it. The label is for
+   * reading; the field's bytes are for the file, and the number it cached is neither.
+   */
+  private readHF(el: HTMLElement, which: "header" | "footer"): { segs: HfSegment[][]; caret: number } {
+    const held = (which === "header" ? this.doc.header : this.doc.footer)?.segments ?? [];
+    const atoms = new Map<number, CarriedInline>();
+    for (const segs of held) for (const s of segs) if (s.carry) atoms.set(s.carry.key, s.carry);
+    const placed = new Set<number>();
+    const caret = document.getSelection()?.anchorNode ?? null;
+    const segs: HfSegment[][] = [];
+    let caretAt = -1;
+    for (const child of [...el.children]) {
+      if (child.classList.contains("hf-bar")) continue;
+      const out: HfSegment[] = [];
+      let text = "";
+      const flush = (): void => {
+        if (text === "") return;
+        out.push({ text });
+        text = "";
+      };
+      for (const node of child.childNodes) {
+        if (node.nodeType === Node.TEXT_NODE) {
+          text += (node.textContent ?? "").replace(/\u00a0/g, " ");
+          continue;
+        }
+        const c = node as HTMLElement;
+        if (c.classList?.contains(RUN_CARRY_CLASS)) {
+          const key = Number(c.getAttribute("data-carry"));
+          const atom = Number.isFinite(key) ? atoms.get(key) : undefined;
+          if (!atom || placed.has(key)) continue;
+          flush();
+          placed.add(key);
+          out.push({ carry: atom });
+          continue;
+        }
+        text += (c.textContent ?? "").replace(/\u00a0/g, " ");
+      }
+      flush();
+      if (caret && child.contains(caret)) caretAt = segs.length;
+      segs.push(out);
+    }
+    return { segs, caret: caretAt };
+  }
+
+  /** Writes the band back into the model when what it holds has changed. */
+  private commitHF(el: HTMLElement, which: "header" | "footer"): void {
+    const before = which === "header" ? this.doc.header : this.doc.footer;
+    if (!before) return;
+    const { segs } = this.readHF(el, which);
+    if (JSON.stringify(segs) === JSON.stringify(before.segments ?? before.paragraphs.map((t) => [{ text: t }]))) return;
+    if (!this.doc.setHeaderSegments(which, segs)) return;
+    this.hooks.changed();
+  }
+
+  /**
+   * Puts a page number in the band, keeping whatever the user had just typed there. The page is drawn again
+   * afterwards and the band opened, because the field is one thing the caret cannot be put inside of.
+   */
+  private insertPageNumber(which: "header" | "footer"): void {
+    const el = this.host.querySelector<HTMLElement>(`.hf-${which}`);
+    if (!el) return;
+    const { caret } = this.readHF(el, which);
+    this.commitHF(el, which);
+    if (!this.doc.insertPageNumber(which, caret)) {
+      this.render();
+      return;
+    }
+    this.render();
+    const again = this.host.querySelector<HTMLElement>(`.hf-${which}`);
+    if (again) this.editHF(again);
   }
 
   /** Opens the header/footer for editing, creating one when the document had none. */

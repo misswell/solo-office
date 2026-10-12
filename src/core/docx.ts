@@ -568,8 +568,22 @@ export interface Section {
 }
 
 /**
- * A header or footer part the model can show and (when simple) edit. Rich parts —
- * tables, pictures, fields — stay byte-identical on save and are not editable.
+ * One paragraph of a header/footer part, taken apart in the order the file wrote it: the text this model
+ * edits, with the fields it carries standing between the pieces. A field is not text — its bytes go back
+ * unchanged and the number it last cached never joins what the user typed — so it needs an entry of its
+ * own, and the paragraph needs an order to put that entry in.
+ */
+export interface HfSegment {
+  text?: string;
+  /** A page-number field kept as bytes. Same `key` job the carried inline plays in a body paragraph. */
+  carry?: CarriedInline;
+}
+
+/**
+ * A header or footer part the model can show and (when simple) edit. Rich parts — tables, pictures,
+ * containers, tracked changes — stay byte-identical on save and are not editable. A `PAGE` or `NUMPAGES`
+ * field that sits at run level is the one exception: it travels as an atom, so the text around it stays
+ * editable and the field itself comes back exactly as it came in.
  */
 export interface HeaderFooter {
   /** Package path ("word/header1.xml"). */
@@ -578,10 +592,18 @@ export interface HeaderFooter {
   id: string;
   /** True when the part is plain paragraphs only, so text edits round-trip. */
   editable: boolean;
-  /** Plain text per paragraph, in order. */
+  /** Plain text per paragraph, in order — the text segments of `segments`, joined. */
   paragraphs: string[];
   /** Texts as read, so a save knows whether the part needs regenerating. */
   baseline: string[];
+  /**
+   * The paragraphs with their fields, set on every part this model can edit. Paragraph i of this is
+   * paragraph i of the bytes a save splices into, so the two count paragraphs the same way by
+   * construction. Absent on a part held readonly, where nothing is ever written back per paragraph.
+   */
+  segments?: HfSegment[][];
+  /** `segments` as read, so a save can tell a paragraph that lost a field from one that only gained a letter. */
+  baselineSegments?: HfSegment[][];
   /**
    * The part as the file wrote it, `""` for one this session created. A save splices its edits into
    * these bytes rather than rebuilding the part, so the root's declarations and every paragraph the
@@ -589,6 +611,15 @@ export interface HeaderFooter {
    */
   source: string;
 }
+
+/**
+ * What a save of this part would put down — each paragraph's text and kept bytes. The "did the model
+ * change" hash has to read this rather than `paragraphs`, because a field's cached number is deliberately
+ * not text the page shows: inserting a page number, or deleting one, moves nothing in the text view, and a
+ * save that saw no change handed back the bytes it read with the field still in them.
+ */
+const hfSavedState = (hf: HeaderFooter | undefined): unknown =>
+  hf?.segments?.map((segs) => segs.map((s) => s.carry?.xml ?? s.text ?? "")) ?? hf?.paragraphs ?? null;
 
 export interface NumberLevel {
   numFmt: string;
@@ -632,6 +663,156 @@ function hfParagraphText(span: { xml: string }): string {
 }
 
 /**
+ * The page fields this model is willing to keep: `PAGE` and `NUMPAGES`, with or without the formatting
+ * switch. Measured on the local corpus, where of the 21 fields that sit at run level in a header or footer
+ * part 16 spell ` PAGE  \* MERGEFORMAT `, 2 spell `PAGE` bare and 2 count pages; the 1 that is none of these
+ * stays a reason to hold the part as its own bytes.
+ */
+const PAGE_FIELD = /^\s*(PAGE|NUMPAGES)(\s+\\\*\s+MERGEFORMAT)?\s*$/;
+
+/**
+ * Content beside a header/footer's paragraphs that a flat piece-by-piece edit cannot account for: a table,
+ * a picture, a container, a tracked change, an anchored comment. The prefixes are matched loosely on purpose
+ * — a part that binds the wordprocessingml namespace under another name is still rich, and reading only
+ * `w:` is how a container slipped through and got dropped.
+ */
+const HF_BLOCKER = /<(?:[\w.-]+:)?(tbl|drawing|pict|object|fldSimple|fldChar|hyperlink|sdt|ins|del|br|sym)[ />]|<(?:[\w.-]+:)?comment(?:Range|Reference)/;
+
+/** What a paragraph may hold besides runs, and still be a paragraph this model can write back. */
+const HF_PARA_STRUCTURAL = new Set(["pPr", "bookmarkStart", "bookmarkEnd"]);
+
+/** What a run of one of those paragraphs may hold: its properties, text, a tab, and a field's two nodes. */
+const HF_RUN_KIDS = new Set(["rPr", "t", "tab", "fldChar", "instrText"]);
+
+/**
+ * A run that holds one of these instead of text is not a paragraph this model has to refuse: it is a
+ * picture the file put in the band, and it travels whole as one atom. In the local corpus all 16 of these
+ * runs are `w:rPr` plus an `mc:AlternateContent` wrapping a `w:drawing` — the letterhead logo — and every
+ * one of them sits alone in its paragraph, so nothing a user could type is hidden behind the chip.
+ */
+const HF_RUN_CARRIED = new Set(["AlternateContent", "drawing", "pict", "object"]);
+
+/**
+ * What no run may hide behind a chip: a revision, a hyperlink, a container, a comment anchor, or a break
+ * the page shows as text. Each of those has its own meaning the flat read would swallow, and a band that
+ * holds one stays held as its own bytes rather than half-explained.
+ */
+const HF_RUN_DENY = /<(?:[\w.-]+:)?(ins|del|hyperlink|sdt|fldSimple|br|sym)[ />]|<(?:[\w.-]+:)?comment(?:Range|Reference)/;
+
+/** Which marker of a field a run holds — `begin`, `separate`, `end` — by attribute, whatever prefix spells it. */
+const fldStageOf = (run: string): string | undefined => {
+  const m = /<(?:[\w.-]+:)?fldChar\b([^>]*)>/.exec(run);
+  return m ? /(?:^|\s)(?:[\w.-]+:)?fldCharType="(\w+)"/.exec(m[1] ?? "")?.[1] : undefined;
+};
+
+/** The text a run shows: its `w:t` nodes in order, each literal `w:tab` as the "\t" the body model uses. */
+const hfRunText = (run: string): string =>
+  [...run.matchAll(/<(?:[\w.-]+:)?t\b[^>]*>([^<]*)<\/(?:[\w.-]+:)?t>|<(?:[\w.-]+:)?tab[ />]/g)]
+    .map((m) => (m[1] === undefined ? "\t" : decodeEntities(m[1] ?? "")))
+    .join("");
+
+/**
+ * One paragraph of a header/footer part, taken apart in the order the file wrote it: text where the file put
+ * text, one carried atom per page field, and `ok: false` for anything else — a hyperlink, a picture, a
+ * container, a nested or unpaired field, an instruction this model cannot spell back.
+ *
+ * Reading a field this way instead of matching it on the part as a whole is what lets `PAGE` stop being a
+ * reason to refuse the entire footer. The number the field caches between its `separate` and its `end` is
+ * not text the user typed, so it never joins the paragraph's text view; it travels inside the atom.
+ */
+function hfParagraphSegments(span: { xml: string }, newKey: () => number): { segs: HfSegment[]; ok: boolean } {
+  const kids = childSpans(elementContent(span.xml));
+  const segs: HfSegment[] = [];
+  let text = "";
+  let i = 0;
+  const rich = (): { segs: HfSegment[]; ok: boolean } => ({ segs: [], ok: false });
+  while (i < kids.length) {
+    const kid = kids[i]!;
+    if (HF_PARA_STRUCTURAL.has(kid.tag)) {
+      i++;
+      continue;
+    }
+    if (kid.tag !== "r") return rich();
+    const runKids = childSpans(elementContent(kid.xml));
+    if (!runKids.every((k) => HF_RUN_KIDS.has(k.tag))) {
+      // Not a text run, then: a run that is one picture and nothing else travels whole, the way a page
+      // field does. Its `w:rPr` rides along with it and is not text.
+      //
+      // What it may not hold is words. The 16 footers in the local corpus that look like this are one
+      // anchored drawing whose text box contains the page number itself (`mc:AlternateContent` wrapping
+      // `w:txbxContent` with two `PAGE` fields in it), so a chip for them would replace a number the page
+      // shows with a label, and hand the user a band that reads "editable" while the only text on it sits
+      // behind the chip. Such a part stays held as its own bytes, and the page keeps showing its text.
+      if (!runKids.every((k) => k.tag === "rPr" || HF_RUN_CARRIED.has(k.tag)) || HF_RUN_DENY.test(kid.xml) || hfRunText(kid.xml) !== "") return rich();
+      if (text !== "") segs.push({ text });
+      text = "";
+      segs.push({ carry: { key: newKey(), tag: runKids.find((k) => HF_RUN_CARRIED.has(k.tag))!.tag, xml: kid.xml, show: "图片" } });
+      i++;
+      continue;
+    }
+    if (fldStageOf(kid.xml) !== "begin") {
+      text += hfRunText(kid.xml);
+      i++;
+      continue;
+    }
+    let end = -1;
+    let instr = "";
+    for (let j = i + 1; j < kids.length; j++) {
+      const k = kids[j]!;
+      if (k.tag !== "r" || !childSpans(elementContent(k.xml)).every((c) => HF_RUN_KIDS.has(c.tag))) break;
+      const stage = fldStageOf(k.xml);
+      if (stage === "begin") break;
+      if (stage === "end") {
+        end = j;
+        break;
+      }
+      const m = /<(?:[\w.-]+:)?instrText\b[^>]*>([^<]*)<\/(?:[\w.-]+:)?instrText>/.exec(k.xml);
+      if (m) instr += decodeEntities(m[1] ?? "");
+    }
+    if (end < 0 || !PAGE_FIELD.test(instr)) return rich();
+    if (text !== "") segs.push({ text });
+    text = "";
+    segs.push({
+      carry: { key: newKey(), tag: "fldChar", xml: kids.slice(i, end + 1).map((k) => k.xml).join(""), show: instr.includes("NUMPAGES") ? "总页数" : "页码" },
+    });
+    i = end + 1;
+  }
+  if (text !== "") segs.push({ text });
+  return { segs, ok: true };
+}
+
+/** The paragraph's text view: what the pieces of it that are text say, with a field contributing nothing. */
+const hfSegmentsText = (segs: HfSegment[]): string => segs.map((s) => s.text ?? "").join("");
+
+/** Text that sits side by side is one run's worth: what the page shows as one stretch of typing. */
+const coalesceHfSegments = (segs: HfSegment[]): HfSegment[] => {
+  const out: HfSegment[] = [];
+  for (const s of segs) {
+    if (s.carry) {
+      out.push({ carry: s.carry });
+      continue;
+    }
+    const t = s.text ?? "";
+    if (t === "") continue;
+    const prev = out.at(-1);
+    if (prev?.text !== undefined) prev.text += t;
+    else out.push({ text: t });
+  }
+  return out;
+};
+
+/** A copy of a paragraph's pieces, so what a save compares against cannot move under it. */
+const copyHfSegments = (segs: HfSegment[]): HfSegment[] => segs.map((s) => (s.carry ? { carry: { ...s.carry } } : { text: s.text }));
+
+/** Whether a paragraph still says what the file wrote: same pieces, same order, same bytes inside each. */
+const sameHfSegments = (a: (HfSegment[] | undefined)[], b: (HfSegment[] | undefined)[]): boolean =>
+  JSON.stringify(a) === JSON.stringify(b);
+
+/** Paragraph i's pieces, or the flat texts for a part that was never taken apart. */
+const hfSegmentsAt = (hf: HeaderFooter, i: number): HfSegment[] | undefined =>
+  hf.segments?.[i] ?? (hf.paragraphs[i] === undefined ? undefined : [{ text: hf.paragraphs[i]! }]);
+
+/**
  * A header/footer part after an edit, spliced into the bytes it came in with rather than rebuilt from
  * the texts: the root tag keeps every declaration the file wrote (the local corpus averages 17 prefixes
  * per part, every one of them carrying `mc:Ignorable`), a paragraph whose text did not change travels
@@ -652,17 +833,21 @@ function headerFooterXml(hf: HeaderFooter): string {
   const body = seen
     .map((span) => {
       if (span.tag !== "p") return span.xml;
-      const text = hf.paragraphs[++at];
-      if (text === undefined) return "";
-      return text === hf.baseline[at] ? span.xml : editedParagraph(span, text);
+      const segs = hfSegmentsAt(hf, ++at);
+      if (segs === undefined) return "";
+      return sameHfSegments([segs], [hf.baselineSegments?.[at]]) ? span.xml : editedParagraph(span, segs, hf.baselineSegments?.[at]);
     })
     .join("");
-  const extra = hf.paragraphs.slice(paras.length).map((t) => spelledParagraph(t, "w")).join("");
+  const extra = hf.paragraphs
+    .slice(paras.length)
+    .map((_, i) => coalesceHfSegments(hfSegmentsAt(hf, paras.length + i) ?? []))
+    .map((segs) => spelledParagraph(segs, "w"))
+    .join("");
   return `${prologue}${open}${body}${extra}${close}`;
 }
 
-/** A paragraph the model holds text for, rewritten in place: properties kept, runs collapsed into one. */
-function editedParagraph(span: { xml: string }, text: string): string {
+/** A paragraph the model holds pieces for, rewritten in place: properties kept, its text re-spelled, its fields carried. */
+function editedParagraph(span: { xml: string }, segs: HfSegment[], asRead?: HfSegment[]): string {
   const prefix = /^<([\w.-]+):/.exec(span.xml)?.[1] ?? "w";
   const attrs = (/^<[\w.-]*:?p\b([^>]*)>/.exec(span.xml)?.[1] ?? "").replace(/\/\s*$/, "");
   const kids = childSpans(elementContent(span.xml));
@@ -670,11 +855,27 @@ function editedParagraph(span: { xml: string }, text: string): string {
   // holds is every `w:t` of the paragraph merged into one string, and keeping the runs too would say it
   // twice. A paragraph with several differently formatted runs is therefore set in the first one's.
   const kept = kids.filter((k) => k.tag === "pPr" || /^bookmark(Start|End)$/.test(k.tag)).map((k) => k.xml).join("");
-  const first = kids.find((k) => k.tag === "r");
+  // The paragraph's own typeface comes from a run the model did not carry away as an atom. A page field's
+  // runs — its instruction and the cached digit — are the *field's* formatting, and setting a sentence in
+  // the digit's size would do that to every paragraph that opens with a number. Only when the whole
+  // paragraph is one field is there no run of its own to take, and then the digit's size is the only one
+  // this paragraph was ever given, so typed text beside it wears that rather than the document default.
+  const runs = kids.filter((k) => k.tag === "r");
+  const atoms = (asRead ?? []).filter((s) => s.carry).map((s) => s.carry!.xml);
+  const first =
+    runs.find((k) => !atoms.some((a) => a.includes(k.xml))) ?? runs.find((k) => /<(?:[\w.-]+:)?t\b/.test(k.xml)) ?? runs[0];
   const rPrefix = /^<([\w.-]+):/.exec(first?.xml ?? "")?.[1] ?? prefix;
   const props = first ? childSpans(elementContent(first.xml)).find((k) => k.tag === "rPr")?.xml ?? "" : "";
-  const run = text === "" ? "" : `<${rPrefix}:r>${props}${textXml(text, rPrefix)}</${rPrefix}:r>`;
-  return `<${prefix}:p${attrs}>${kept}${run}</${prefix}:p>`;
+  const parts = coalesceHfSegments(segs)
+    .map((s) =>
+      s.carry
+        ? s.carry.xml
+        : s.text && s.text !== ""
+          ? `<${rPrefix}:r>${props}${textXml(s.text, rPrefix)}</${rPrefix}:r>`
+          : "",
+    )
+    .join("");
+  return `<${prefix}:p${attrs}>${kept}${parts}</${prefix}:p>`;
 }
 
 /**
@@ -687,16 +888,60 @@ const textXml = (text: string, prefix: string): string =>
     .map((piece) => (piece === "" ? "" : `<${prefix}:t${preserve(piece)}>${XML_ESC(piece)}</${prefix}:t>`))
     .join(`<${prefix}:tab/>`);
 
-/** A paragraph the part did not have: one run, one text, nothing invented beside them. */
-const spelledParagraph = (text: string, prefix: string): string =>
-  text === "" ? `<${prefix}:p/>` : `<${prefix}:p><${prefix}:r>${textXml(text, prefix)}</${prefix}:r></${prefix}:p>`;
+/** A paragraph the part did not have: one run per piece of text, fields carried as the bytes they came in. */
+const spelledParagraph = (segs: HfSegment[], prefix: string): string => {
+  const body = coalesceHfSegments(segs)
+    .map((s) => (s.carry ? s.carry.xml : s.text && s.text !== "" ? `<${prefix}:r>${textXml(s.text, prefix)}</${prefix}:r>` : ""))
+    .join("");
+  return body === "" ? `<${prefix}:p/>` : `<${prefix}:p>${body}</${prefix}:p>`;
+};
 
 /** A part this session created, with no bytes to splice into. */
 function spelledHeaderFooter(hf: HeaderFooter): string {
   const root = hf.part.includes("footer") ? "ftr" : "hdr";
-  const body = hf.paragraphs.length ? hf.paragraphs.map((t) => spelledParagraph(t, "w")).join("") : "<w:p/>";
+  const segs = hf.segments ?? hf.paragraphs.map((t) => [{ text: t }]);
+  const body = segs.length ? segs.map((s) => spelledParagraph(s, "w")).join("") : "<w:p/>";
   return `${DECL}<w:${root} xmlns:w="${NS_W}" xmlns:r="${REL_R}">${body}</w:${root}>`;
 }
+
+/**
+ * A page-number field the way the files this machine was measured against write one: the instruction inside
+ * `w:instrText` with its edges kept by `xml:space="preserve"`, `begin` and `end` marking the field off, a
+ * `separate` before the number it last showed. 16 of the 21 run-level fields in that corpus's header and
+ * footer parts spell the instruction exactly this way, and all 21 cache a number — which is why this one
+ * caches `1` too: a reader that lays out pages recomputes it, and one that does not still has a digit to
+ * put where the page number belongs. Our own page shows neither digit, but the field's label, because this
+ * product has no pagination to compute a page from yet.
+ */
+const pageFieldXml = (instruction: string, prefix: string): string =>
+  `<${prefix}:r><${prefix}:fldChar ${prefix}:fldCharType="begin"/></${prefix}:r>` +
+  `<${prefix}:r><${prefix}:instrText xml:space="preserve"> ${instruction}  \\* MERGEFORMAT </${prefix}:instrText></${prefix}:r>` +
+  `<${prefix}:r><${prefix}:fldChar ${prefix}:fldCharType="separate"/></${prefix}:r>` +
+  `<${prefix}:r><${prefix}:t>1</${prefix}:t></${prefix}:r>` +
+  `<${prefix}:r><${prefix}:fldChar ${prefix}:fldCharType="end"/></${prefix}:r>`;
+
+/** Where a field goes among a paragraph's pieces: at `offset` characters of text, or at the end. */
+const putHfCarry = (segs: HfSegment[], offset: number | undefined, carry: CarriedInline): HfSegment[] => {
+  if (offset === undefined) return coalesceHfSegments([...segs, { carry }]);
+  const out: HfSegment[] = [];
+  let seen = 0;
+  let placed = false;
+  for (const s of segs) {
+    const t = s.text;
+    if (!placed && t !== undefined && offset <= seen + t.length) {
+      placed = true;
+      const cut = offset - seen;
+      if (t.slice(0, cut) !== "") out.push({ text: t.slice(0, cut) });
+      out.push({ carry });
+      if (t.slice(cut) !== "") out.push({ text: t.slice(cut) });
+    } else {
+      out.push(s);
+    }
+    if (t !== undefined) seen += t.length;
+  }
+  if (!placed) out.push({ carry });
+  return coalesceHfSegments(out);
+};
 
 /** A comment body is one `w:p` per line of the editor's text. */
 const commentParagraphs = (text: string): Inline[][] => text.split("\n").map((line) => [{ text: line }]);
@@ -790,7 +1035,7 @@ export class WordDocument {
   private fingerprint(): string {
     return (
       JSON.stringify(this.blocks, (key, value) => (key === "src" && typeof value === "string" ? value.length : value)) +
-      JSON.stringify([this.header?.paragraphs ?? null, this.footer?.paragraphs ?? null]) +
+      JSON.stringify([hfSavedState(this.header), hfSavedState(this.footer)]) +
       JSON.stringify(this.comments.map(commentState))
     );
   }
@@ -1359,12 +1604,41 @@ export class WordDocument {
     }
   }
 
-  /** Rewrites the texts of an editable header/footer; rich parts refuse. */
+  /**
+   * Rewrites the texts of an editable header/footer; rich parts refuse. A part that carries a page field
+   * refuses too, because flat text cannot say where the field sits — taking the text alone would drop it.
+   */
   setHeaderTexts(which: "header" | "footer", paragraphs: string[]): boolean {
     const hf = which === "header" ? this.header : this.footer;
     if (!hf?.editable) return false;
-    hf.paragraphs = paragraphs;
+    if (hf.segments?.some((s) => s.some((x) => x.carry))) return false;
+    return this.setHeaderSegments(which, paragraphs.map((t) => [{ text: t }]));
+  }
+
+  /** Rewrites an editable header/footer paragraph by paragraph, pieces and all; rich parts refuse. */
+  setHeaderSegments(which: "header" | "footer", segments: HfSegment[][]): boolean {
+    const hf = which === "header" ? this.header : this.footer;
+    if (!hf?.editable) return false;
+    hf.segments = segments.map(coalesceHfSegments);
+    hf.paragraphs = hf.segments.map(hfSegmentsText);
     return true;
+  }
+
+  /**
+   * Puts a `PAGE` field in an editable header or footer, spelled as the files write it and carried as one
+   * atom, so the text around it stays editable and a save gives the field back unchanged. `paragraph` counts
+   * from the top, or from the end when negative; `offset` counts the characters of text before it goes in.
+   */
+  insertPageNumber(which: "header" | "footer", paragraph = -1, offset?: number): boolean {
+    const hf = which === "header" ? this.header : this.footer;
+    if (!hf?.editable) return false;
+    const segs = (hf.segments ?? hf.paragraphs.map((t) => [{ text: t }])).map(copyHfSegments);
+    const at = paragraph < 0 ? segs.length + paragraph : paragraph;
+    const target = segs[at];
+    if (!target) return false;
+    const prefix = /^<([\w.-]+):(?:hdr|ftr)/.exec(hf.source)?.[1] ?? "w";
+    target.splice(0, target.length, ...putHfCarry(target, offset, { key: this.carryKey++, tag: "fldChar", xml: pageFieldXml("PAGE", prefix), show: "页码" }));
+    return this.setHeaderSegments(which, segs);
   }
 
   /** Adds an empty header/footer to a document that had none, wiring rels and sectPr. */
@@ -1392,7 +1666,7 @@ export class WordDocument {
     const out: { part: string; xml: string; dirty: boolean }[] = [];
     for (const hf of [this.header, this.footer]) {
       if (!hf) continue;
-      out.push({ part: hf.part, xml: headerFooterXml(hf), dirty: JSON.stringify(hf.paragraphs) !== JSON.stringify(hf.baseline) });
+      out.push({ part: hf.part, xml: headerFooterXml(hf), dirty: hf.segments ? !sameHfSegments(hf.segments, hf.baselineSegments ?? []) : JSON.stringify(hf.paragraphs) !== JSON.stringify(hf.baseline) });
     }
     return out;
   }
@@ -2325,19 +2599,21 @@ export class WordDocument {
       // paragraph i of the bytes. Pairing a parsed tree against spans would let the two count paragraphs
       // differently, and the save would then rewrite the wrong one.
       const rootSpan = childSpans(partRaw).find((s) => s.tag === (kind === "header" ? "hdr" : "ftr"));
-      const paragraphs = (rootSpan ? childSpans(elementContent(rootSpan.xml)) : [])
-        .filter((s) => s.tag === "p")
-        .map(hfParagraphText);
+      const seen = rootSpan ? childSpans(elementContent(rootSpan.xml)) : [];
+      const paraSpans = seen.filter((s) => s.tag === "p");
+      const parsed = paraSpans.map((s) => hfParagraphSegments(s, () => this.carryKey++));
+      // Anything the paragraphs do not account for — a table or a container sitting beside them — is still a
+      // reason to hold the part as its own bytes; within them the piece-by-piece read is the stricter rule.
+      const editable = parsed.every((p) => p.ok) && !seen.some((s) => s.tag !== "p" && HF_BLOCKER.test(s.xml));
+      const segments = editable ? parsed.map((p) => p.segs) : undefined;
+      const paragraphs = segments ? segments.map(hfSegmentsText) : paraSpans.map(hfParagraphText);
       const hf: HeaderFooter = {
         part,
         id,
-        // Anything a flat string cannot say — a field, a picture, a container, a tracked change, a soft
-        // return, an anchored comment — is a reason to leave the part as its own bytes. The prefixes are
-        // matched loosely on purpose: a part that binds the wordprocessingml namespace under another name
-        // is still rich, and reading only `w:` is how a container slipped through and got dropped.
-        editable: !/<(?:[\w.-]+:)?(tbl|drawing|pict|object|fldSimple|fldChar|hyperlink|sdt|ins|del|br|sym)[ />]|<(?:[\w.-]+:)?comment(?:Range|Reference)/.test(partRaw),
+        editable,
         paragraphs,
         baseline: [...paragraphs],
+        ...(segments ? { segments, baselineSegments: segments.map(copyHfSegments) } : {}),
         source: partRaw,
       };
       if (kind === "header") this.header = hf;

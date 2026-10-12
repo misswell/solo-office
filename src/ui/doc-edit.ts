@@ -1,4 +1,4 @@
-import type { Block, Carried, FormatRevision, Inline, ParaStyle, Paragraph, ParagraphFormatRevision, Revision, RevisionEntry, RowInfo, RunStyle, Table, TableCell, WordDocument } from "../core/docx.js";
+import type { Block, Carried, FormatRevision, Inline, ParaStyle, Paragraph, ParagraphFormatRevision, PropSlot, Revision, RevisionEntry, RowInfo, RunStyle, Table, TableCell, WordDocument } from "../core/docx.js";
 import type { CommentAnchor, DocComment } from "../core/comments.js";
 import { bodyShape, commentTexts } from "../core/comments.js";
 import { RUN_STYLE_KEYS, paraStyleOf, runStyleOf, stampNow, syncParaSlots, twipsToPx } from "../core/docx.js";
@@ -215,10 +215,22 @@ const sameRunProps = (a: RunStyle, b: RunStyle): boolean => RUN_STYLE_KEYS.every
 
 /** Two records join only if they are the same change, before-state included — the point of the record. */
 const sameFormatChange = (a?: FormatRevision, b?: FormatRevision): boolean =>
-  a?.id === b?.id && a?.author === b?.author && a?.date === b?.date && (!a || !b || sameRunProps(a.prev, b.prev));
+  a?.id === b?.id &&
+  a?.author === b?.author &&
+  a?.date === b?.date &&
+  (!a || !b || (sameRunProps(a.prev, b.prev) && sameRunSlots(a.prevSlots, b.prevSlots)));
+
+/**
+ * Two runs join only if they carry the same properties text. A run's `w:rPr` travels as the file wrote it, so
+ * joining one that holds `w:kern` to one that does not would have to pick a winner — and a run cut in half by
+ * `splitAt` keeps the one array, so splitting and rejoining a run costs nothing.
+ */
+const sameRunSlots = (a?: PropSlot[], b?: PropSlot[]): boolean =>
+  a === b || (!!a === !!b && (!!a ? a.length === b!.length && a.every((s, i) => s.xml === b![i]?.xml) : true));
 
 const sameStyle = (a: Inline, b: Inline): boolean =>
   CARRIED.every((k) => a[k] === b[k]) &&
+  sameRunSlots(a.rPrSlots, b.rPrSlots) &&
   !!a.image === !!b.image &&
   a.image?.path === b.image?.path &&
   // An anchor is an element of its own: joining it to a neighbour would move or swallow the marker.
@@ -1800,7 +1812,16 @@ export class DocEditor {
     const mine = before.revFormat?.author === this.authorName ? before.revFormat : undefined;
     if (mine) return mine;
     this.revSeq += 1;
-    return { kind: "format", id: this.revSeq, author: this.authorName, date: stampNow(), prev: runStyleOf(before) };
+    // The record says what the run's whole property set was, not only the nine fields the model can name, so a
+    // later refusal puts back the `w:kern` and the `w:lang` the toolbar never touched.
+    return {
+      kind: "format",
+      id: this.revSeq,
+      author: this.authorName,
+      date: stampNow(),
+      prev: runStyleOf(before),
+      ...(before.rPrSlots?.length ? { prevSlots: before.rPrSlots } : {}),
+    };
   }
 
   /**
@@ -2630,12 +2651,20 @@ function spliceText(inlines: Inline[], from: number, to: number, text: string): 
   return merge([...head, ...inserted, ...tail]);
 }
 
-function pickTextStyle(inline: Inline): RunStyle & { hyperlink?: string } {
-  const style: RunStyle & { hyperlink?: string } = {};
+/**
+ * The style typed text takes from the run it lands in. The property set comes along with it, because what the
+ * cursor sits in is a run with a font, a language and a style the nine modelled fields do not add up to.
+ */
+function pickTextStyle(inline: Inline): Partial<Inline> {
+  const style: Partial<Inline> = {};
   for (const key of CARRIED) {
     if (key === "break" || key === "tab") continue;
     const value = inline[key];
     if (value !== undefined) (style as Record<string, unknown>)[key] = value;
+  }
+  if (inline.rPrSlots) {
+    style.rPrSlots = inline.rPrSlots;
+    style.asRead = inline.asRead;
   }
   return style;
 }

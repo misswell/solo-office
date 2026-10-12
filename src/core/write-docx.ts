@@ -168,12 +168,128 @@ const runProps = (s: RunStyle): string => {
   return inner ? `<w:rPr>${inner}</w:rPr>` : "";
 };
 
+/** The order `CT_RPr` gives its children; a property the model newly spells has to land in it. */
+const RPR_ORDER = [
+  "rStyle", "rFonts", "b", "bCs", "i", "iCs", "caps", "smallCaps", "strike", "dstrike", "outline", "shadow",
+  "condense", "extend", "color", "spacing", "w", "kern", "position", "sz", "szCs", "highlight", "u", "effect",
+  "bdr", "shd", "fitText", "vertAlign", "rtl", "cs", "em", "lang", "eastAsianLayout", "specVanish", "oMath",
+  "rPrChange",
+];
+const rprRank = (tag: string): number => {
+  const at = RPR_ORDER.indexOf(tag);
+  return at < 0 ? RPR_ORDER.length : at;
+};
+
+/**
+ * The `w:rPr` children the model has a field for, and how that field writes them. `w:sz` and `w:szCs` are one
+ * field's two children: the size button writes both, so a size change moves the complex-script size with the
+ * Latin one rather than leaving the run at two sizes. Everything not in this list has no field and keeps the
+ * text the file wrote for it — `w:rStyle`, `w:kern`, `w:lang`, `w:bCs`, `w:spacing`, `w:shd`, `w:eastAsianLayout`.
+ */
+const RUN_PROPS: { key: keyof RunStyle; tags: string[]; spell: (r: RunStyle, prefix: string, source: string) => string }[] = [
+  {
+    key: "font",
+    tags: ["rFonts"],
+    spell: (r, prefix, source) =>
+      !r.font ? "" : source
+        ? putLatinFonts(source, prefix, r.font)
+        : `<${prefix}:rFonts w:ascii="${XML_ESC(r.font)}" w:hAnsi="${XML_ESC(r.font)}"/>`,
+  },
+  {
+    key: "bold",
+    tags: ["b"],
+    spell: (r, prefix) => (r.bold === undefined ? "" : r.bold ? `<${prefix}:b/>` : `<${prefix}:b w:val="0"/>`),
+  },
+  {
+    key: "italic",
+    tags: ["i"],
+    spell: (r, prefix) => (r.italic === undefined ? "" : r.italic ? `<${prefix}:i/>` : `<${prefix}:i w:val="0"/>`),
+  },
+  { key: "strike", tags: ["strike"], spell: (r, prefix) => (r.strike ? `<${prefix}:strike/>` : "") },
+  {
+    key: "color",
+    tags: ["color"],
+    spell: (r, prefix) => (r.color ? `<${prefix}:color w:val="${XML_ESC(r.color.replace(/^#/, "").toUpperCase())}"/>` : ""),
+  },
+  {
+    key: "sizePt",
+    tags: ["sz", "szCs"],
+    spell: (r, prefix) =>
+      r.sizePt ? `<${prefix}:sz w:val="${Math.round(r.sizePt * 2)}"/><${prefix}:szCs w:val="${Math.round(r.sizePt * 2)}"/>` : "",
+  },
+  {
+    key: "highlight",
+    tags: ["highlight"],
+    spell: (r, prefix) => (r.highlight ? `<${prefix}:highlight w:val="${XML_ESC(r.highlight)}"/>` : ""),
+  },
+  { key: "underline", tags: ["u"], spell: (r, prefix) => (r.underline ? `<${prefix}:u w:val="single"/>` : "") },
+  { key: "vertAlign", tags: ["vertAlign"], spell: (r, prefix) => (r.vertAlign ? `<${prefix}:vertAlign w:val="${r.vertAlign}"/>` : "") },
+];
+
+/**
+ * `w:rFonts` with the Latin faces put onto the element as it was written. Picking a font owns `w:ascii` and
+ * `w:hAnsi`; `w:eastAsia` and `w:cs` name the faces on the same element that no field holds, and a font change
+ * is not their owner either.
+ */
+function putLatinFonts(xml: string, prefix: string, font: string): string {
+  const gt = xml.indexOf(">");
+  if (gt < 0) return xml;
+  const head = xml.slice(0, gt);
+  const selfClosed = head.endsWith("/");
+  const open = (selfClosed ? head.slice(0, -1) : head).replace(/\s[\w.-]+:(?:ascii|hAnsi)="[^"]*"/g, "");
+  const pair = ` ${prefix}:ascii="${XML_ESC(font)}" ${prefix}:hAnsi="${XML_ESC(font)}"`;
+  return `${open}${pair}${selfClosed ? "/>" : ">"}` + (selfClosed ? "" : xml.slice(gt + 1));
+}
+
+/**
+ * The run's `w:rPr` the way the file wrote it, with only the children whose field actually moved re-spelled.
+ * The same split `paragraphProps` makes for a `w:pPr` and `applyCellProps` for a `w:tcPr`: the set belongs to
+ * the document, and a property the model cannot explain is not the model's to remove. Rebuilding it from nine
+ * fields is what took the kerning, the complex-script face and the language out of every run in a document.
+ */
+function carriedRunProps(r: Inline): string {
+  const slots = r.rPrSlots ?? [];
+  // A prefix is taken from the set rather than assumed: `w` is only an alias for the words namespace where the
+  // part binds it, and a child written with another prefix than its neighbours reads as another element.
+  const prefix = /^<([A-Za-z_][-\w.]*):/.exec(slots[0]?.xml ?? "")?.[1] ?? "w";
+  const same = (a: unknown, b: unknown): boolean =>
+    a === b || (typeof a === "object" && typeof b === "object" && JSON.stringify(a) === JSON.stringify(b));
+  const drops = new Set<PropSlot>();
+  const inserts: PropSlot[] = [];
+  for (const prop of RUN_PROPS) {
+    // A field that has not moved off its read snapshot keeps the source text, so an attribute the model has no
+    // field for — `w:kern`, `w:themeColor`, `w:eastAsia` — survives a save that never touched it.
+    if (same(r.asRead?.[prop.key], r[prop.key])) continue;
+    const own = slots.filter((s) => prop.tags.includes(s.tag));
+    const xml = prop.spell(r, prefix, own[0]?.xml ?? "");
+    for (const s of own) drops.add(s);
+    if (xml) inserts.push({ tag: prop.tags[0]!, xml });
+  }
+  const kids = slots.filter((s) => !drops.has(s));
+  for (const ins of inserts) {
+    const at = kids.findIndex((k) => rprRank(k.tag) > rprRank(ins.tag));
+    kids.splice(at < 0 ? kids.length : at, 0, ins);
+  }
+  const fmt = r.revFormat;
+  if (fmt) {
+    // The record keeps the set as the file wrote it: `prev` names only what a field can hold, and a save that
+    // rebuilt the record from those fields would leave a reviewer refusing a change no document ever made.
+    const prevInner = fmt.prevSlots?.length
+      ? `<${prefix}:rPr>${fmt.prevSlots.map((s) => s.xml).join("")}</${prefix}:rPr>`
+      : runProps(fmt.prev) || `<${prefix}:rPr/>`;
+    kids.push({ tag: "rPrChange", xml: `<${prefix}:rPrChange ${revAttrs(fmt)}>${prevInner}</${prefix}:rPrChange>` });
+  }
+  // A run whose `w:rPr` the file left empty comes back empty rather than with no properties at all.
+  return kids.length ? `<${prefix}:rPr>${kids.map((k) => k.xml).join("")}</${prefix}:rPr>` : `<${prefix}:rPr/>`;
+}
+
 /**
  * The run's properties with its `w:rPrChange` appended, which is where OOXML keeps a formatting
  * revision: inside the same `w:rPr`, after the properties the run now has. The record has to hold a
  * `w:rPr` of its own even when nothing was set before.
  */
 function revisedRunProps(inline: Inline): string {
+  if (inline.rPrSlots) return carriedRunProps(inline);
   const fmt = inline.revFormat;
   const inner = runPropsInner(inline) + (fmt ? `<w:rPrChange ${revAttrs(fmt)}>${runProps(fmt.prev) || "<w:rPr/>"}</w:rPrChange>` : "");
   return inner ? `<w:rPr>${inner}</w:rPr>` : "";
@@ -264,7 +380,9 @@ const runXml = (r: Inline, rels: RelBuilder): string =>
 
 /** A link inside a revision keeps its own `w:hyperlink`, which is where Word puts it. */
 const runWrapped = (r: Inline, rels: RelBuilder): string =>
-  r.hyperlink ? `<w:hyperlink r:id="${rels.hyperlink(r.hyperlink)}">${runXml(r, rels)}</w:hyperlink>` : runXml(r, rels);
+  // Carried bytes are the element as it came. Inside a revision they belong in the wrapper rather than beside
+  // it, because a run put outside is read as text nobody revised and the record next to it loses its cover.
+  r.carry ? r.carry.xml : r.hyperlink ? `<w:hyperlink r:id="${rels.hyperlink(r.hyperlink)}">${runXml(r, rels)}</w:hyperlink>` : runXml(r, rels);
 
 const sameRevision = (a: Inline["rev"], b: Inline["rev"]): boolean =>
   a !== undefined && b !== undefined && a.kind === b.kind && a.move === b.move && a.id === b.id && a.author === b.author;

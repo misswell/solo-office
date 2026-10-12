@@ -58,6 +58,17 @@ export interface Inline extends RunStyle {
   rev?: Revision;
   /** A `w:rPrChange` on this run: formatting someone revised and nobody has decided yet. */
   revFormat?: FormatRevision;
+  /**
+   * The run's own `w:rPr`, child by child, in the words the file wrote — every child but its `w:rPrChange`,
+   * which `revFormat` spells. A run is rebuilt from its fields otherwise, and nine fields cannot hold the
+   * kerning, complex-script face, language, shading, ligatures or text fill a Chinese document spells.
+   */
+  rPrSlots?: PropSlot[];
+  /**
+   * The style fields as they were read. A property that has not moved off this snapshot keeps the source text
+   * it came in with; one that has is re-spelled, which is what lets the toolbar work on a run it did not write.
+   */
+  asRead?: RunStyle;
 }
 
 /**
@@ -109,6 +120,13 @@ export interface FormatRevision {
   /** The properties before the change. OOXML records the whole previous set, so a property missing
    *  here is one that was *not* set, not one to leave alone. */
   prev: RunStyle;
+  /**
+   * That set as the file wrote it, child by child, when the run carried one. `prev` can only hold the nine
+   * properties the model has a field for; a save that rewrote the record from those fields took the record's
+   * own `w:kern`, `w:lang` and `w:eastAsia` down with them, and a reviewer deciding the change later would be
+   * refusing a formatting change no document ever made.
+   */
+  prevSlots?: PropSlot[];
 }
 
 /**
@@ -488,7 +506,12 @@ export type Block = Paragraph | Table | Carried;
  * the source text of the one it does not. Which of the two it is decides whether the child is understood or
  * carried, and the pair is only built from source spans when those spans and the parsed tree agree.
  */
-type ParaChild = { tag: string; node: any } | { tag: string; span: { tag: string; xml: string } };
+/**
+ * A paragraph child, as the parsed tree explains it and — where the parsed tree and the source spans
+ * accounted for the same paragraph — as the part actually wrote it. A step with no `node` is machinery this
+ * model carries rather than reads, and its `span` is all of it.
+ */
+type ParaChild = { tag: string; node?: any; span?: { tag: string; xml: string } };
 
 /** The tags a row's own record can be spelled as, inside its `w:trPr`. */
 export const ROW_REVISION_TAGS: ReadonlySet<string> = new Set(["ins", "del", "moveFrom", "moveTo"]);
@@ -763,22 +786,24 @@ export class WordDocument {
       };
     }
     for (const step of this.paragraphChildren(p, span)) {
-      if ("span" in step) {
-        para.inlines.push({ text: "", carry: { key: this.carryKey++, tag: step.tag, xml: step.span.xml, show: carriedText(step.span.xml) } });
+      // A child this model carries instead of reads — a bookmark, a field, an inline control — travels as
+      // the bytes it came in with.
+      if (step.node === undefined) {
+        if (step.span) para.inlines.push({ text: "", carry: { key: this.carryKey++, tag: step.tag, xml: step.span.xml, show: carriedText(step.span.xml) } });
         continue;
       }
       const name = step.tag;
-      if (name === "r") para.inlines.push(...this.run(step.node, rels));
+      if (name === "r") para.inlines.push(...this.run(step.node, rels, step.span?.xml));
       else if (name === "commentRangeStart" || name === "commentRangeEnd") {
         const id = Number(step.node?.["@_id"]);
         if (Number.isFinite(id)) para.inlines.push(anchorInline({ id, kind: name === "commentRangeStart" ? "start" : "end" }));
       } else if (isRevision(name)) {
-        this.revisionRuns(step.node, rels, para.inlines, revisionOf(name, step.node));
+        this.revisionRuns(step.node, rels, para.inlines, revisionOf(name, step.node), step.span?.xml);
       } else if (name === "hyperlink") {
         const id = step.node["@_id"];
-        for (const inline of this.linkRuns(step.node, rels)) {
+        for (const inline of this.linkRuns(step.node, rels, step.span?.xml)) {
           if (id) inline.hyperlink = this.hyperlinks.get(String(id)) ?? rels.get(String(id))?.target;
-          if (!inline.color) inline.underline = true;
+          linkLook(inline);
           para.inlines.push(inline);
         }
       }
@@ -812,47 +837,73 @@ export class WordDocument {
       // page can say which part of the field this is rather than just "a run".
       const kind = node !== undefined && s.tag === "r" ? machineryOf(node) : "";
       if (node !== undefined && kind) return { tag: kind, span: s };
-      return node === undefined ? { tag: s.tag, span: s } : { tag: s.tag, node };
+      return node === undefined ? { tag: s.tag, span: s } : { tag: s.tag, node, span: s };
     });
   }
 
+  /**
+   * An element's children lined up the same way: what each one means, next to what the part wrote it as.
+   * Where the two accounts disagree the spans are left go rather than guessed at — handing a run another
+   * run's `w:rPr` would draw the page wrong, and that is worse than rebuilding it from its fields.
+   */
+  private childSteps(node: any, span: string | undefined): { tag: string; node: any; span?: { tag: string; xml: string } }[] {
+    const parsed = children(node);
+    const own = span === undefined ? [] : childSpans(elementContent(span));
+    if (span === undefined || !sameTags(parsed, own)) return parsed.map((c) => ({ tag: c.name, node: c.node }));
+    const queues = new Map<string, any[]>();
+    for (const child of parsed) {
+      const queue = queues.get(child.name);
+      if (queue) queue.push(child.node);
+      else queues.set(child.name, [child.node]);
+    }
+    return own.map((s) => ({ tag: s.tag, node: queues.get(s.tag)?.shift(), span: s }));
+  }
+
   /** The runs inside a `w:hyperlink`, which may themselves sit inside a `w:ins` or `w:del`. */
-  private linkRuns(node: any, rels: Map<string, Rel2>): Inline[] {
+  private linkRuns(node: any, rels: Map<string, Rel2>, span?: string): Inline[] {
     const out: Inline[] = [];
-    for (const child of children(node)) {
-      if (child.name === "r") out.push(...this.run(child.node, rels));
-      else if (isRevision(child.name)) this.revisionRuns(child.node, rels, out, revisionOf(child.name, child.node));
+    for (const child of this.childSteps(node, span)) {
+      if (child.node === undefined) continue;
+      if (child.tag === "r") out.push(...this.run(child.node, rels, child.span?.xml));
+      else if (isRevision(child.tag)) this.revisionRuns(child.node, rels, out, revisionOf(child.tag, child.node), child.span?.xml);
     }
     return out;
   }
 
   /** A revision's runs are ordinary runs with a signature on them; deleted text is spelled `w:delText`. */
-  private revisionRuns(node: any, rels: Map<string, Rel2>, into: Inline[], rev: Revision): void {
-    for (const child of children(node)) {
-      if (child.name === "r") {
-        for (const inline of this.run(child.node, rels)) into.push({ ...inline, rev });
+  private revisionRuns(node: any, rels: Map<string, Rel2>, into: Inline[], rev: Revision, span?: string): void {
+    for (const child of this.childSteps(node, span)) {
+      if (child.node === undefined) continue;
+      if (child.tag === "r") {
+        for (const inline of this.run(child.node, rels, child.span?.xml)) into.push({ ...inline, rev });
         continue;
       }
       // A revision wraps a link as readily as a run, and the link keeps its own target.
-      if (isRevision(child.name)) {
+      if (isRevision(child.tag)) {
         // Word nests a revision inside one when revised text is revised again; the inner signature is
         // the change that moved these characters, so it wins over the one we are already reading.
-        this.revisionRuns(child.node, rels, into, revisionOf(child.name, child.node));
+        this.revisionRuns(child.node, rels, into, revisionOf(child.tag, child.node), child.span?.xml);
         continue;
       }
-      if (child.name !== "hyperlink") continue;
+      if (child.tag !== "hyperlink") continue;
       const id = child.node["@_id"];
-      for (const inline of this.linkRuns(child.node, rels)) {
+      for (const inline of this.linkRuns(child.node, rels, child.span?.xml)) {
         if (id) inline.hyperlink = this.hyperlinks.get(String(id)) ?? rels.get(String(id))?.target;
-        if (!inline.color) inline.underline = true;
+        linkLook(inline);
         into.push({ ...inline, rev });
       }
     }
   }
 
-  private run(r: any, rels: Map<string, Rel2>): Inline[] {
+  private run(r: any, rels: Map<string, Rel2>, span?: string): Inline[] {
     const style = runStyle(r.rPr ?? {});
+    // The run's own `w:rPr` travels as text, the same way the paragraph's does: read off the parsed tree the
+    // answer is "which properties does the model have a field for", and nine fields is not what a Chinese
+    // document writes. An empty `w:rPr` counts as written: the set the file chose is the one that goes back.
+    const props = elementOf(childSpans(elementContent(span ?? "")), "rPr");
+    const carried = props ? runSlotsOf(childSpans(elementContent(props))) : undefined;
     const change = r.rPr?.rPrChange;
+    const record = runSlotsOf(spansUnder(props ?? "", "rPrChange", "rPr"));
     // A formatting revision signs the run it changed and carries the properties from before.
     const revFormat: FormatRevision | undefined = change
       ? {
@@ -861,11 +912,17 @@ export class WordDocument {
           author: String(change["@_author"] ?? ""),
           date: change["@_date"],
           prev: runStyle(change.rPr ?? {}),
+          ...(record.length ? { prevSlots: record } : {}),
         }
       : undefined;
     // The record is on the run, so everything the run holds carries it.
-    const base = revFormat ? { ...style, revFormat } : style;
+    const base = {
+      ...style,
+      ...(carried ? { rPrSlots: carried, asRead: style } : {}),
+      ...(revFormat ? { revFormat } : {}),
+    };
     const out: Inline[] = [];
+    let unmodelled = false;
     for (const child of children(r)) {
       switch (child.name) {
         case "t":
@@ -894,9 +951,16 @@ export class WordDocument {
           if (img) out.push({ ...base, text: "", image: img });
           break;
         }
+        default:
+          if (child.name !== "rPr") unmodelled = true;
       }
     }
-    return out.length ? out : [];
+    // A run built around something the model has no case for — a shape wrapped in `mc:AlternateContent`, an
+    // OLE object — reads as nothing at all, and a paragraph that reads as nothing is one a save deletes.
+    // The bytes go back where they came from instead of the drawing going down with the reader's blind spot.
+    if (!out.length && span && unmodelled)
+      return [{ ...base, text: "", carry: { key: this.carryKey++, tag: "r", xml: span, show: carriedText(span) } }];
+    return out;
   }
 
   private table(tbl: any, rels: Map<string, Rel2>, source?: string): Table {
@@ -1371,7 +1435,7 @@ export class WordDocument {
           continue;
         }
         changed = true;
-        const rest: Inline = decidesFmt && outcome === "reject" ? restoreStyle(run, fmt!.prev) : { ...run };
+        const rest: Inline = decidesFmt && outcome === "reject" ? restoreStyle(run, fmt!) : { ...run };
         if (decidesFmt) delete rest.revFormat;
         if (decidesRev) {
           const keepsText = outcome === "accept" ? rev!.kind === "ins" : rev!.kind === "del";
@@ -2087,10 +2151,17 @@ export function runStyleOf(run: Inline): RunStyle {
  * previous property set, so a property it does not mention is one that was *not* set — keeping the
  * current one would leave the change half refused.
  */
-function restoreStyle(run: Inline, prev: RunStyle): Inline {
+function restoreStyle(run: Inline, fmt: FormatRevision): Inline {
   const out: Inline = { ...run };
   for (const key of RUN_STYLE_KEYS) delete out[key];
-  return Object.assign(out, prev);
+  Object.assign(out, fmt.prev);
+  // And the children no field can spell come back with them, because the record wrote them too: a refusal
+  // puts the run's whole property set away, not an approximation of it built from nine fields.
+  if (fmt.prevSlots) {
+    out.rPrSlots = fmt.prevSlots;
+    out.asRead = fmt.prev;
+  }
+  return out;
 }
 
 /**
@@ -2145,6 +2216,17 @@ function elementOf(spans: { tag: string; xml: string }[], tag: string): string {
 }
 
 /**
+ * The children of an element reached by name through its wrappers, each with the text the file wrote for it.
+ * A `w:rPrChange` sits one level deeper than its run's own properties, and reading it off the parsed tree
+ * would answer with the fields the model has rather than with the set the record holds.
+ */
+function spansUnder(xml: string, ...path: string[]): { tag: string; xml: string }[] {
+  let current = xml;
+  for (const tag of path) current = elementOf(childSpans(elementContent(current)), tag);
+  return childSpans(elementContent(current));
+}
+
+/**
  * The attributes on an element's own opening tag, copied as the part wrote them: ` w14:paraId="1A2B3C4D"
  * w:rsidR="00A1234"`. Empty for a tag that carries nothing. This is text and not a name-and-value record
  * because the prefix it spells is bound elsewhere — `w14` only means the words document namespace where an
@@ -2182,6 +2264,15 @@ function slotsOf(spans: { tag: string; xml: string }[]): PropSlot[] | undefined 
  */
 function paraSlotsOf(spans: { tag: string; xml: string }[]): PropSlot[] {
   return spans.filter((s) => s.tag !== "pPrChange").map((s) => ({ tag: s.tag, xml: s.xml }));
+}
+
+/**
+ * The `w:rPr` children that travel as text: everything except the record of a formatting change, which
+ * `revFormat` spells so a decision can drop it. `w:rStyle`, `w:lang`, `w:kern`, `w:bCs`, `w:spacing`, `w:shd`
+ * and `w:eastAsianLayout` are all in the set and all outside the model's nine fields.
+ */
+function runSlotsOf(spans: { tag: string; xml: string }[]): PropSlot[] {
+  return spans.filter((s) => s.tag !== "rPrChange").map((s) => ({ tag: s.tag, xml: s.xml }));
 }
 
 /** The order `CT_PPr` gives its children; Word repairs a set written out of order and validators do not. */
@@ -2475,6 +2566,17 @@ function runStyle(rPr: any): RunStyle {
   const va = rPr.vertAlign?.["@_val"];
   if (va === "superscript" || va === "subscript") s.vertAlign = va;
   return s;
+}
+
+/**
+ * A link with no colour of its own is drawn underlined. That is a look this reader puts on, not a `w:u` the
+ * file wrote — the `w:Hyperlink` character style is what underlines it — so the read snapshot is told as well,
+ * or a save would spell into the run an underline nobody asked for.
+ */
+function linkLook(inline: Inline): void {
+  if (inline.color) return;
+  inline.underline = true;
+  if (inline.asRead) inline.asRead = { ...inline.asRead, underline: true };
 }
 
 function section(sectPr: any): Section {

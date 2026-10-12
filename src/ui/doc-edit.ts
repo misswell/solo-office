@@ -1,7 +1,7 @@
 import type { Block, Carried, FormatRevision, Inline, ParaStyle, Paragraph, ParagraphFormatRevision, Revision, RevisionEntry, RowInfo, RunStyle, Table, TableCell, WordDocument } from "../core/docx.js";
 import type { CommentAnchor, DocComment } from "../core/comments.js";
 import { bodyShape, commentTexts } from "../core/comments.js";
-import { RUN_STYLE_KEYS, paraStyleOf, runStyleOf, stampNow, twipsToPx } from "../core/docx.js";
+import { RUN_STYLE_KEYS, paraStyleOf, runStyleOf, stampNow, syncParaSlots, twipsToPx } from "../core/docx.js";
 import type { CellWhere, TableEdit } from "../core/doc-table-ops.js";
 import { cellRangeFor, cellRect, cellsInRect, cellsInSweep, deleteColumnHere, deleteRowHere, gridColumns, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, splitHere, splitTableAt } from "../core/doc-table-ops.js";
 import { IMAGE_EXT_BY_MIME } from "../core/media.js";
@@ -1599,6 +1599,8 @@ export class DocEditor {
       const numId = listNumId(this.doc, patch.list);
       paragraph.numPr = patch.list === "none" || numId === undefined ? undefined : { numId, ilvl: paragraph.numPr?.ilvl ?? 0 };
     }
+    // The paragraph's `w:pPr` travels as text, so the child these two buttons own moves with them.
+    syncParaSlots(paragraph);
     // An alignment click on a paragraph that already sits there changes nothing, and a change that is
     // nothing should not be put in front of a reviewer.
     if (this.trackRevisions && JSON.stringify(was) !== JSON.stringify(paraStyleOf(paragraph))) {

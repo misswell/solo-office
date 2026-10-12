@@ -1,6 +1,6 @@
 import { OpcPackage, asArray, childSpans, children, decodeEntities, elementContent } from "./opc.js";
 import { dataUrl } from "./media.js";
-import { coversWholeSet, decideSetXml, decideSlots, recordedSlots } from "./doc-table-revisions.js";
+import { coversWholeSet, decideSetXml, decideSlots, recordedSlots, setChildren } from "./doc-table-revisions.js";
 import { cellCovering, columnStarts, deleteColumn, gridColumns, removeCell, repairMerges } from "./doc-table-ops.js";
 import {
   allocIds,
@@ -304,6 +304,22 @@ export interface Paragraph {
    * document namespace only where an `xmlns:w14` says so, and a parsed name cannot give that binding back.
    */
   attrsXml?: string;
+  /**
+   * This paragraph's own `w:pPr`, child by child, as the part wrote it. The fields above are what the page
+   * draws; a save takes the *set* from here, so a property the model has no field for — `w:keepNext`,
+   * `w:outlineLvl`, `w:widowControl`, `w:tabs`, `w:pBdr`, the paragraph mark's own fonts, bold, size and
+   * colour — comes back the way it went in instead of being quietly stripped by a document that regenerates.
+   * A `w:pPrChange` is not a slot: the record is the `revFormat` field, and a save spells it last as before.
+   * A paragraph the editor made has no slots and is spelled from the fields.
+   */
+  pPrSlots?: PropSlot[];
+  /**
+   * The paragraph properties as the model worked them out at the moment the paragraph was read, style
+   * inheritance included. A save compares against it, so a value the paragraph only borrowed from its style
+   * is not written onto the paragraph as though somebody had set it, while a value the page really did change
+   * still lands.
+   */
+  asRead?: ParaStyle;
   inlines: Inline[];
 }
 
@@ -706,6 +722,10 @@ export class WordDocument {
     // paragraph in the document look like a paragraph that was never there.
     const own = ownAttrs(span);
     if (own) para.attrsXml = own;
+    // The whole `w:pPr` also travels as text. Reading it off the parsed tree would answer "which properties
+    // does the model have a field for", which is not the same question as "what did the file write".
+    const carried = paraSlotsOf(childSpans(elementContent(elementOf(childSpans(elementContent(span ?? "")), "pPr"))));
+    if (carried.length) para.pPrSlots = carried;
     const numPr = pPr.numPr;
     if (numPr) {
       para.numPr = {
@@ -713,6 +733,16 @@ export class WordDocument {
         ilvl: Number(numPr.ilvl?.["@_val"] ?? 0),
       };
     }
+    para.asRead = {
+      styleId: para.styleId,
+      align: para.align,
+      indentLeft: para.indentLeft,
+      spacingBefore: para.spacingBefore,
+      spacingAfter: para.spacingAfter,
+      lineSpacing: para.lineSpacing,
+      pageBreakBefore: para.pageBreakBefore || undefined,
+      numPr: para.numPr,
+    };
     // The paragraph's own mark can be revised: `w:pPr/w:rPr` holds the break that ends this paragraph,
     // signed the same way a run is. Nothing here reads the mark's character properties — the break is
     // what matters, and losing the signature would leave a merge nobody can refuse.
@@ -1596,6 +1626,9 @@ export class WordDocument {
     for (const key of PARA_STYLE_KEYS) delete p[key];
     Object.assign(p, prev);
     p.styleName = p.styleId ? this.styles.get(p.styleId)?.name : undefined;
+    // The record spells the properties the paragraph owns, so the owned children of its `w:pPr` follow the
+    // restored fields before anything the new style lends is folded back in.
+    syncParaSlots(p);
     const inherited = p.styleId ? this.styles.get(p.styleId)?.pPr : undefined;
     p.align = p.align ?? inherited?.align;
     p.indentLeft = p.indentLeft ?? inherited?.indentLeft;
@@ -2139,6 +2172,71 @@ function ownAttrs(xml: string | undefined): string {
 function slotsOf(spans: { tag: string; xml: string }[]): PropSlot[] | undefined {
   const kept = spans.filter((s) => !ROW_REVISION_TAGS.has(s.tag));
   return kept.length ? kept.map((s) => ({ tag: s.tag, xml: s.xml })) : undefined;
+}
+
+/**
+ * The `w:pPr` children that travel as text: everything except the record of a formatting change, which the
+ * `revFormat` field spells so a decision can drop it. `w:pPr/w:rPr` is carried whole — the paragraph mark's
+ * fonts, bold, size and colour are the model's blind spot, and losing them on a save is how a document gets
+ * shorter lines than it came in with.
+ */
+function paraSlotsOf(spans: { tag: string; xml: string }[]): PropSlot[] {
+  return spans.filter((s) => s.tag !== "pPrChange").map((s) => ({ tag: s.tag, xml: s.xml }));
+}
+
+/** The order `CT_PPr` gives its children; Word repairs a set written out of order and validators do not. */
+const PPR_ORDER = [
+  "pStyle", "keepNext", "keepLines", "pageBreakBefore", "framePr", "widowControl", "numPr", "suppressLineNumbers",
+  "pBdr", "shd", "tabs", "suppressAutoHyphens", "kinsoku", "wordWrap", "overflowPunct", "topLinePunct",
+  "autoSpaceDE", "autoSpaceDN", "bidi", "adjustRightInd", "snapToGrid", "spacing", "ind", "contextualSpacing",
+  "mirrorIndents", "suppressOverlap", "jc", "textDirection", "textAlignment", "textboxTightWrap", "outlineLvl",
+  "divId", "cnfStyle", "rPr", "sectPr", "pPrChange",
+];
+const pprRank = (tag: string): number => {
+  const at = PPR_ORDER.indexOf(tag);
+  return at < 0 ? PPR_ORDER.length : at;
+};
+
+/**
+ * Putting a paragraph's `w:pPr` slots in line with the four properties the model spells for itself, so a
+ * toolbar click on alignment or a list button lands *and* the properties the model cannot explain stay.
+ * This is the same split `applyCellProps` makes for a cell's `w:tcPr`: the set stays the file's, only the
+ * named child moves. `w:spacing` and `w:ind` are deliberately left alone — the fields spell one attribute of
+ * each, and rewriting the element would take `w:firstLine`, `w:hanging` and `w:lineRule` down with it.
+ *
+ * A prefix is copied from the set rather than assumed: `w` is only an alias for the words namespace where the
+ * part binds it, and a child written with a different prefix than its neighbours would read as another element.
+ */
+export function syncParaSlots(p: Paragraph): void {
+  const slots = p.pPrSlots;
+  if (!slots) return;
+  const esc = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+  const prefix = /^<([A-Za-z_][-\w.]*):/.exec(slots[0]?.xml ?? "")?.[1] ?? "w";
+  const same = (a: unknown, b: unknown): boolean =>
+    a === b || (typeof a === "object" && typeof b === "object" && JSON.stringify(a) === JSON.stringify(b));
+  const wanted: PropSlot[] = [];
+  // A property the paragraph spelled for itself follows the field, because a reviewer's decision or a toolbar
+  // click may have moved it. One it only borrowed from its style is written only when it really moved.
+  const keep = (tag: string, key: keyof ParaStyle, value: unknown, xml: string): void => {
+    if (value === undefined || value === false) return;
+    if (slots.some((s) => s.tag === tag) || !same(p.asRead?.[key], value)) wanted.push({ tag, xml });
+  };
+  keep("pStyle", "styleId", p.styleId, `<${prefix}:pStyle w:val="${esc(p.styleId ?? "")}"/>`);
+  keep("pageBreakBefore", "pageBreakBefore", p.pageBreakBefore, `<${prefix}:pageBreakBefore/>`);
+  keep("jc", "align", p.align, `<${prefix}:jc w:val="${esc(p.align ?? "")}"/>`);
+  keep(
+    "numPr",
+    "numPr",
+    p.numPr,
+    p.numPr ? `<${prefix}:numPr><w:ilvl w:val="${p.numPr.ilvl}"/><w:numId w:val="${p.numPr.numId}"/></${prefix}:numPr>` : "",
+  );
+  const owned = new Set(["pStyle", "pageBreakBefore", "numPr", "jc"]);
+  let next = slots.filter((s) => !owned.has(s.tag));
+  for (const w of wanted) {
+    const at = next.findIndex((s) => pprRank(s.tag) > pprRank(w.tag));
+    next = at < 0 ? [...next, w] : [...next.slice(0, at), w, ...next.slice(at)];
+  }
+  p.pPrSlots = next.length ? [...next].sort((a, b) => pprRank(a.tag) - pprRank(b.tag)) : undefined;
 }
 
 /** One edge of `w:tblBorders` or `w:tcBorders`. */

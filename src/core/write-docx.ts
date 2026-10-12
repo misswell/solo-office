@@ -1,7 +1,9 @@
 import { strToU8, zipSync } from "fflate";
-import type { Block, BorderSet, Inline, ParaStyle, Paragraph, RunStyle, RowInfo, Table, TableBorder, TableCell, WordDocument } from "./docx.js";
+import type { Block, BorderSet, Inline, ParaStyle, Paragraph, PropSlot, RunStyle, RowInfo, Table, TableBorder, TableCell, WordDocument } from "./docx.js";
 import { bytesOfDataUrl } from "./media.js";
-import { BORDER_ORDER, revisionTag } from "./docx.js";
+import { BORDER_ORDER, ROW_REVISION_TAGS, revisionTag } from "./docx.js";
+import { childSpans, elementContent } from "./opc.js";
+import { setChildren } from "./doc-table-revisions.js";
 import { commentDirty, commentElement, commentParaIds, commentsRootInfo, type DocComment } from "./comments.js";
 
 /**
@@ -68,8 +70,45 @@ function fallbackType(path: string): string | undefined {
   return undefined;
 }
 
+/**
+ * The paragraph mark's own `w:rPr`, carried as the file wrote it, with only the break's record replaced.
+ * Accepting or refusing a paragraph-mark revision decides whether that one child is there; the font, size,
+ * and colour sitting beside it belong to the mark and must survive the decision either way. `CT_RPr` puts
+ * the record after the character properties, so it lands there and not at the front of the set.
+ */
+function withMarkRevision(p: Paragraph, slot: PropSlot): string {
+  const prefix = /^<([A-Za-z_][-\w.]*):rPr/.exec(slot.xml)?.[1] ?? "w";
+  const kids = childSpans(elementContent(slot.xml))
+    .map((k) => ({ tag: k.tag, xml: k.xml }))
+    .filter((k) => !ROW_REVISION_TAGS.has(k.tag));
+  const mark = p.markRev;
+  if (mark) {
+    const tag = revisionTag(mark);
+    const at = kids.findIndex((k) => k.tag === "rPrChange");
+    kids.splice(at < 0 ? kids.length : at, 0, { tag, xml: `<${prefix}:${tag} ${revAttrs(mark)}/>` });
+  }
+  return setChildren(slot.xml, kids);
+}
+
 /** `CT_PPrBase` children have a required order; Word repairs deviations but validators do not. */
 function paragraphProps(p: Paragraph): string {
+  // The set the file wrote, child by child: what the page draws comes from the fields, and the fields the
+  // editor moves are pushed back into this set by `syncParaSlots`. Spelling the set from the fields instead
+  // is how a save quietly removes `w:keepNext`, an outline level, or the paragraph mark's own font.
+  if (p.pPrSlots?.length) {
+    const kids: PropSlot[] = p.pPrSlots
+      .map((s) => ({ tag: s.tag, xml: s.tag === "rPr" ? withMarkRevision(p, s) : s.xml }))
+      .filter((s) => s.xml);
+    const mark = p.markRev;
+    if (mark && !kids.some((k) => k.tag === "rPr"))
+      kids.push({ tag: "rPr", xml: `<w:rPr><w:${revisionTag(mark)} ${revAttrs(mark)}/></w:rPr>` });
+    const fmt = p.revFormat;
+    if (fmt) {
+      const inner = paraStyleTags(fmt.prev);
+      kids.push({ tag: "pPrChange", xml: `<w:pPrChange ${revAttrs(fmt)}><w:pPr${inner ? `>${inner}</w:pPr` : "/"}></w:pPrChange>` });
+    }
+    return kids.length ? `<w:pPr>${kids.map((k) => k.xml).join("")}</w:pPr>` : "";
+  }
   const parts: string[] = [];
   if (p.styleId) parts.push(`<w:pStyle w:val="${XML_ESC(p.styleId)}"/>`);
   if (p.pageBreakBefore) parts.push("<w:pageBreakBefore/>");

@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { WordDocument } from "../src/core/docx.js";
+import { WordDocument, twipsToPx } from "../src/core/docx.js";
 import { writeDocx } from "../src/core/write-docx.js";
 import { OpcPackage, text } from "../src/core/opc.js";
 import { renderWord } from "../src/core/render.js";
 import {
+  LAST_SECTION_HEADER,
   makeFooterDocx,
   makeHeaderFooterDocx,
   makeStyledHeaderDocx,
+  makeTwoSectionDocx,
   REFERENCE_FIRST_PAGE_ONLY,
   REFERENCE_ID_FIRST,
   REFERENCE_TYPE_FIRST,
@@ -202,3 +204,78 @@ describe("docx 页眉页脚：显示", () => {
     expect(renderWord(doc)).toContain("此页脚含表格或图片等富内容，暂不支持编辑");
   });
 });
+
+/**
+ * A header belongs to a section, and 18 of the 86 files this machine's WPS wrote have more than one: the
+ * break hanging off a paragraph ends the opening section, and the body's own `sectPr` is the closing one.
+ * Reading only the body's read the last section, which in those files reports a header 4 times and a footer
+ * 5 times that the opening page does not have, and points at a different part once each.
+ */
+describe("docx 页眉页脚：多节文档按节取", () => {
+  /** The document.xml text between two markers, so a test can name the section that holds something. */
+  const between = (xml: string, from: string, to: string): string => {
+    const a = xml.indexOf(from);
+    const b = xml.indexOf(to);
+    expect(a, xml).toBeGreaterThanOrEqual(0);
+    return xml.slice(a, b < 0 ? xml.length : b);
+  };
+  const docXml = (bytes: Uint8Array): string => text(OpcPackage.from(bytes).bytes("word/document.xml")!);
+
+  it("shows the header of the section the document opens with, not the last one", () => {
+    const doc = WordDocument.openBytes(makeTwoSectionDocx());
+    expect(doc.header?.part).toBe("word/header1.xml");
+    expect(doc.header?.paragraphs).toEqual(["开篇页眉"]);
+  });
+
+  it("edits the part the opening section cites and leaves the closing section's alone", () => {
+    const bytes = makeTwoSectionDocx();
+    const out = edited(bytes, ["改过的开篇"]);
+    expect(text(OpcPackage.from(out).bytes("word/header1.xml")!)).toContain("改过的开篇");
+    expect(text(OpcPackage.from(out).bytes("word/header2.xml")!)).toBe(LAST_SECTION_HEADER);
+    expect(docXml(out)).toBe(docXml(bytes));
+  });
+
+  it("offers no band when the opening section says nothing about a header", () => {
+    const bytes = makeTwoSectionDocx({ firstRef: "" });
+    expect(WordDocument.openBytes(bytes).header).toBeUndefined();
+    expect(renderWord(WordDocument.openBytes(bytes))).not.toContain('class="hf ');
+    // The closing section's header is the file's own and stays that way: nothing to show, nothing to touch.
+    expect(text(OpcPackage.from(writeDocx(WordDocument.openBytes(bytes))).bytes("word/header2.xml")!)).toBe(LAST_SECTION_HEADER);
+    expect(docXml(writeDocx(WordDocument.openBytes(bytes)))).toBe(docXml(bytes));
+  });
+
+  it("lists every section the file declared, in the order they start", () => {
+    const doc = WordDocument.openBytes(makeTwoSectionDocx());
+    expect(doc.sections.map((s) => [s.pageWidthTwips, s.pageHeightTwips])).toEqual([
+      [11906, 16838],
+      [16838, 11906],
+    ]);
+    // The page box and the band have to come from the same section, or a header belonging to a landscape
+    // page gets drawn on a portrait one.
+    expect(renderWord(doc)).toContain(`--page-w:${twipsToPx(11906)}px`);
+  });
+
+  it("creates a header the opening section cites, and never a second sectPr", () => {
+    const doc = WordDocument.openBytes(makeTwoSectionDocx({ firstRef: "" }));
+    const made = doc.ensureHeaderFooter("header");
+    expect(made?.part).toBe("word/header3.xml");
+    const out = writeDocx(doc);
+    const xml = docXml(out);
+    expect((xml.match(/<w:sectPr\b/g) ?? []).length, "a save must not spell a section the file never had").toBe(2);
+    expect(between(xml, 'w:rsidR="00A1"', 'w:rsidR="00B2"')).toContain(`r:id="${made!.id}"`);
+    expect(xml.slice(xml.indexOf('w:rsidR="00B2"'))).not.toContain(made!.id);
+    const again = WordDocument.openBytes(out);
+    expect(again.header?.part).toBe("word/header3.xml");
+    expect(again.header?.editable).toBe(true);
+  });
+
+  it("keeps a created band's reference in the same place on a second save", () => {
+    const doc = WordDocument.openBytes(makeTwoSectionDocx({ firstRef: "" }));
+    doc.ensureHeaderFooter("header");
+    const once = writeDocx(doc);
+    const twice = writeDocx(WordDocument.openBytes(once));
+    expect(docXml(twice)).toBe(docXml(once));
+    expect(text(OpcPackage.from(twice).bytes("word/header3.xml")!)).toBe(text(OpcPackage.from(once).bytes("word/header3.xml")!));
+  });
+});
+

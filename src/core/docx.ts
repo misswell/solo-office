@@ -725,6 +725,13 @@ export class WordDocument {
   private rootOpenAttrs = "";
   private sectPrefix = "w";
   private sectHas = { header: false, footer: false };
+  /**
+   * Whether the section that starts the document is the body's own `sectPr` or one hanging off a paragraph.
+   * A header belongs to the section whose page it sits on, and the page the editor draws is the first one,
+   * so a citation the model still owes goes into that `sectPr` — not into the body's, which is the document's
+   * **last** section and would hand the closing pages a header the opening page does not have.
+   */
+  private bandSectIsBody = true;
   /** Ids handed to carried inline structures, so the page can name the one it is holding back. */
   private carryKey = 1;
   private readFingerprint = "";
@@ -814,14 +821,20 @@ export class WordDocument {
     this.rootNamespaces = root.prefixes;
     this.rootIgnorable = root.ignorable;
     this.rootOpenAttrs = root.attrs;
-    this.readHeaderFooters(pkg, rels);
+    // Every section the document says it has, in the order the sections start, read off the bytes a save
+    // splices into rather than off the parsed tree — two representations counting sections differently is
+    // how a header ends up cited by the section that does not own it.
+    const chain = this.sectionChain(source);
+    this.sections = chain.map((s) => sectionGeometry(s.xml));
+    this.bandSectIsBody = chain.length === 0 || chain[0]!.fromBody;
+    this.readHeaderFooters(pkg, rels, chain);
     this.readComments(pkg, rels);
     // The body read off its own source text rather than only off the parsed tree, so a child the model
     // has no fields for — a content control, a customXml island — keeps its bytes and its place instead
     // of dropping out of the document on the first save.
-    for (const child of children(body)) {
-      if (child.name === "sectPr") this.sections.push(section(child.node));
-    }
+    // The body read off its own source text rather than only off the parsed tree, so a child the model
+    // has no fields for — a content control, a customXml island — keeps its bytes and its place instead
+    // of dropping out of the document on the first save.
     this.blocks.push(...this.blockChildren(body, bodyChildSpans(source), rels));
     const core = pkg.text("docProps/core.xml");
     this.title = core ? /<dc:title>([^<]*)<\/dc:title>/.exec(core)?.[1] : undefined;
@@ -1309,12 +1322,41 @@ export class WordDocument {
     return this.rootOpenAttrs;
   }
 
-  /** Reference tags the model's header/footer still need inside a sectPr. */
+  /**
+   * Reference tags the model's header/footer still need inside the body's `sectPr`. Empty for a document
+   * with more than one section: the body's `sectPr` is its **last** section, and a citation belongs to the
+   * section the band sits on — `citeBandReference` puts it there instead.
+   */
   sectReferenceTags(): string {
+    if (!this.bandSectIsBody) return "";
     const p = this.sectPrefix;
     const tag = (kind: "header" | "footer", hf?: HeaderFooter): string =>
       hf && !this.sectHas[kind] ? `<${p}:${kind}Reference ${p}:type="default" r:id="${hf.id}"/>` : "";
     return tag("header", this.header) + tag("footer", this.footer);
+  }
+
+  /**
+   * Cites a header/footer this session created from the `sectPr` that owns the band, when that is a
+   * paragraph's section break rather than the body's. The reference goes after the opening tag of the
+   * first top-level paragraph carrying one, which is the section the document starts with.
+   */
+  private citeBandReference(kind: "header" | "footer", id: string): void {
+    const p = this.sectPrefix;
+    const tag = `<${p}:${kind}Reference ${p}:type="default" r:id="${id}"/>`;
+    for (const b of this.blocks) {
+      if (b.kind !== "paragraph" || !b.pPrSlots?.length) continue;
+      const at = b.pPrSlots.findIndex((s) => s.tag === "sectPr");
+      if (at < 0) continue;
+      const slot = b.pPrSlots[at]!;
+      b.pPrSlots[at] = {
+        tag: "sectPr",
+        xml: /\/>$/.test(slot.xml)
+          ? slot.xml.replace(/(\s*)\/>$/, `>${tag}</${p}:sectPr>`)
+          : slot.xml.replace(new RegExp(`(<${p}:sectPr[^>]*>)`), `$1${tag}`),
+      };
+      this.sectHas = { ...this.sectHas, [kind]: true };
+      return;
+    }
   }
 
   /** Rewrites the texts of an editable header/footer; rich parts refuse. */
@@ -1339,6 +1381,9 @@ export class WordDocument {
     const hf: HeaderFooter = { part: `word/${kind}${n}.xml`, id, editable: true, paragraphs: [""], baseline: ["__new__"], source: "" };
     if (which === "header") this.header = hf;
     else this.footer = hf;
+    // A document that opens with a section break binds its header from that paragraph's `sectPr`; the
+    // body's own is the last section and citing from there would start the header partway through.
+    if (!this.bandSectIsBody) this.citeBandReference(kind, id);
     return hf;
   }
 
@@ -2224,8 +2269,35 @@ export class WordDocument {
     }
   }
 
-  private readHeaderFooters(pkg: OpcPackage, rels: Map<string, Rel2>): void {
-    const raw = this.bodySectPr;
+  /**
+   * The document's sections in the order they start. A section break hangs its `sectPr` off the `w:pPr` of
+   * the paragraph that ends the section; the body's own direct `sectPr` child is the last section. Measured
+   * on the 86 files this machine's WPS wrote: 115 sections in 86 documents (68 one, 7 two, 11 three), and
+   * every body-level `sectPr` sits at the end of `w:body`.
+   */
+  private sectionChain(source: string): { xml: string; fromBody: boolean }[] {
+    const out: { xml: string; fromBody: boolean }[] = [];
+    for (const kid of bodyChildSpans(source)) {
+      if (kid.tag === "sectPr") {
+        out.push({ xml: kid.xml, fromBody: true });
+        continue;
+      }
+      if (kid.tag !== "p") continue;
+      const pPr = childSpans(elementContent(kid.xml)).find((s) => s.tag === "pPr");
+      if (!pPr) continue;
+      const inner = childSpans(elementContent(pPr.xml)).find((s) => s.tag === "sectPr");
+      if (inner) out.push({ xml: inner.xml, fromBody: false });
+    }
+    return out;
+  }
+
+  private readHeaderFooters(pkg: OpcPackage, rels: Map<string, Rel2>, chain: { xml: string; fromBody: boolean }[]): void {
+    // The band the editor draws sits on the page the document **starts** with, so it belongs to the first
+    // section — and only forward: a section that cites nothing continues the section before it, never one
+    // after it. Reading the body's `sectPr` instead read the last section, which on these files reports a
+    // header 4 times and a footer 5 times that the opening page does not have, and cites a different part
+    // outright once each.
+    const raw = chain[0]?.xml ?? "";
     if (!raw) return;
     const ns = /xmlns:([A-Za-z0-9_.-]+)="http:\/\/schemas\.openxmlformats\.org\/wordprocessingml\/2006\/main"/.exec(raw);
     this.sectPrefix = ns ? ns[1]! : "w";
@@ -2840,17 +2912,28 @@ function linkLook(inline: Inline): void {
   if (inline.asRead) inline.asRead = { ...inline.asRead, underline: true };
 }
 
-function section(sectPr: any): Section {
-  const pgSz = sectPr.pgSz ?? {};
-  const mar = sectPr.pgMar ?? {};
+/**
+ * A section's page box, read off its `sectPr` bytes. Word's own defaults for anything the section does not
+ * say: A4 (11906×16838 twips) and a 1-inch margin all round.
+ */
+function sectionGeometry(xml: string): Section {
+  const kids = childSpans(elementContent(xml));
+  const attrs = (name: string): Record<string, string> | undefined => {
+    const s = kids.find((k) => k.tag === name);
+    return s ? attrsOf(s.xml) : undefined;
+  };
+  const num = (a: Record<string, string> | undefined, k: string, d: number): number => {
+    const v = a?.[k];
+    return v === undefined || v === "" || Number.isNaN(Number(v)) ? d : Number(v);
+  };
   return {
-    pageWidthTwips: Number(pgSz["@_w"] ?? 11906),
-    pageHeightTwips: Number(pgSz["@_h"] ?? 16838),
+    pageWidthTwips: num(attrs("pgSz"), "w", 11906),
+    pageHeightTwips: num(attrs("pgSz"), "h", 16838),
     margins: {
-      top: Number(mar["@_top"] ?? 1440),
-      right: Number(mar["@_right"] ?? 1440),
-      bottom: Number(mar["@_bottom"] ?? 1440),
-      left: Number(mar["@_left"] ?? 1440),
+      top: num(attrs("pgMar"), "top", 1440),
+      right: num(attrs("pgMar"), "right", 1440),
+      bottom: num(attrs("pgMar"), "bottom", 1440),
+      left: num(attrs("pgMar"), "left", 1440),
     },
   };
 }

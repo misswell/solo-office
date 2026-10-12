@@ -579,9 +579,12 @@ function sectPrXml(doc: WordDocument): string {
   // that way. Writing `pgSz`/`pgMar` here would pin page geometry the reader was free to choose — and the
   // spelling this function falls back to (`<w:pgSz/>` with no width or height) declares a page of unknown
   // size, which is worse than saying nothing. A document created here has no file behind it and keeps the
-  // page the app opens with. A header or footer the editor just added is the one thing that still needs a
-  // section to hang its reference in, so that case keeps spelling one.
-  if (!doc.sections.length && doc.source() && !doc.sectReferenceTags()) return "";
+  // page the app opens with.
+  //
+  // `sectReferenceTags()` is the other half of the question, and it says "" for more than "nothing owed":
+  // a band whose section is a paragraph's break is cited there by the model itself, so that section's
+  // bytes already travel and spelling a second one beside it is how a file gained a `sectPr` it never had.
+  if (doc.source() && !doc.sectReferenceTags()) return "";
   const s = doc.sections[0];
   const size = s ? ` w:w="${s.pageWidthTwips}" w:h="${s.pageHeightTwips}"` : "";
   const mar = s

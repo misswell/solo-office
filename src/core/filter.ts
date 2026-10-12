@@ -6,7 +6,7 @@
  * Evidence: .scratch/filter-evidence-report.md (2026-10-11).
  */
 import { isError, type Value } from "./formula.js";
-import { asArray } from "./opc.js";
+import { asArray, children } from "./opc.js";
 import { parseRange, rangeSpec, rect, type Axis, type Rect } from "./sheet-ops.js";
 
 export type FilterOperator = "equal" | "notEqual" | "lessThan" | "lessThanOrEqual" | "greaterThan" | "greaterThanOrEqual";
@@ -38,21 +38,31 @@ export function readAutoFilter(node: any): AutoFilter | undefined {
   for (const col of asArray(node.filterColumn)) {
     const id = Number(col["@_colId"]);
     let rule: FilterRule = { kind: "opaque" };
-    const kinds = Object.keys(col).filter((k) => !k.startsWith("@_") && k !== "#text" && k !== "extLst");
+    // Ask the parser's own view of its children, not `Object.keys`: a node with two distinct child tags
+    // carries `#order` besides them, and counting that bookkeeping as a criterion made every column that
+    // holds an extension next to its filters read as an unsupported one.
+    const kinds = children(col).filter((k) => k.name !== "extLst").map((k) => k.name);
     if (Number.isInteger(id) && id >= 0 && id <= box.c2 - box.c1 && !seen.has(id) && kinds.length === 1) {
-      if (col.filters && !col.filters.dateGroupItem && !col.filters["@_calendarType"] && Object.keys(col.filters).every((k) => k.startsWith("@_") || k === "filter" || k === "#text")) {
+      if (col.filters && !col.filters["@_calendarType"] && childNamesAre(col.filters, ["filter"])) {
         rule = { kind: "values", values: asArray(col.filters.filter).map((f) => scalar(f["@_val"])), blank: yes(col.filters["@_blank"]) };
-      } else if (col.customFilters && Object.keys(col.customFilters).every((k) => k.startsWith("@_") || k === "customFilter" || k === "#text")) {
+      } else if (col.customFilters && childNamesAre(col.customFilters, ["customFilter"])) {
         const tests = asArray(col.customFilters.customFilter).map((f) => ({ operator: scalar(f["@_operator"] || "equal") as FilterOperator, value: scalar(f["@_val"]) }));
         if (tests.length >= 1 && tests.length <= 2 && tests.every((t) => FILTER_OPERATORS.includes(t.operator))) rule = { kind: "custom", and: yes(col.customFilters["@_and"]), tests };
       }
     }
     seen.add(id);
-    if (rule.kind === "opaque") unsupported = "此文件含暂未支持的筛选条件，保留原始筛选与行可见性";
+    // "暂未支持" is about a criterion we would misread, not about bytes we do not own. A `filterColumn`
+    // holding only `extLst` or attributes like `hiddenButton` states no condition at all: matching everything
+    // is exactly what `opaque` means, and the unowned bytes travel back intact, so it must not freeze the
+    // other columns of the filter.
+    if (rule.kind === "opaque" && kinds.length) unsupported = "此文件含暂未支持的筛选条件，保留原始筛选与行可见性";
     columns.push({ id, sourceId: id, rule });
   }
   return { ref, columns, unsupported };
 }
+
+/** Nothing but these child tags (attributes are not children here): an extension we do not own says no criterion. */
+const childNamesAre = (node: any, allowed: string[]): boolean => children(node).every((k) => allowed.includes(k.name));
 
 export function filterText(value: Value): string {
   return value === null ? "" : typeof value === "boolean" ? value ? "TRUE" : "FALSE" : String(value);

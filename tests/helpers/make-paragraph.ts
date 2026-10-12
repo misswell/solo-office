@@ -34,12 +34,14 @@ const STYLES = `<w:styles xmlns:w="${NS_W}">
 
 /**
  * Paragraphs that say far more about themselves than this model has a field for, in the shapes WPS's own
- * files were measured in (`.scratch/wps-ppr-names.ts` over 86 WPS-written documents, 13615 paragraphs):
- * the `w:pPr` child census there is `rPr` 13273, `ind` 7402, `shd` 6348, `pStyle` 5256, `textAlignment` 3345,
- * `spacing` 3034, `snapToGrid` 1509, `jc` 901, `numPr` 873, `widowControl` 870, `keepNext`/`keepLines` 575,
- * `bidi` 499, `tabs` 399, `pageBreakBefore`/`adjustRightInd` 301, `outlineLvl` 264, `suppressLineNumbers` 252,
- * `framePr` 80, `sectPr` 29, `pBdr` 4, and the paragraph mark's `w:rPr` holds `rFonts`, `szCs`, `sz`, `color`,
- * `rStyle`, `textFill`, `spacing`, `highlight`, `kern`, `ligatures` and `shd` among them.
+ * files were measured in (`.scratch/wps-ppr-names.ts` over 86 WPS-written documents, 45949 paragraphs of
+ * which 45794 carry their own `w:pPr` set): the `w:pPr` child census there is `rPr` 45402, `ind` 29011,
+ * `spacing` 24877, `jc` 22340, `widowControl` 8625, `shd` 7836, `textAlignment` 7696, `pStyle` 7324,
+ * `keepNext`/`keepLines` 6440, `suppressLineNumbers` 5221, `wordWrap` 5045, `snapToGrid` 2531, `bidi` 2144,
+ * `tabs` 2058, `pageBreakBefore`/`adjustRightInd` 1297, `kinsoku`/`overflowPunct`/`topLinePunct`/`autoSpaceDE`/
+ * `autoSpaceDN` 1293, `numPr` 981, `outlineLvl` 264, `framePr` 80, `sectPr` 29, `pBdr` 4, and the paragraph
+ * mark's `w:rPr` holds `rFonts` 44968, `szCs` 42429, `sz` 41083, `color` 26168, `rStyle` 9342, `lang` 8185,
+ * `kern` 7688, `spacing` 5833, `highlight` 1939, `textFill` 1442 and `ligatures` 1089 among them.
  *
  * Before the paragraph carried its own `w:pPr` child by child, a save rebuilt every paragraph from its typed
  * fields and deleted the rest of them — measured at 45402 lost `w:pPr/w:rPr`, 41091 `sz`, 26688 `color`,

@@ -29,12 +29,14 @@ const pPrOf = (xml: string, needle: string): string => {
 
 /**
  * A paragraph says more about itself than this model has fields for, and the page is rebuilt from the model.
- * The eight files whose shapes these tests transcribe were measured, not invented: `.scratch/wps-ppr-names.ts`
- * over 86 WPS-written documents counted `w:pPr` children of `rPr` 13273, `ind` 7402, `shd` 6348, `pStyle` 5256,
- * `textAlignment` 3345, `spacing` 3034, `snapToGrid` 1509, `widowControl` 870, `keepNext` 575, `bidi` 499,
- * `tabs` 399, `pageBreakBefore`/`adjustRightInd` 301, `outlineLvl` 264, `suppressLineNumbers` 252, `framePr` 80
- * and `sectPr` 29, and the same probe lists a paragraph mark's `w:rPr` children as `rFonts`, `szCs`, `sz`,
- * `color`, `rStyle`, `textFill`, `spacing`, `highlight`, `kern`, `ligatures`, `shd`, `u`, `strike`.
+ * The shapes these tests transcribe were measured, not invented: `.scratch/wps-ppr-names.ts` over 86
+ * WPS-written documents counted 45949 paragraphs whose `w:pPr` children run `rPr` 45402, `ind` 29011,
+ * `spacing` 24877, `jc` 22340, `widowControl` 8625, `shd` 7836, `textAlignment` 7696, `pStyle` 7324,
+ * `keepNext` and `keepLines` 6440 each, `suppressLineNumbers` 5221, `wordWrap` 5045, `snapToGrid` 2531,
+ * `bidi` 2144, `tabs` 2058, `pageBreakBefore` and `adjustRightInd` 1297 each, `numPr` 981, `outlineLvl` 264,
+ * `framePr` 80, `sectPr` 29 and `pBdr` 4, and the same probe lists a paragraph mark's `w:rPr` children as
+ * `rFonts` 44968, `szCs` 42429, `sz` 41083, `color` 26168, `rStyle` 9342, `lang` 8185, `kern` 7688,
+ * `spacing` 5833, `highlight` 1939, `textFill` 1442, `ligatures` 1089, `vertAlign` 1159, `u` 330, `shd` 142.
  */
 describe("docx paragraph property fidelity", () => {
   it("reads a paragraph's whole w:pPr child by child and keeps the record as a decision", () => {

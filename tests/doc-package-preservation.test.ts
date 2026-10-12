@@ -28,6 +28,14 @@ function editAndSave(bytes: Uint8Array): Uint8Array {
 const bodyOf = (bytes: Uint8Array): string => OpcPackage.from(bytes).text("word/document.xml") ?? "";
 const countOf = (hay: string, needle: string): number => hay.split(needle).length - 1;
 
+/** The file 文件 → 新建 hands the user: a document with no source package behind it, and one line in it. */
+function blankWithText(): WordDocument {
+  const doc = WordDocument.blank();
+  const para = doc.blocks[0];
+  if (para.kind === "paragraph") para.inlines.push({ text: "新写的" });
+  return doc;
+}
+
 /** A second real PNG, so a picture the model changed can be told from the one the package came with. */
 const PNG_RED = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
 
@@ -188,8 +196,7 @@ describe("docx 编辑保存：根元素的声明", () => {
   });
 
   it("binds the prefixes its own tags need in a document that came from no file", () => {
-    const doc = WordDocument.blank();
-    doc.blocks[0].inlines?.push({ text: "新写的" });
+    const doc = blankWithText();
     const root = bodyOf(writeDocx(doc)).match(/<w:document\b[^>]*>/)?.[0] ?? "";
     expect(root).toContain('xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"');
     expect(root).toContain('xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"');
@@ -205,5 +212,44 @@ describe("docx 编辑保存：正文的写法", () => {
     const after = bodyOf(editAndSave(makePreservationDocx()));
     expect(after).toContain("<w:t>正文</w:t>");
     expect(after).toContain('<w:t xml:space="preserve"> 带边空格的 </w:t>');
+  });
+});
+
+describe("docx 保存：包自己必须成立", () => {
+  /**
+   * Every internal relationship anywhere in the package, resolved against the part that wrote it. This is
+   * the check an OOXML reader runs before it believes the file at all, and it is the one the model has no
+   * view of: a citation is written by one part and answered by another, so nothing in either of them fails
+   * when the two disagree.
+   */
+  function dangling(bytes: Uint8Array): string[] {
+    const pkg = OpcPackage.from(bytes);
+    // `[Content_Types].xml` is not a part that holds relationships, and a name without a directory would be
+    // read as the package root's own table — so the root is asked once, under its own name.
+    const sources = ["", ...[...pkg.parts.keys()].filter((p) => p.endsWith(".xml") && p.includes("/") && p !== "[Content_Types].xml")];
+    const out: string[] = [];
+    for (const from of sources) {
+      for (const rel of pkg.rels(from).values()) {
+        if (rel.targetMode === "External") continue;
+        if (!pkg.parts.has(pkg.resolve(from, rel))) out.push(`${from || "〈包根〉"} → ${rel.target}`);
+      }
+    }
+    return out;
+  }
+
+  it("promises no part it did not write, in a document created here", () => {
+    const doc = blankWithText();
+    const saved = writeDocx(doc);
+    // The root's own table cited `docProps/core.xml`, a part this writer has no way to build and no source
+    // to carry it from. A file with no source is exactly what 文件 → 新建 hands the user, and a citation that
+    // answers to nothing is how a reader decides the package is unreadable.
+    expect(dangling(saved)).toEqual([]);
+    expect([...OpcPackage.from(saved).parts.keys()]).not.toContain("docProps/core.xml");
+  });
+
+  it("keeps every relationship of a saved package pointing at a part", () => {
+    // The corpus-shaped file in both of its saving paths: rebuilt from the model, and carried untouched.
+    expect(dangling(editAndSave(makePreservationDocx()))).toEqual([]);
+    expect(dangling(writeDocx(WordDocument.openBytes(makePreservationDocx())))).toEqual([]);
   });
 });

@@ -784,12 +784,20 @@ function spellContentTypes(paths: { path: string; type?: string }[]): string {
   return `${DECL}<Types xmlns="${NS_CT}">${defaults.join("")}${mediaDefaults.join("")}${overrides.join("")}</Types>`;
 }
 
-function packageRelsXml(): string {
+/**
+ * The package root's own relationships, for a file that came with nothing usable.
+ *
+ * A promise has to be kept by a part: `docProps/core.xml` travels here with the source package when there is
+ * one, and a document built from scratch has no metadata part to cite. Emitting the citation anyway produced a
+ * relationship that resolves to nothing — which is what a reader sees on 文件 → 新建, the one path with no
+ * source bytes to carry. The fix is the promise, not a fabricated part.
+ */
+function packageRelsXml(have: Set<string>): string {
+  const core = have.has("docProps/core.xml") ? `<Relationship Id="rId2" Type="${NS_PKG}/metadata/core-properties" Target="docProps/core.xml"/>` : "";
   return (
     `${DECL}<Relationships xmlns="${NS_PKG}">` +
     `<Relationship Id="rId1" Type="${NS_R}/officeDocument" Target="word/document.xml"/>` +
-    `<Relationship Id="rId2" Type="${NS_PKG}/metadata/core-properties" Target="docProps/core.xml"/>` +
-    `</Relationships>`
+    `${core}</Relationships>`
   );
 }
 
@@ -819,7 +827,7 @@ export function writeDocx(doc: WordDocument): Uint8Array {
 
   const passthrough = doc.untouchedParts();
   for (const part of passthrough) files[part.path] = part.bytes;
-  if (!packageRelsAreUsable(files["_rels/.rels"])) files["_rels/.rels"] = strToU8(packageRelsXml());
+  if (!packageRelsAreUsable(files["_rels/.rels"])) files["_rels/.rels"] = strToU8(packageRelsXml(new Set(Object.keys(files))));
 
   // Header/footer texts the user changed regenerate here; untouched rich parts
   // (letterhead logos, tables) keep their exact bytes via the passthrough above.

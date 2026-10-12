@@ -580,10 +580,12 @@ export interface HfSegment {
 }
 
 /**
- * A header or footer part the model can show and (when simple) edit. Rich parts — tables, pictures,
- * containers, tracked changes — stay byte-identical on save and are not editable. A `PAGE` or `NUMPAGES`
- * field that sits at run level is the one exception: it travels as an atom, so the text around it stays
- * editable and the field itself comes back exactly as it came in.
+ * A header or footer part the model can show and (when simple) edit. Rich parts — tables, containers,
+ * tracked changes — stay byte-identical on save and are not editable. Two shapes that look rich are read
+ * through instead: a `PAGE` or `NUMPAGES` field sitting at run level travels as one atom with the text
+ * around it still editable, and a floating text box whose inner paragraph holds the page number is read as
+ * *that paragraph's own pieces*, so the words the page shows stay words. A picture with no text in it stays
+ * one atom.
  */
 export interface HeaderFooter {
   /** Package path ("word/header1.xml"). */
@@ -604,6 +606,11 @@ export interface HeaderFooter {
   segments?: HfSegment[][];
   /** `segments` as read, so a save can tell a paragraph that lost a field from one that only gained a letter. */
   baselineSegments?: HfSegment[][];
+  /**
+   * Per paragraph: whether its pieces came out of a floating text box rather than out of the band itself.
+   * A save writes those pieces back into every copy of the box the file kept, and leaves the frame alone.
+   */
+  boxedParagraphs?: boolean[];
   /**
    * The part as the file wrote it, `""` for one this session created. A save splices its edits into
    * these bytes rather than rebuilding the part, so the root's declarations and every paragraph the
@@ -685,10 +692,10 @@ const HF_PARA_STRUCTURAL = new Set(["pPr", "bookmarkStart", "bookmarkEnd"]);
 const HF_RUN_KIDS = new Set(["rPr", "t", "tab", "fldChar", "instrText"]);
 
 /**
- * A run that holds one of these instead of text is not a paragraph this model has to refuse: it is a
- * picture the file put in the band, and it travels whole as one atom. In the local corpus all 16 of these
- * runs are `w:rPr` plus an `mc:AlternateContent` wrapping a `w:drawing` — the letterhead logo — and every
- * one of them sits alone in its paragraph, so nothing a user could type is hidden behind the chip.
+ * A run that holds one of these instead of text is not a paragraph this model has to refuse. Either it is a
+ * picture, and it travels whole as one atom; or it is a floating text box, and its inner paragraph's pieces
+ * join the band's. Measured on the local corpus, every one of the 16 runs of this shape is a `w:rPr` plus an
+ * `mc:AlternateContent` wrapping an anchored box, and every one sits alone in its paragraph.
  */
 const HF_RUN_CARRIED = new Set(["AlternateContent", "drawing", "pict", "object"]);
 
@@ -698,6 +705,29 @@ const HF_RUN_CARRIED = new Set(["AlternateContent", "drawing", "pict", "object"]
  * holds one stays held as its own bytes rather than half-explained.
  */
 const HF_RUN_DENY = /<(?:[\w.-]+:)?(ins|del|hyperlink|sdt|fldSimple|br|sym)[ />]|<(?:[\w.-]+:)?comment(?:Range|Reference)/;
+
+/**
+ * Every element named `tag` at any depth under `xml`, in source order. A floating box hides its words twice:
+ * the measured 16 all carry a `w:txbxContent` inside the Choice's drawing *and* another inside the Fallback's
+ * VML shape, both holding the same one paragraph. Reading a box means finding both copies; writing one means
+ * updating both, or the page tells two different stories depending on which branch a reader takes.
+ */
+function spansDeep(xml: string, tag: string, found: { xml: string }[] = []): { xml: string }[] {
+  for (const kid of childSpans(elementContent(xml))) {
+    if (kid.tag === tag) found.push(kid);
+    else spansDeep(kid.xml, tag, found);
+  }
+  return found;
+}
+
+/** One literal substring swapped for another. `String.replace` would read `$` in the replacement as markup. */
+const replaceOnce = (xml: string, from: string, to: string): string => {
+  const at = xml.indexOf(from);
+  return at < 0 ? xml : xml.slice(0, at) + to + xml.slice(at + from.length);
+};
+
+/** What a box's pieces say, in the only form two copies of the same box can be compared in: text and atoms. */
+const hfBoxShape = (segs: HfSegment[]): string => JSON.stringify(segs.map((s) => (s.carry ? `<${s.carry.tag}>` : s.text ?? "")));
 
 /** Which marker of a field a run holds — `begin`, `separate`, `end` — by attribute, whatever prefix spells it. */
 const fldStageOf = (run: string): string | undefined => {
@@ -720,12 +750,17 @@ const hfRunText = (run: string): string =>
  * reason to refuse the entire footer. The number the field caches between its `separate` and its `end` is
  * not text the user typed, so it never joins the paragraph's text view; it travels inside the atom.
  */
-function hfParagraphSegments(span: { xml: string }, newKey: () => number): { segs: HfSegment[]; ok: boolean } {
+function hfParagraphSegments(
+  span: { xml: string },
+  newKey: () => number,
+  depth = 0,
+): { segs: HfSegment[]; ok: boolean; boxed: boolean } {
   const kids = childSpans(elementContent(span.xml));
   const segs: HfSegment[] = [];
   let text = "";
+  let boxed = false;
   let i = 0;
-  const rich = (): { segs: HfSegment[]; ok: boolean } => ({ segs: [], ok: false });
+  const rich = (): { segs: HfSegment[]; ok: boolean; boxed: boolean } => ({ segs: [], ok: false, boxed: false });
   while (i < kids.length) {
     const kid = kids[i]!;
     if (HF_PARA_STRUCTURAL.has(kid.tag)) {
@@ -735,15 +770,46 @@ function hfParagraphSegments(span: { xml: string }, newKey: () => number): { seg
     if (kid.tag !== "r") return rich();
     const runKids = childSpans(elementContent(kid.xml));
     if (!runKids.every((k) => HF_RUN_KIDS.has(k.tag))) {
-      // Not a text run, then: a run that is one picture and nothing else travels whole, the way a page
-      // field does. Its `w:rPr` rides along with it and is not text.
-      //
-      // What it may not hold is words. The 16 footers in the local corpus that look like this are one
-      // anchored drawing whose text box contains the page number itself (`mc:AlternateContent` wrapping
-      // `w:txbxContent` with two `PAGE` fields in it), so a chip for them would replace a number the page
-      // shows with a label, and hand the user a band that reads "editable" while the only text on it sits
-      // behind the chip. Such a part stays held as its own bytes, and the page keeps showing its text.
-      if (!runKids.every((k) => k.tag === "rPr" || HF_RUN_CARRIED.has(k.tag)) || HF_RUN_DENY.test(kid.xml) || hfRunText(kid.xml) !== "") return rich();
+      if (!runKids.every((k) => k.tag === "rPr" || HF_RUN_CARRIED.has(k.tag)) || HF_RUN_DENY.test(kid.xml)) return rich();
+      // A run that is one picture and nothing else travels whole, the way a page field does; its `w:rPr`
+      // rides along with it and is not text. But first: is this picture a box with words in it?
+      const boxes = spansDeep(kid.xml, "txbxContent");
+      if (boxes.length) {
+        // The 16 bands this corpus holds are an anchored text box whose single inner paragraph carries the
+        // page number and the two characters the page shows around it. The box is not a label over the
+        // user's words — it *is* the paragraph, so its pieces join this paragraph's pieces, and the frame
+        // stays where the file put it. Bounded on purpose: one box-shaped run, the box the only run of its
+        // paragraph, one paragraph inside, nothing but the box's own copy holding text, and every copy of
+        // the box saying the same thing. Anything outside that shape keeps the band held as its own bytes.
+        if (
+          depth > 0 ||
+          kids.filter((k) => k.tag === "r").length !== 1 ||
+          runKids.filter((k) => HF_RUN_CARRIED.has(k.tag)).length !== 1
+        )
+          return rich();
+        let outside = kid.xml;
+        for (const b of boxes) outside = replaceOnce(outside, b.xml, "");
+        if (hfRunText(outside) !== "") return rich();
+        const inner: HfSegment[][] = [];
+        for (const b of boxes) {
+          const paras = childSpans(elementContent(b.xml)).filter((s) => s.tag === "p");
+          if (paras.length !== 1) return rich();
+          const parsed = hfParagraphSegments(paras[0]!, newKey, depth + 1);
+          if (!parsed.ok || parsed.boxed) return rich();
+          inner.push(parsed.segs);
+        }
+        const shape = hfBoxShape(inner[0]!);
+        if (inner.some((s) => hfBoxShape(s) !== shape)) return rich();
+        if (text !== "") segs.push({ text });
+        text = "";
+        segs.push(...inner[0]!);
+        boxed = true;
+        i++;
+        continue;
+      }
+      // No box, and words inside the picture: a chip would replace text the page shows with a label and hand
+      // back a band that reads "editable" with nothing to edit. Such a part stays held as its own bytes.
+      if (hfRunText(kid.xml) !== "") return rich();
       if (text !== "") segs.push({ text });
       text = "";
       segs.push({ carry: { key: newKey(), tag: runKids.find((k) => HF_RUN_CARRIED.has(k.tag))!.tag, xml: kid.xml, show: "图片" } });
@@ -778,7 +844,7 @@ function hfParagraphSegments(span: { xml: string }, newKey: () => number): { seg
     i = end + 1;
   }
   if (text !== "") segs.push({ text });
-  return { segs, ok: true };
+  return { segs, ok: true, boxed };
 }
 
 /** The paragraph's text view: what the pieces of it that are text say, with a field contributing nothing. */
@@ -835,7 +901,11 @@ function headerFooterXml(hf: HeaderFooter): string {
       if (span.tag !== "p") return span.xml;
       const segs = hfSegmentsAt(hf, ++at);
       if (segs === undefined) return "";
-      return sameHfSegments([segs], [hf.baselineSegments?.[at]]) ? span.xml : editedParagraph(span, segs, hf.baselineSegments?.[at]);
+      return sameHfSegments([segs], [hf.baselineSegments?.[at]])
+        ? span.xml
+        : hf.boxedParagraphs?.[at]
+          ? editedBoxParagraph(span, segs, hf.baselineSegments?.[at])
+          : editedParagraph(span, segs, hf.baselineSegments?.[at]);
     })
     .join("");
   const extra = hf.paragraphs
@@ -876,6 +946,29 @@ function editedParagraph(span: { xml: string }, segs: HfSegment[], asRead?: HfSe
     )
     .join("");
   return `<${prefix}:p${attrs}>${kept}${parts}</${prefix}:p>`;
+}
+
+/**
+ * A paragraph whose pieces came out of a floating text box, written back **into the box**: the frame, its
+ * geometry and its properties travel as the file wrote them, and only the paragraph inside each copy of
+ * `w:txbxContent` is re-spelled. Both copies — the Choice's drawing and the Fallback's VML shape — are
+ * rebuilt from the same pieces, because a page that read one text in the branch it took and another in the
+ * branch it did not is two different documents.
+ */
+function editedBoxParagraph(span: { xml: string }, segs: HfSegment[], asRead?: HfSegment[]): string {
+  const kids = childSpans(elementContent(span.xml));
+  const run = kids.find((k) => k.tag === "r" && spansDeep(k.xml, "txbxContent").length > 0);
+  if (!run) return editedParagraph(span, segs, asRead);
+  let runXml = run.xml;
+  for (const box of spansDeep(run.xml, "txbxContent")) {
+    const para = childSpans(elementContent(box.xml)).find((s) => s.tag === "p");
+    if (!para) continue;
+    runXml = replaceOnce(runXml, box.xml, replaceOnce(box.xml, para.xml, editedParagraph(para, segs, asRead)));
+  }
+  const prefix = /^<([\w.-]+):/.exec(span.xml)?.[1] ?? "w";
+  const attrs = (/^<[\w.-]*:?p\b([^>]*)>/.exec(span.xml)?.[1] ?? "").replace(/\/\s*$/, "");
+  const kept = kids.filter((k) => k.tag === "pPr" || /^bookmark(Start|End)$/.test(k.tag)).map((k) => k.xml).join("");
+  return `<${prefix}:p${attrs}>${kept}${runXml}</${prefix}:p>`;
 }
 
 /**
@@ -2614,6 +2707,7 @@ export class WordDocument {
         paragraphs,
         baseline: [...paragraphs],
         ...(segments ? { segments, baselineSegments: segments.map(copyHfSegments) } : {}),
+        ...(segments && parsed.some((p) => p.boxed) ? { boxedParagraphs: parsed.map((p) => p.boxed) } : {}),
         source: partRaw,
       };
       if (kind === "header") this.header = hf;

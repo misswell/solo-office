@@ -10,7 +10,10 @@ import {
   PAGE_ONLY_FOOTER_STYLED,
   footerPart,
   LOGO_RUN,
-  LOGO_RUN_WITH_TEXT,
+  PAGE_BOX_DISAGREEING_RUN,
+  PAGE_BOX_RUN,
+  PAGE_BOX_TWO_PARA_RUN,
+  makeBoxWithWordsFooterDocx,
   makeFooterDocx,
   makeLogoFooterDocx,
   makeHeaderFooterDocx,
@@ -523,15 +526,91 @@ describe("docx page fields in a header or footer", () => {
       const again = WordDocument.openBytes(writeDocx(d));
       expect((again.footer?.segments ?? []).flat().filter((s) => s.carry).length).toBe(2);
     });
+  });
 
-    it("refuses the band the corpus really writes, where the box holds the page number", () => {
-      const d = WordDocument.openBytes(makeLogoFooterDocx(LOGO_RUN_WITH_TEXT));
-      // All 16 of these runs in the local corpus are this shape. A chip would swap a number the page shows
-      // for a label, so the part stays held as its own bytes — and its words still reach the page as text.
+  describe("a floating text box holding the page number", () => {
+    /** Every `w:txbxContent` a saved footer holds, so a claim about "both copies" can be checked as counts. */
+    const boxes = (out: string): number => (out.match(/<w:txbxContent>/g) ?? []).length;
+
+    it("reads through the frame: the box's words are the band's words", () => {
+      const d = WordDocument.openBytes(makeLogoFooterDocx(PAGE_BOX_RUN));
+      expect(d.footer?.editable).toBe(true);
+      // `第 ` and ` 页` are text the page shows; the field between them is not, so it never joins the view.
+      expect(d.footer?.paragraphs).toEqual(["第  页", "联系文字"]);
+      expect(d.footer?.segments?.[0]?.map((s) => s.carry?.show ?? s.text)).toEqual(["第 ", "页码", " 页"]);
+      expect(d.footer?.boxedParagraphs).toEqual([true, false]);
+      const page = renderWord(d);
+      expect(page).toContain("第 ");
+      expect(page).toContain(">页码</span>");
+      expect(page).not.toContain(">图片</span>");
+      expect(page).toContain('data-hf-page="footer"');
+    });
+
+    it("writes an edit into both copies of the box and leaves the frame as the file drew it", () => {
+      const d = WordDocument.openBytes(makeLogoFooterDocx(PAGE_BOX_RUN));
+      const segs = (d.footer?.segments ?? []).map((p) => p.map((s) => ({ ...s })));
+      segs[0] = [{ text: "第 " }, d.footer!.segments![0]![1]!, { text: " 张" }];
+      expect(d.setHeaderSegments("footer", segs)).toBe(true);
+      const out = footerOf(writeDocx(d));
+      expect(boxes(out)).toBe(2);
+      expect((out.match(/<w:t[^>]*> 张<\/w:t>/g) ?? []).length).toBe(2);
+      expect(out).toContain('<wp:extent cx="1000000" cy="500000"/>');
+      expect(out).toContain("<v:textbox");
+      expect(out).toContain('<w:pStyle w:val="Footer"/>');
+      // The box's own paragraph keeps its alignment and its typeface — the band's paragraph says nothing of them.
+      expect((out.match(/<w:jc w:val="right"\/>/g) ?? []).length).toBe(2);
+      expect((out.match(/<w:sz w:val="18"\/>/g) ?? []).length).toBeGreaterThanOrEqual(4);
+    });
+
+    it("writes a change that moves no typed character inside the box", () => {
+      const d = WordDocument.openBytes(makeLogoFooterDocx(PAGE_BOX_RUN));
+      // Dropping the field takes a piece out of the model and nothing out of the text view. A save that
+      // hashed only the words handed the box back as it read it, with the page number still in it.
+      expect(d.setHeaderSegments("footer", [[{ text: "第  页" }], [{ text: "联系文字" }]])).toBe(true);
+      const out = footerOf(writeDocx(d));
+      expect(out).not.toContain("fldChar");
+      expect(boxes(out)).toBe(2);
+      expect((out.match(/<w:t[^>]*>第  页<\/w:t>/g) ?? []).length).toBe(2);
+    });
+
+    it("hands an untouched box back byte for byte", () => {
+      const d = WordDocument.openBytes(makeLogoFooterDocx(PAGE_BOX_RUN));
+      d.setHeaderSegments("footer", d.footer?.segments?.map((p) => p.map((s) => ({ ...s }))) ?? []);
+      const out = footerOf(writeDocx(d));
+      expect(out).toContain(PAGE_BOX_RUN);
+    });
+
+    it("keeps the box, its words and its field through a save and a re-read", () => {
+      const d = WordDocument.openBytes(makeLogoFooterDocx(PAGE_BOX_RUN));
+      const again = WordDocument.openBytes(writeDocx(d));
+      expect(again.footer?.editable).toBe(true);
+      expect(again.footer?.paragraphs).toEqual(["第  页", "联系文字"]);
+      expect(again.footer?.segments?.[0]?.[1]?.carry?.tag).toBe("fldChar");
+      // Re-read reads what the save wrote, so the second save is the same bytes as the first.
+      expect(footerOf(writeDocx(again))).toBe(footerOf(writeDocx(d)));
+    });
+
+    it("refuses the band when the two copies of the box do not say the same thing", () => {
+      const d = WordDocument.openBytes(makeLogoFooterDocx(PAGE_BOX_DISAGREEING_RUN));
       expect(d.footer?.editable).toBe(false);
-      expect(d.footer?.paragraphs.join("")).toContain("第");
-      expect(renderWord(d)).toContain("联系文字");
-      expect(renderWord(d)).not.toContain("hf-page");
+      expect(d.footer?.paragraphs[0]).toContain("第 ");
+      const page = renderWord(d);
+      expect(page).toContain("联系文字");
+      expect(page).not.toContain("hf-page");
+    });
+
+    it("refuses a box whose words are split over two paragraphs", () => {
+      expect(WordDocument.openBytes(makeLogoFooterDocx(PAGE_BOX_TWO_PARA_RUN)).footer?.editable).toBe(false);
+    });
+
+    it("refuses a box that is not the only run of its paragraph", () => {
+      // The box's pieces join the paragraph's, so a paragraph that also holds runs of its own has no honest
+      // mapping left: which half of the words belong inside the frame? That band stays held as its own bytes.
+      const d = WordDocument.openBytes(makeBoxWithWordsFooterDocx(PAGE_BOX_RUN));
+      expect(d.footer?.editable).toBe(false);
+      expect(d.footer?.paragraphs[0]).toContain("页脚左边");
+      expect(renderWord(d)).toContain("页脚左边");
+      expect(WordDocument.openBytes(makeLogoFooterDocx(PAGE_BOX_RUN)).footer?.editable).toBe(true);
     });
   });
 });

@@ -177,26 +177,50 @@ const NS_PIC = "http://schemas.openxmlformats.org/drawingml/2006/picture";
 const NS_V = "urn:schemas-microsoft-com:vml";
 
 /** The anchored picture the corpus writes: `mc:Choice` carries the DrawingML, `mc:Fallback` the VML. */
-const anchored = (inside: string): string =>
+const anchored = (inside: string, fallbackInside = `<v:shape id="Logo"/>`): string =>
   `<mc:AlternateContent><mc:Choice Requires="wps"><w:drawing><wp:anchor simplePos="0" relativeHeight="251659264" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">` +
   `<wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:align>right</wp:align></wp:positionH>` +
   `<wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent cx="1000000" cy="500000"/><wp:effectExtent l="0" t="0" r="0" b="0"/>${inside}` +
   `<wp:docPr id="7" name="信头徽标"/><a:graphic><a:graphicData uri="${NS_PIC}"><pic:pic><pic:nvPicPr><pic:cNvPr id="7" name="徽标"/></pic:nvPicPr>` +
   `<pic:blipFill><a:blip r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>` +
   `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="500000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic>` +
-  `</wp:anchor></w:drawing></mc:Choice><mc:Fallback><w:pict><v:shape id="Logo"/></w:pict></mc:Fallback></mc:AlternateContent>`;
+  `</wp:anchor></w:drawing></mc:Choice><mc:Fallback><w:pict>${fallbackInside}</w:pict></mc:Fallback></mc:AlternateContent>`;
 
 /** The picture alone: no `w:t` anywhere in it, which is what lets the band carry it as one piece. */
 export const LOGO_RUN = `<w:r><w:rPr><w:noProof/></w:rPr>${anchored("<wp:wrapNone/>")}</w:r>`;
 
+/** The paragraph inside the corpus's page box: two words the page shows with the field between them. */
+const BOX_PARA =
+  `<w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>第 </w:t></w:r>` +
+  `<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGE  \\* MERGEFORMAT </w:instrText></w:r>` +
+  `<w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>1</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>` +
+  `<w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t> 页</w:t></w:r></w:p>`;
+
+/** A VML copy of the same box, which is what 16 of the 16 corpus runs write: the words live in both branches. */
+const vmlBox = (para: string): string =>
+  `<v:shape id="PageBox"><v:textbox inset="0,0,0,0"><w:txbxContent>${para}</w:txbxContent></v:textbox></v:shape>`;
+
 /**
- * The shape all 16 of these runs in the local corpus have: the floating box, not the paragraph, holds the
- * page number, so the drawing contains `w:txbxContent` with text in it. A chip over that would replace a
- * number the page shows with a label.
+ * The shape all 16 of these runs in the local corpus have: a floating box whose one inner paragraph holds the
+ * page number, written twice over — `w:txbxContent` inside the Choice's anchor and again inside the Fallback's
+ * VML shape — with the same words in both.
  */
-export const LOGO_RUN_WITH_TEXT = `<w:r><w:rPr><w:noProof/></w:rPr>${anchored(
-  `<wp:wrapNone/><w:txbxContent><w:p><w:r><w:t>第 </w:t></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGE  \\* MERGEFORMAT </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>1</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r><w:r><w:t> 页</w:t></w:r></w:p></w:txbxContent>`,
-)}</w:r>`;
+export const PAGE_BOX_RUN =
+  `<w:r><w:rPr><w:noProof/></w:rPr>${anchored(`<wp:wrapNone/><w:txbxContent>${BOX_PARA}</w:txbxContent>`, vmlBox(BOX_PARA))}</w:r>`;
+
+/** The two copies disagree about what the box says: no single edit could write them both. */
+export const PAGE_BOX_DISAGREEING_RUN =
+  `<w:r><w:rPr><w:noProof/></w:rPr>${anchored(
+    `<wp:wrapNone/><w:txbxContent>${BOX_PARA}</w:txbxContent>`,
+    vmlBox(BOX_PARA.replace("第 ", "共 ").replace(" 页", " 张")),
+  )}</w:r>`;
+
+/** A box whose text is split over two paragraphs: the band has no paragraph to hang them on. */
+export const PAGE_BOX_TWO_PARA_RUN =
+  `<w:r><w:rPr><w:noProof/></w:rPr>${anchored(
+    `<wp:wrapNone/><w:txbxContent>${BOX_PARA}<w:p><w:r><w:t>第二段落</w:t></w:r></w:p></w:txbxContent>`,
+    `<v:shape id="PageBox"/>`,
+  )}</w:r>`;
 
 /** A footer whose first paragraph is one of those runs and whose second is text the user can type in. */
 export function makeLogoFooterDocx(logo: string): Uint8Array {
@@ -206,3 +230,12 @@ export function makeLogoFooterDocx(logo: string): Uint8Array {
     `<w:p><w:r><w:t>联系文字</w:t></w:r></w:p></w:ftr>`;
   return makeFooterDocx(part);
 }
+
+/** A footer whose one paragraph holds typed words *beside* the box — a shape this model does not claim. */
+export function makeBoxWithWordsFooterDocx(box: string): Uint8Array {
+  const part =
+    `${XML_DECL}<w:ftr xmlns:w="${NS_W}" xmlns:r="${NS_R}" xmlns:mc="${NS_MC}" xmlns:wp="${NS_WP}" xmlns:a="${NS_A}" xmlns:pic="${NS_PIC}" xmlns:v="${NS_V}" mc:Ignorable="wp">` +
+    `<w:p><w:pPr><w:pStyle w:val="Footer"/></w:pPr><w:r><w:t>页脚左边</w:t></w:r>${box}</w:p></w:ftr>`;
+  return makeFooterDocx(part);
+}
+

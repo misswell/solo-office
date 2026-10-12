@@ -148,6 +148,56 @@ describe("docx 编辑保存：断、书签与图形内层", () => {
     expect(after).toContain('cx="1905000"');
     expect(after).not.toContain("<a:srcRect");
   });
+
+  it("keeps every relationship id the file wrote, so a shape that travels by the byte still resolves", () => {
+    const bytes = editAndSave(makePreservationDocx());
+    const saved = OpcPackage.from(bytes);
+    const rels = saved.rels("word/document.xml");
+    const body = bodyOf(bytes);
+    // The VML image is not a structure this model edits: its `r:id` comes back inside carried bytes, so the
+    // relationship it cites has to come back too. It did not — image relationships were dropped and re-issued
+    // under the writer's own spelling of the target, and this citation pointed at nothing.
+    expect(rels.get("rId9")?.target).toBe("/word/media/seal.png");
+    const cited = [...body.matchAll(/\br:(?:embed|link|id)="([^"]+)"/g)].map((m) => m[1]!);
+    expect(cited).toContain("rId9");
+    for (const id of cited) expect(rels.has(id)).toBe(true);
+    // …and one part is one relationship: `/word/media/seal.png` and `media/seal.png` name the same part, and a
+    // save that compared targets as strings issued a second relationship for a picture the file already had.
+    const imageRels = [...rels.values()].filter((r) => r.type.endsWith("/image"));
+    expect(imageRels).toHaveLength(2);
+    expect(new Set(imageRels.map((r) => saved.resolve("word/document.xml", r))).size).toBe(2);
+  });
+});
+
+describe("docx 编辑保存：根元素的声明", () => {
+  it("writes the document root's own attributes back rather than spelling a root", () => {
+    const src = bodyOf(makePreservationDocx());
+    const after = bodyOf(editAndSave(makePreservationDocx()));
+    const openTag = (xml: string): string => /<w:document\b[^>]*>/.exec(xml)?.[0] ?? "";
+    // The fixture's root declares `mc:` first and `w:` last, the way the corpus writes it; a save that builds
+    // the list from a map hoists `xmlns:w` to the front and re-orders everything after it.
+    expect(openTag(after)).toBe(openTag(src));
+    expect(after).toContain('xml:lang="zh-CN"'); // an attribute this model has no field for at all
+    expect(after).toContain('mc:Ignorable="w14 wp14"');
+    expect(after).toContain('xmlns:cust="urn:fixture:custom-data"'); // bound, used by nothing here
+    // …and nothing about it is written twice, which is what a re-spelled root next to carried text looks like.
+    for (const prefix of ["w", "r", "wp", "a", "pic", "mc", "v"]) {
+      expect(countOf(after, `xmlns:${prefix}="`)).toBe(1);
+    }
+    expect(countOf(after, "mc:Ignorable=")).toBe(1);
+  });
+
+  it("binds the prefixes its own tags need in a document that came from no file", () => {
+    const doc = WordDocument.blank();
+    doc.blocks[0].inlines?.push({ text: "新写的" });
+    const root = bodyOf(writeDocx(doc)).match(/<w:document\b[^>]*>/)?.[0] ?? "";
+    expect(root).toContain('xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"');
+    expect(root).toContain('xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"');
+    // Nothing to be faithful to, so this is the writer's own root — and only the two prefixes every tag
+    // below it uses, not the extension list a word processor would have added.
+    expect(root).not.toContain("xmlns:a=");
+    expect(root).not.toContain("mc:Ignorable");
+  });
 });
 
 describe("docx 编辑保存：正文的写法", () => {

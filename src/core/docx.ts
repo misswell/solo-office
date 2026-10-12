@@ -626,11 +626,13 @@ export class WordDocument {
   private media = new Map<string, string>();
   private pkg?: OpcPackage;
   private hyperlinks = new Map<string, string>();
-  private bodyRels: { id: string; type: string; target: string; targetMode: string }[] = [];
+  private bodyRels: { id: string; type: string; target: string; targetMode: string; path: string }[] = [];
   private bodySectPr = "";
   /** Namespace declarations read off the document root, so carried markup keeps its prefixes bound. */
   private rootNamespaces: Record<string, string> = {};
   private rootIgnorable = "";
+  /** The document root's own attribute text, read as bytes: a save writes this rather than spelling a root. */
+  private rootOpenAttrs = "";
   private sectPrefix = "w";
   private sectHas = { header: false, footer: false };
   /** Ids handed to carried inline structures, so the page can name the one it is holding back. */
@@ -705,7 +707,7 @@ export class WordDocument {
     const docx = pkg.xml("word/document.xml");
     const rels = pkg.rels("word/document.xml");
     for (const [id, r] of rels) {
-      this.bodyRels.push({ id, type: r.type, target: r.target, targetMode: r.targetMode });
+      this.bodyRels.push({ id, type: r.type, target: r.target, targetMode: r.targetMode, path: pkg.resolve("word/document.xml", r) });
       if (r.type.endsWith("/hyperlink")) this.hyperlinks.set(id, r.target);
     }
     const body = docx?.document?.body;
@@ -715,6 +717,7 @@ export class WordDocument {
     const root = rootMarkup(source);
     this.rootNamespaces = root.prefixes;
     this.rootIgnorable = root.ignorable;
+    this.rootOpenAttrs = root.attrs;
     this.readHeaderFooters(pkg, rels);
     this.readComments(pkg, rels);
     // The body read off its own source text rather than only off the parsed tree, so a child the model
@@ -1197,6 +1200,17 @@ export class WordDocument {
     return this.rootIgnorable;
   }
 
+  /**
+   * The `w:document` start tag's attribute text, exactly as the file wrote it and leading with its first
+   * space: ` xmlns:w="…" … mc:Ignorable="…"` — or `""` for a root that declared nothing, which is what a
+   * document created here looks like. A save puts these bytes back rather than spelling a root of its own:
+   * the list is the file's chosen prefix names *and* their order, and an attribute this model never read
+   * would otherwise be dropped by the very act of rewriting the tag.
+   */
+  documentRootAttributes(): string {
+    return this.rootOpenAttrs;
+  }
+
   /** Reference tags the model's header/footer still need inside a sectPr. */
   sectReferenceTags(): string {
     const p = this.sectPrefix;
@@ -1223,7 +1237,7 @@ export class WordDocument {
     while (taken.has(`${kind}${n}.xml`)) n++;
     const highest = this.bodyRels.reduce((max, r) => Math.max(max, Number(/(\d+)$/.exec(r.id)?.[1] ?? 0)), 0);
     const id = `rId${highest + 1}`;
-    this.bodyRels.push({ id, type: `${REL_R}/${kind}`, target: `${kind}${n}.xml`, targetMode: "Internal" });
+    this.bodyRels.push({ id, type: `${REL_R}/${kind}`, target: `${kind}${n}.xml`, targetMode: "Internal", path: `word/${kind}${n}.xml` });
     const hf: HeaderFooter = { part: `word/${kind}${n}.xml`, id, editable: true, paragraphs: [""], baseline: ["__new__"] };
     if (which === "header") this.header = hf;
     else this.footer = hf;
@@ -2158,12 +2172,18 @@ export class WordDocument {
   }
 
   /**
-   * Relationships the body carried, minus the ones a save re-derives. Anything kept
-   * here is still referenced by the preserved section properties, so its id must not
-   * be renumbered; the writer allocates its own ids above the highest of these.
+   * Relationships the body carried, every one of them and with the part each resolves to.
+   *
+   * Dropping the picture and hyperlink relationships here because "the writer re-derives those" was
+   * half true: the writer re-derives the ones its own tags name, but a drawing, a `w:fallback` VML
+   * `v:imagedata` or a hyperlink inside a structure that travels by the byte still cites the id the
+   * file wrote. Measured on 86 real WPS files: the originals hold zero dangling citations, and a save
+   * that renumbered image relationships left one carried `r:id` pointing at nothing — the shape lost.
+   * So the id is the file's to keep, and `path` is what lets a save recognise the relationship it is
+   * about to invent as one that already exists.
    */
-  sourceRels(): { id: string; type: string; target: string; targetMode: string }[] {
-    return this.bodyRels.filter((r) => !r.type.endsWith("/hyperlink") && !r.type.endsWith("/image"));
+  sourceRels(): { id: string; type: string; target: string; targetMode: string; path: string }[] {
+    return this.bodyRels;
   }
 
   /**
@@ -2798,17 +2818,23 @@ function carriedText(xml: string): string {
     .join(" ");
 }
 
-/** The `xmlns:prefix="uri"` declarations on the document root's own start tag. */
 /**
- * What the document root's start tag declared: every namespace prefix it bound, and the prefixes it told
- * a reader to skip if it does not know them. Both are needed to write the same part back — the first so a
- * carried `w14:` or `mc:` tag still resolves, the second so an extension stays ignorable rather than fatal.
+ * What the document root's start tag declared: its attribute text exactly as the file wrote it, every
+ * namespace prefix it bound, and the prefixes it told a reader to skip if it does not know them.
+ *
+ * The attribute text is what a save puts back — carried markup names prefixes by the names the file chose,
+ * and the declaration list and the ignorable list are only part of it. Reading the other two as well is what
+ * lets a writer that has to spell a fresh root bind at least the prefixes its own tags use.
  */
-function rootMarkup(source: string): { prefixes: Record<string, string>; ignorable: string } {
+function rootMarkup(source: string): { prefixes: Record<string, string>; ignorable: string; attrs: string } {
   const open = /<(?:[\w-]+:)?document\b[^>]*>/.exec(source)?.[0] ?? "";
   const prefixes: Record<string, string> = {};
   for (const m of open.matchAll(/xmlns:([\w.-]+)\s*=\s*"([^"]*)"/g)) prefixes[m[1]!] = m[2]!;
-  return { prefixes, ignorable: /\bmc:Ignorable\s*=\s*"([^"]*)"/.exec(open)?.[1] ?? "" };
+  return {
+    prefixes,
+    ignorable: /\bmc:Ignorable\s*=\s*"([^"]*)"/.exec(open)?.[1] ?? "",
+    attrs: open.replace(/^<(?:[\w-]+:)?document\b/, "").replace(/\/?>$/, ""),
+  };
 }
 
 /** Levels are addressed by their w:ilvl, which need not be contiguous or in document order. */

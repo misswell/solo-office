@@ -8,6 +8,11 @@ const NS_A = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const NS_PIC = "http://schemas.openxmlformats.org/drawingml/2006/picture";
 const NS_CT = "http://schemas.openxmlformats.org/package/2006/content-types";
 const NS_PKG = "http://schemas.openxmlformats.org/package/2006/relationships";
+const NS_MC = "http://schemas.openxmlformats.org/markup-compatibility/2006";
+const NS_V = "urn:schemas-microsoft-com:vml";
+const NS_W14 = "http://schemas.microsoft.com/office/word/2010/wordml";
+const NS_WP14 = "http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing";
+const NS_CUST = "urn:fixture:custom-data";
 const CT_W = "application/vnd.openxmlformats-officedocument.wordprocessingml";
 /** A real one-pixel PNG: the media part has to be bytes a reader can resolve, not a placeholder string. */
 const PNG_1PX =
@@ -26,7 +31,13 @@ const PNG_1PX =
  * - a **floating** picture (`wp:anchor`) with the frame's own children: `wp:effectExtent`, a crop
  *   (`a:srcRect`), an outline (`a:ln`), and a `a:extLst` hanging off the blip. A drawing re-spelled from
  *   five fields keeps none of them and turns the anchor into an inline one.
- * - an inline picture citing `rId8`, whose id the save must re-issue while the drawing stays put.
+ * - an inline picture citing `rId8`, whose id the save must keep.
+ * - a root in the order a word processor actually writes it — `mc:` and `wpc:` before `w:` and `r:` — with an
+ *   `mc:Ignorable` list, a `xml:lang` this model has no field for, and prefixes no tag here uses. Hoisting
+ *   `xmlns:w` to the front or spelling the declaration list from a map is a re-spelling, not the file.
+ * - a **VML** picture (`w:pict`/`v:imagedata`) citing `rId9`, whose relationship the file wrote with an
+ *   absolute `Target="/word/media/…"`. The shape travels by the byte, so its citation does too, and a save
+ *   that re-issued the image relationship under its own spelling left that citation pointing at nothing.
  */
 export function makePreservationDocx(): Uint8Array {
   const anchor =
@@ -52,8 +63,13 @@ export function makePreservationDocx(): Uint8Array {
     `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>` +
     `</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>`;
 
+  const pict =
+    `<w:pict><v:shape id="印章1" type="#_x0000_t75" style="width:96pt;height:48pt">` +
+    `<v:fill><v:imagedata r:id="rId9"/></v:fill>` +
+    `</v:shape></w:pict>`;
+
   const document =
-    `<w:document xmlns:w="${NS_W}" xmlns:r="${NS_R}" xmlns:wp="${NS_WP}" xmlns:a="${NS_A}" xmlns:pic="${NS_PIC}">` +
+    `<w:document xmlns:mc="${NS_MC}" xmlns:w14="${NS_W14}" xmlns:v="${NS_V}" xmlns:cust="${NS_CUST}" xmlns:wp14="${NS_WP14}" xmlns:wp="${NS_WP}" xmlns:a="${NS_A}" xmlns:pic="${NS_PIC}" xmlns:r="${NS_R}" xmlns:w="${NS_W}" xml:lang="zh-CN" mc:Ignorable="w14 wp14">` +
     `<w:body>` +
     `<w:p><w:r><w:t>正文</w:t></w:r><w:r><w:br w:type="page"/></w:r><w:r><w:t>下一页</w:t></w:r>` +
     `<w:r><w:br w:type="column" w:clear="none"/></w:r><w:r><w:t xml:space="preserve"> 带边空格的 </w:t></w:r></w:p>` +
@@ -67,6 +83,7 @@ export function makePreservationDocx(): Uint8Array {
     `</w:tbl>` +
     `<w:p><w:r>${anchor}</w:r></w:p>` +
     `<w:p><w:r>${inline}</w:r><w:r><w:t>图后文字</w:t></w:r></w:p>` +
+    `<w:p><w:r>${pict}</w:r></w:p>` +
     `<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>` +
     `</w:body></w:document>`;
 
@@ -81,10 +98,11 @@ export function makePreservationDocx(): Uint8Array {
     ),
     "word/_rels/document.xml.rels": strToU8(
       DECL +
-        `<Relationships xmlns="${NS_PKG}"><Relationship Id="rId8" Type="${NS_R}/image" Target="media/trend.png"/></Relationships>`,
+        `<Relationships xmlns="${NS_PKG}"><Relationship Id="rId8" Type="${NS_R}/image" Target="media/trend.png"/><Relationship Id="rId9" Type="${NS_R}/image" Target="/word/media/seal.png"/></Relationships>`,
     ),
     "word/document.xml": strToU8(DECL + document),
     "word/media/trend.png": new Uint8Array(Buffer.from(PNG_1PX, "base64")),
+    "word/media/seal.png": new Uint8Array(Buffer.from(PNG_1PX, "base64")),
   };
   return zipSync(files, { level: 6 });
 }

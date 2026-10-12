@@ -587,6 +587,16 @@ const WRITER_PREFIXES = new Set(["w", "r", "wp", "a", "pic"]);
 
 function documentXml(doc: WordDocument, rels: RelBuilder): string {
   const body = bodyXml(doc, rels);
+  const carried = doc.documentRootAttributes();
+  if (carried) {
+    // The file's own root goes back untouched — every declaration it chose, its order, and any attribute
+    // this model never read. Only a prefix the tags below actually use and the root left unbound is added,
+    // and `bound` reads the carried text rather than the model's prefix map so a single-quoted declaration
+    // in the original is still seen as bound.
+    const bound = new Set([...carried.matchAll(/\bxmlns:([\w.-]+)\s*=\s*["'][^"']*["']/g)].map((m) => m[1]!));
+    const need = (prefix: string, uri: string): string => (bound.has(prefix) ? "" : ` xmlns:${prefix}="${uri}"`);
+    return `${DECL}<w:document${carried}${need("w", NS_W)}${need("r", NS_R)}><w:body>${body}</w:body></w:document>`;
+  }
   // Carried property sets can name prefixes no tag this writer builds uses (`w14:`, `mc:`). Declaring
   // only our own would save a table whose markup no longer resolves, and dropping the root's
   // `mc:Ignorable` would turn an extension a reader used to skip into one it has to refuse.
@@ -643,16 +653,25 @@ interface RelEntry {
   external?: boolean;
 }
 
-/** Relationship ids are allocated in encounter order, above the ids the source document already used. */
+/**
+ * Relationship ids the file already wrote are kept; a save allocates its own above the highest of them,
+ * and only for a part or a target the source package never related.
+ */
 class RelBuilder {
   readonly entries: RelEntry[] = [];
   private readonly byKey = new Map<string, string>();
+  /** Carried relationships keyed on the *part* they resolve to, so a different spelling of the same
+   *  target (`media/x.png` against `/word/media/x.png`) is recognised as the relationship it is. */
+  private readonly byPath = new Map<string, string>();
   private next: number;
 
-  constructor(carried: { id: string; type: string; target: string; targetMode: string }[]) {
+  constructor(carried: { id: string; type: string; target: string; targetMode: string; path?: string }[]) {
     for (const rel of carried) {
       this.entries.push({ id: rel.id, type: rel.type, target: rel.target, external: rel.targetMode === "External" });
       this.byKey.set(`${rel.type}|${rel.target}`, rel.id);
+      if (rel.path && rel.targetMode !== "External" && !this.byPath.has(`${rel.type}|${rel.path}`)) {
+        this.byPath.set(`${rel.type}|${rel.path}`, rel.id);
+      }
     }
     const highest = carried.reduce((max, r) => Math.max(max, Number(/(\d+)$/.exec(r.id)?.[1] ?? 0)), 0);
     this.next = highest + 1;
@@ -682,8 +701,15 @@ class RelBuilder {
     return this.add(type, target);
   }
 
-  /** Part paths are absolute in the model and relative to `word/` in the package. */
+  /**
+   * A picture's relationship. The file's own id comes back whenever this save points at a part the source
+   * already related — the part, not its spelling, because `/word/media/x.png` and `media/x.png` are one part
+   * and a save that issued a second id for it orphaned the first while markup that travels by the byte kept
+   * citing it. A picture inserted here is a part the package never had, and gets a fresh id.
+   */
   image(path: string): string {
+    const carried = this.byPath.get(`${NS_R}/image|${path}`);
+    if (carried) return carried;
     return this.add(`${NS_R}/image`, path.replace(/^word\//, ""));
   }
 }

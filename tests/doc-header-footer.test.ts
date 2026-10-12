@@ -114,10 +114,12 @@ describe("docx header/footer parts travel as the file wrote them", () => {
     const cases: [string, string, string[]][] = [
       ["软换行", `<w:hdr xmlns:w="${NS_W}"><w:p><w:r><w:t>上</w:t><w:br/><w:t>下</w:t></w:r></w:p></w:hdr>`, ["上下"]],
       ["插入修订", `<w:hdr xmlns:w="${NS_W}"><w:p><w:ins w:id="1" w:author="甲"><w:r><w:t>加的字</w:t></w:r></w:ins></w:p></w:hdr>`, ["加的字"]],
-      ["容器", `<w:hdr xmlns:w="${NS_W}"><w:p><w:r><w:t>字</w:t></w:r></w:p><w:sdt><w:sdtContent><w:p><w:r><w:t>控件</w:t></w:r></w:p></w:sdtContent></w:sdt></w:hdr>`, ["字"]],
+      // Refusing the write is not refusing the words: a container this model will not edit still shows them
+      // on the page, and its bytes still travel whole.
+      ["容器", `<w:hdr xmlns:w="${NS_W}"><w:p><w:r><w:t>字</w:t></w:r></w:p><w:sdt><w:sdtContent><w:p><w:r><w:t>控件</w:t></w:r></w:p></w:sdtContent></w:sdt></w:hdr>`, ["字", "控件"]],
       // The old gate read only `w:`, so a part that binds the namespace under another name slipped past it
       // and had its container rebuilt away.
-      ["别的前缀下的容器", `<w0:hdr xmlns:w0="${NS_W}"><w0:p><w0:r><w0:t>字</w0:t></w0:r></w0:p><w0:sdt><w0:sdtContent><w0:p><w0:r><w0:t>控件</w0:t></w0:r></w0:p></w0:sdtContent></w0:sdt></w0:hdr>`, ["字"]],
+      ["别的前缀下的容器", `<w0:hdr xmlns:w0="${NS_W}"><w0:p><w0:r><w0:t>字</w0:t></w0:r></w0:p><w0:sdt><w0:sdtContent><w0:p><w0:r><w0:t>控件</w0:t></w0:r></w0:p></w0:sdtContent></w0:sdt></w0:hdr>`, ["字", "控件"]],
     ];
     for (const [name, inner, texts] of cases) {
       const part = `${XML_DECL}${inner}`;
@@ -392,9 +394,116 @@ describe("docx page fields in a header or footer", () => {
     expect(WordDocument.openBytes(makeFooterDocx(nested)).footer?.editable).toBe(false);
   });
 
-  it("still refuses a field shut inside a container", () => {
-    const part = footerPart(`<w:sdt><w:sdtPr/><w:sdtContent><w:p>${pageFieldRuns()}</w:p></w:sdtContent></w:sdt>`);
-    expect(WordDocument.openBytes(makeFooterDocx(part)).footer?.editable).toBe(false);
+  /** The shape the corpus writes: properties naming the control, then the content it holds. */
+  const control = (inner: string, pr = '<w:sdtPr><w:id w:val="77"/></w:sdtPr>'): string =>
+    `<w:sdt>${pr}<w:sdtContent>${inner}</w:sdtContent></w:sdt>`;
+
+  it("reads a page number a content control wraps, and edits it inside the control", () => {
+    const part = footerPart(
+      `${control(`<w:p><w:pPr><w:pStyle w:val="Footer"/></w:pPr>${pageFieldRuns()}</w:p>`)}<w:p><w:r><w:t>联系文字</w:t></w:r></w:p>`,
+    );
+    const d = WordDocument.openBytes(makeFooterDocx(part));
+    expect(d.footer?.editable).toBe(true);
+    expect(d.footer?.paragraphs).toEqual(["", "联系文字"]);
+    expect(d.footer?.segments?.[0]?.map((s) => (s.carry ? `[${s.carry.tag}:${s.carry.show}]` : s.text))).toEqual(["[fldChar:页码]"]);
+    const field = d.footer?.segments?.[0]?.[0];
+    expect(field && d.setHeaderSegments("footer", [[{ text: "第 " }, field, { text: " 页" }], [{ text: "联系文字" }]])).toBe(true);
+    // The typing goes inside the control; the control's own bytes — its properties, the paragraph's style —
+    // stay as the file wrote them.
+    const out = footerOf(writeDocx(d));
+    expect(out).toContain('<w:sdtPr><w:id w:val="77"/></w:sdtPr>');
+    expect(out).toContain('<w:pStyle w:val="Footer"/>');
+    expect(out).toContain('<w:t xml:space="preserve">第 </w:t>');
+    expect(out).toContain("fldChar");
+    const again = WordDocument.openBytes(writeDocx(d));
+    expect(again.footer?.paragraphs).toEqual(["第  页", "联系文字"]);
+    expect(again.footer?.editable).toBe(true);
+  });
+
+  it("reads two controls deep, with typed characters between the two fields", () => {
+    const inner = control(`<w:p><w:r><w:t>第</w:t></w:r>${pageFieldRuns()}<w:r><w:t>页</w:t></w:r>${pageFieldRuns(" NUMPAGES ", "3")}</w:p>`);
+    const d = WordDocument.openBytes(makeFooterDocx(footerPart(control(inner))));
+    expect(d.footer?.editable).toBe(true);
+    expect(d.footer?.paragraphs).toEqual(["第页"]);
+    expect((d.footer?.segments ?? [])[0]?.filter((s) => s.carry).map((s) => s.carry?.show)).toEqual(["页码", "总页数"]);
+    const segs = (d.footer?.segments ?? []).map((s) => s.slice());
+    segs[0]!.push({ text: "！" });
+    expect(d.setHeaderSegments("footer", segs)).toBe(true);
+    const out = footerOf(writeDocx(d));
+    expect((out.match(/<w:t[^>]*>！<\/w:t>/g) ?? []).length).toBe(1);
+    expect((out.match(/<w:sdtPr>/g) ?? []).length).toBe(2);
+    expect((out.match(/<w:sdtContent>/g) ?? []).length).toBe(2);
+    expect(WordDocument.openBytes(writeDocx(d)).footer?.paragraphs).toEqual(["第页！"]);
+  });
+
+  it("hands an untouched control back as its own bytes", () => {
+    const part = footerPart(control(`<w:p>${pageFieldRuns()}</w:p>`));
+    expect(footerOf(writeDocx(WordDocument.openBytes(makeFooterDocx(part))))).toBe(part);
+  });
+
+  it("drops a paragraph the page no longer holds without dropping the control holding it", () => {
+    const part = footerPart(
+      control(`<w:p><w:r><w:t>控件里第一句</w:t></w:r></w:p><w:p><w:r><w:t>控件里第二句</w:t></w:r></w:p>`),
+    );
+    const d = WordDocument.openBytes(makeFooterDocx(part));
+    expect(d.footer?.paragraphs).toEqual(["控件里第一句", "控件里第二句"]);
+    expect(d.setHeaderSegments("footer", [[{ text: "控件里第一句" }]])).toBe(true);
+    const out = footerOf(writeDocx(d));
+    expect(out).toContain('<w:sdtPr><w:id w:val="77"/></w:sdtPr>');
+    expect(out).toContain("<w:sdtContent>");
+    expect(out).not.toContain("控件里第二句");
+    expect(WordDocument.openBytes(writeDocx(d)).footer?.editable).toBe(true);
+  });
+
+  it("draws the control's field as a chip, not as the number it cached", () => {
+    const html = renderWord(WordDocument.openBytes(makeFooterDocx(footerPart(control(`<w:p>${pageFieldRuns(undefined, "2")}</w:p>`)))));
+    expect(html).toContain(">页码<");
+    expect(html).not.toContain(">2<");
+  });
+
+  it("refuses a control that says the edit is not allowed", () => {
+    for (const pr of ['<w:sdtPr><w:id w:val="77"/><w:lock w:val="sdtContentLocked"/></w:sdtPr>', "<w:sdtPr><w:placeholder/></w:sdtPr>"]) {
+      const part = footerPart(control(`<w:p>${pageFieldRuns()}</w:p>`, pr));
+      const d = WordDocument.openBytes(makeFooterDocx(part));
+      expect(d.footer?.editable, pr).toBe(false);
+      expect(footerOf(writeDocx(d)), pr).toBe(part);
+    }
+  });
+
+  it("refuses a control holding anything but paragraphs", () => {
+    const withTable = footerPart(control(`<w:p><w:r><w:t>字</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>格</w:t></w:r></w:p></w:tc></w:tr></w:tbl>`));
+    expect(WordDocument.openBytes(makeFooterDocx(withTable)).footer?.editable).toBe(false);
+    const noProps = `<w:sdt><w:sdtContent><w:p><w:r><w:t>控件</w:t></w:r></w:p></w:sdtContent></w:sdt>`;
+    expect(WordDocument.openBytes(makeFooterDocx(footerPart(noProps))).footer?.editable).toBe(false);
+  });
+
+  it("refuses a control whose content is not pure markup, and one nested past the third", () => {
+    const spaced = `<w:sdt><w:sdtPr><w:id w:val="77"/></w:sdtPr><w:sdtContent>\n<w:p>${pageFieldRuns()}</w:p>\n</w:sdtContent></w:sdt>`;
+    expect(WordDocument.openBytes(makeFooterDocx(footerPart(spaced))).footer?.editable).toBe(false);
+    let deep = `<w:p><w:r><w:t>字</w:t></w:r></w:p>`;
+    for (let i = 0; i < 4; i++) deep = control(deep);
+    expect(WordDocument.openBytes(makeFooterDocx(footerPart(deep))).footer?.editable).toBe(false);
+    let three = `<w:p><w:r><w:t>字</w:t></w:r></w:p>`;
+    for (let i = 0; i < 3; i++) three = control(three);
+    expect(WordDocument.openBytes(makeFooterDocx(footerPart(three))).footer?.editable).toBe(true);
+  });
+
+  it("still shows the words a refused control holds", () => {
+    // Refusing the edit is a statement about writing, not about the page: a footer whose page number sits in
+    // a locked control, or one nested past the level this model claims, still says 「第 … 页」.
+    const locked = footerPart(
+      control(`<w:p><w:r><w:t xml:space="preserve">第 </w:t></w:r>${pageFieldRuns()}<w:r><w:t xml:space="preserve"> 页</w:t></w:r></w:p>`, '<w:sdtPr><w:id w:val="77"/><w:lock w:val="sdtContentLocked"/></w:sdtPr>'),
+    );
+    const d = WordDocument.openBytes(makeFooterDocx(locked));
+    expect(d.footer?.editable).toBe(false);
+    expect(d.footer?.paragraphs.some((p) => p.includes("第") && p.includes("页"))).toBe(true);
+    expect(footerOf(writeDocx(d))).toBe(locked);
+
+    let deep = `<w:p><w:r><w:t>深处有字</w:t></w:r></w:p>`;
+    for (let i = 0; i < 4; i++) deep = control(deep);
+    const dd = WordDocument.openBytes(makeFooterDocx(footerPart(deep)));
+    expect(dd.footer?.editable).toBe(false);
+    expect(renderWord(dd)).toContain("深处有字");
   });
 
   it("labels a page count by what it counts", () => {

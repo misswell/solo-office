@@ -729,6 +729,83 @@ const replaceOnce = (xml: string, from: string, to: string): string => {
 /** What a box's pieces say, in the only form two copies of the same box can be compared in: text and atoms. */
 const hfBoxShape = (segs: HfSegment[]): string => JSON.stringify(segs.map((s) => (s.carry ? `<${s.carry.tag}>` : s.text ?? "")));
 
+/** Whether an element's children account for every byte between its tags, so splicing them back says the same thing. */
+const losslessKids = (xml: string): boolean => {
+  const content = elementContent(xml);
+  return childSpans(content).map((k) => k.xml).join("") === content;
+};
+
+/**
+ * What a content control's properties may say for the read-through to be honest. Every one of the 3 measured
+ * declares `w:id`, and one a `w:docPartObj` (a gallery building block); `w:alias`/`w:tag` only name it. A
+ * `w:lock` or `w:placeholder` is a different promise — WPS would refuse the edit too — and `w:dataBinding`
+ * means the text is not typing but a field some other store fills, so a control holding either stays held.
+ */
+const HF_SDT_PR = new Set(["id", "alias", "tag", "docPartObj"]);
+
+/**
+ * A header/footer part's children, walked in the order the page shows them, with `put` asked for every
+ * paragraph it holds — whether that paragraph sits at the root or inside a content control.
+ *
+ * WPS wraps a footer's page number in `w:sdt`: measured on the local corpus, 3 of the bands still held
+ * read-only are one or two content controls deep around a paragraph carrying `PAGE`, and in two of them
+ * `NUMPAGES` and typed characters as well. The control itself is the file's business, so it travels as its
+ * own bytes and only the paragraph inside it is re-spelled.
+ *
+ * `null` means this band is not a band this model may claim: a table or a revision at the root, a control
+ * that declares no properties or properties beyond a name, one nested past the third level, or bytes between
+ * a container's children that the walk would drop. The reader calls this first and only keeps the part
+ * editable when it gives back a walk, so the save never meets a `null` the read did not already refuse.
+ */
+function bandParagraphs(
+  kids: { tag: string; xml: string }[],
+  put: (span: { xml: string }) => string,
+  depth = 0,
+): string | null {
+  let out = "";
+  for (const k of kids) {
+    if (k.tag === "p") {
+      out += put(k);
+      continue;
+    }
+    if (k.tag === "sdt") {
+      if (depth >= 3 || !losslessKids(k.xml)) return null;
+      const parts = childSpans(elementContent(k.xml));
+      const pr = parts.find((s) => s.tag === "sdtPr");
+      const content = parts.find((s) => s.tag === "sdtContent");
+      if (!pr || !content || !parts.every((s) => s === pr || s === content)) return null;
+      if (!childSpans(elementContent(pr.xml)).every((s) => HF_SDT_PR.has(s.tag))) return null;
+      if (!losslessKids(content.xml)) return null;
+      const body = bandParagraphs(childSpans(elementContent(content.xml)), put, depth + 1);
+      if (body === null) return null;
+      out += replaceOnce(k.xml, content.xml, replaceOnce(content.xml, elementContent(content.xml), body));
+      continue;
+    }
+    if (HF_BLOCKER.test(k.xml)) return null;
+    out += k.xml;
+  }
+  return out;
+}
+
+/**
+ * The paragraphs a band the walk refuses still has to show: its own, plus the ones a content control holds,
+ * however deep. Refusing the edit says nothing about the words — a footer whose page number sits in a locked
+ * control is not an empty footer, and drawing it empty would tell the user their page lost its text. The
+ * bytes are a separate question: the part travels as the file wrote it, so this list only ever feeds the
+ * text view. Capped at eight levels because nesting is the file's choice and the page is not a stack to lose.
+ */
+function bandTextSpans(kids: { tag: string; xml: string }[], depth = 0): { xml: string }[] {
+  const found: { xml: string }[] = [];
+  for (const k of kids) {
+    if (k.tag === "p") found.push(k);
+    else if (k.tag === "sdt" && depth < 8) {
+      const content = childSpans(elementContent(k.xml)).find((s) => s.tag === "sdtContent");
+      if (content) found.push(...bandTextSpans(childSpans(elementContent(content.xml)), depth + 1));
+    }
+  }
+  return found;
+}
+
 /** Which marker of a field a run holds — `begin`, `separate`, `end` — by attribute, whatever prefix spells it. */
 const fldStageOf = (run: string): string | undefined => {
   const m = /<(?:[\w.-]+:)?fldChar\b([^>]*)>/.exec(run);
@@ -894,23 +971,25 @@ function headerFooterXml(hf: HeaderFooter): string {
   const close = /<\/[^>]*>$/.exec(root.xml)?.[0] ?? "";
   const prologue = /^\s*<\?xml[^>]*\?>\s*/.exec(hf.source)?.[0] ?? "";
   const seen = childSpans(elementContent(root.xml));
-  const paras = seen.filter((s) => s.tag === "p");
   let at = -1;
-  const body = seen
-    .map((span) => {
-      if (span.tag !== "p") return span.xml;
-      const segs = hfSegmentsAt(hf, ++at);
-      if (segs === undefined) return "";
-      return sameHfSegments([segs], [hf.baselineSegments?.[at]])
-        ? span.xml
-        : hf.boxedParagraphs?.[at]
-          ? editedBoxParagraph(span, segs, hf.baselineSegments?.[at])
-          : editedParagraph(span, segs, hf.baselineSegments?.[at]);
-    })
-    .join("");
+  const put = (span: { xml: string }): string => {
+    const segs = hfSegmentsAt(hf, ++at);
+    if (segs === undefined) return "";
+    return sameHfSegments([segs], [hf.baselineSegments?.[at]])
+      ? span.xml
+      : hf.boxedParagraphs?.[at]
+        ? editedBoxParagraph(span, segs, hf.baselineSegments?.[at])
+        : editedParagraph(span, segs, hf.baselineSegments?.[at]);
+  };
+  // The same walk the read took, so paragraph i of the model is paragraph i of the bytes whether the file put
+  // it at the root or inside a content control. A band that got here was walked by the read; holding its bytes
+  // beats re-spelling it by a rule the read did not check.
+  const body = bandParagraphs(seen, put);
+  if (body === null) return hf.source;
+  const paras = at + 1;
   const extra = hf.paragraphs
-    .slice(paras.length)
-    .map((_, i) => coalesceHfSegments(hfSegmentsAt(hf, paras.length + i) ?? []))
+    .slice(paras)
+    .map((_, i) => coalesceHfSegments(hfSegmentsAt(hf, paras + i) ?? []))
     .map((segs) => spelledParagraph(segs, "w"))
     .join("");
   return `${prologue}${open}${body}${extra}${close}`;
@@ -1167,9 +1246,6 @@ export class WordDocument {
     this.bandSectIsBody = chain.length === 0 || chain[0]!.fromBody;
     this.readHeaderFooters(pkg, rels, chain);
     this.readComments(pkg, rels);
-    // The body read off its own source text rather than only off the parsed tree, so a child the model
-    // has no fields for — a content control, a customXml island — keeps its bytes and its place instead
-    // of dropping out of the document on the first save.
     // The body read off its own source text rather than only off the parsed tree, so a child the model
     // has no fields for — a content control, a customXml island — keeps its bytes and its place instead
     // of dropping out of the document on the first save.
@@ -2693,11 +2769,16 @@ export class WordDocument {
       // differently, and the save would then rewrite the wrong one.
       const rootSpan = childSpans(partRaw).find((s) => s.tag === (kind === "header" ? "hdr" : "ftr"));
       const seen = rootSpan ? childSpans(elementContent(rootSpan.xml)) : [];
-      const paraSpans = seen.filter((s) => s.tag === "p");
+      const found: { xml: string }[] = [];
+      const walked = bandParagraphs(seen, (s) => (found.push(s), ""));
+      // A band the walk refuses keeps the flat read it always had: its paragraphs as text, whole part held as
+      // its own bytes. Refusing is not the same as dropping what the page was showing, so the text view
+      // reaches into the controls the walk would not edit.
+      const paraSpans = walked === null ? bandTextSpans(seen) : found;
       const parsed = paraSpans.map((s) => hfParagraphSegments(s, () => this.carryKey++));
       // Anything the paragraphs do not account for — a table or a container sitting beside them — is still a
       // reason to hold the part as its own bytes; within them the piece-by-piece read is the stricter rule.
-      const editable = parsed.every((p) => p.ok) && !seen.some((s) => s.tag !== "p" && HF_BLOCKER.test(s.xml));
+      const editable = walked !== null && parsed.every((p) => p.ok);
       const segments = editable ? parsed.map((p) => p.segs) : undefined;
       const paragraphs = segments ? segments.map(hfSegmentsText) : paraSpans.map(hfParagraphText);
       const hf: HeaderFooter = {

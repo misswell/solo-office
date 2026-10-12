@@ -84,12 +84,14 @@ describe("docx body containers", () => {
     expect(saved(doc)).not.toContain("doc-carry");
   });
 
-  it("leaves a container that lives in the header part alone", () => {
+  it("reads a container in the header part into the band, and leaves its bytes alone", () => {
     const bytes = makeContainerInHeaderDocx();
     const headerOf = (b: Uint8Array): string => text(OpcPackage.from(b).bytes("word/header1.xml")!);
     const doc = WordDocument.openBytes(bytes);
-    // A part this model reads as plain text is kept as its own bytes, so its container never needs carrying.
-    expect(doc.header?.editable).toBe(false);
+    // A control that only names itself is one the band now reads through, so its words are the header's own
+    // and show on the page. Nothing was edited there, so the part still travels exactly as the file wrote it.
+    expect(doc.header?.editable).toBe(true);
+    expect(doc.header?.paragraphs).toEqual(["页眉的普通段", "页眉控件的字"]);
     const out = edited(bytes, "改过的正文");
     expect(headerOf(out)).toBe(headerOf(bytes));
     expect(headerOf(out)).toContain('w:alias w:val="页眉控件"');

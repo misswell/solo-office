@@ -389,8 +389,12 @@ export function renderWord(doc: WordDocument): string {
     const paras = area.paragraphs.map((t) => `<div class="hf-p">${esc(t) || "<br>"}</div>`).join("") || '<div class="hf-p"><br></div>';
     const name = which === "header" ? "页眉" : "页脚";
     const tip = area.editable ? `点击编辑${name}` : `此${name}含表格或图片等富内容，暂不支持编辑`;
-    // `hf-bottom` is the rule that puts a footer's padding under its text instead of above it.
-    return `<div class="hf hf-${which}${which === "footer" ? " hf-bottom" : ""}" data-hf="${which}" title="${tip}">${paras}</div>`;
+    // `hf-bottom` is the rule that puts a footer's padding under its text instead of above it. The band
+    // travels with the page's own box variables: it sits beside `.page`, not inside it, so without them the
+    // stylesheet answers with its 794px fallback and a landscape section gets a portrait header — same page,
+    // two widths. The horizontal padding is overridden to the section's margins so the band's text starts at
+    // the same column as the body's.
+    return `<div class="hf hf-${which}${which === "footer" ? " hf-bottom" : ""}" data-hf="${which}" style="${style};padding-left:var(--pad-l);padding-right:var(--pad-r)" title="${tip}">${paras}</div>`;
   };
   return `${hf("header")}<div class="page" style="${style}">${renderBlocks(doc.blocks, doc, new Map(), {
     open: new Set(),

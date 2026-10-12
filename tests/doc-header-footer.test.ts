@@ -27,6 +27,13 @@ const plainFooter = (content: string): string => `${XML_DECL}<w:ftr xmlns:w="${N
 /** A part of the caller's markup, in a file whose body points at it. */
 const withHeader = (body: string): Uint8Array => makeHeaderFooterDocx(`${XML_DECL}<w:hdr xmlns:w="${NS_W}">${body}</w:hdr>`);
 
+/**
+ * The header band's own `style`, which is the only place its box can come from: `renderWord` emits the band
+ * as a sibling of `.page`, so the variables set on the page never reach it and the stylesheet answers with
+ * its portrait 794px fallback — a landscape opening section was drawing a portrait header.
+ */
+const bandStyle = (bytes: Uint8Array): string => /class="hf hf-header[^"]*"[^>]*?style="([^"]*)"/.exec(renderWord(WordDocument.openBytes(bytes)))?.[1] ?? "";
+
 /** Open, set the header's texts, save. */
 const edited = (bytes: Uint8Array, paragraphs: string[]): Uint8Array => {
   const doc = WordDocument.openBytes(bytes);
@@ -250,9 +257,17 @@ describe("docx 页眉页脚：多节文档按节取", () => {
       [11906, 16838],
       [16838, 11906],
     ]);
+  });
+
+  it("gives the band the width of the section that owns it, both ways round", () => {
     // The page box and the band have to come from the same section, or a header belonging to a landscape
     // page gets drawn on a portrait one.
-    expect(renderWord(doc)).toContain(`--page-w:${twipsToPx(11906)}px`);
+    expect(bandStyle(makeTwoSectionDocx())).toContain(`--page-w:${twipsToPx(11906)}px`);
+    expect(bandStyle(makeTwoSectionDocx({ firstLandscape: true }))).toContain(`--page-w:${twipsToPx(16838)}px`);
+    // And the same column the body's text starts in. The stylesheet's own padding is a fixed 96px = 1440
+    // twips, which is the one margin value no file in the corpus uses.
+    expect(bandStyle(makeTwoSectionDocx({ firstMarginTwips: 1800 }))).toContain(`--pad-l:${twipsToPx(1800)}px`);
+    expect(bandStyle(makeTwoSectionDocx())).toContain("padding-left:var(--pad-l)");
   });
 
   it("creates a header the opening section cites, and never a second sectPr", () => {

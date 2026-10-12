@@ -103,9 +103,16 @@ export const LAST_SECTION_HEADER =
  * The corpus is the reason this shape matters: 18 of the 86 files WPS wrote here have more than one section,
  * and in 4 of them the header is cited only by a later one, in 5 the footer is.
  */
-export function makeTwoSectionDocx(o: { firstRef?: string; lastRef?: string } = {}): Uint8Array {
+export function makeTwoSectionDocx(o: { firstRef?: string; lastRef?: string; firstLandscape?: boolean; firstMarginTwips?: number } = {}): Uint8Array {
   const firstRef = o.firstRef === undefined ? '<w:headerReference r:id="rId5" w:type="default"/>' : o.firstRef;
   const lastRef = o.lastRef === undefined ? '<w:headerReference r:id="rId6" w:type="default"/>' : o.lastRef;
+  // The opening section's page box either way round, so a check can tell "the band follows the section that
+  // owns it" from "the band matches a portrait page by coincidence" — the stylesheet's own fallback is 794px.
+  const firstBox = o.firstLandscape ? '<w:pgSz w:w="16838" w:h="11906"/>' : '<w:pgSz w:w="11906" w:h="16838"/>';
+  // 24 of the 24 corpus files that show a band give their opening section margins other than the 1440 default
+  // (15 of them 1800), so the fixture wears that shape too — otherwise a band drawn at the stylesheet's fixed
+  // 96px padding lines up by accident and the check proves nothing.
+  const firstMar = o.firstMarginTwips ?? 1440;
   return zipSync(
     {
       "[Content_Types].xml": strToU8(
@@ -116,7 +123,7 @@ export function makeTwoSectionDocx(o: { firstRef?: string; lastRef?: string } = 
       "word/document.xml": strToU8(
         XML_DECL +
           `<w:document xmlns:w="${NS_W}" xmlns:r="${NS_R}"><w:body>` +
-          `<w:p><w:pPr><w:sectPr w:rsidR="00A1">${firstRef}<w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:pPr><w:r><w:t>第一节</w:t></w:r></w:p>` +
+          `<w:p><w:pPr><w:sectPr w:rsidR="00A1">${firstRef}${firstBox}<w:pgMar w:top="1440" w:right="${firstMar}" w:bottom="1440" w:left="${firstMar}"/></w:sectPr></w:pPr><w:r><w:t>第一节</w:t></w:r></w:p>` +
           `<w:p><w:r><w:t>第二节</w:t></w:r></w:p>` +
           `<w:sectPr w:rsidR="00B2">${lastRef}<w:pgSz w:w="16838" w:h="11906"/></w:sectPr>` +
           `</w:body></w:document>`,

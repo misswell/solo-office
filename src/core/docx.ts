@@ -153,6 +153,13 @@ export interface ParagraphFormatRevision {
   author: string;
   date?: string;
   prev: ParaStyle;
+  /**
+   * That set as the record wrote it, child by child. `ParaStyle` is the eight properties the model can name,
+   * and a paragraph's `w:pPr` holds far more than eight: a refusal rebuilt from those fields put the eight
+   * back and took the record's own `w:shd`, `w:tabs` and `w:snapToGrid` down with them — the same set the
+   * reviewer was being asked to decide.
+   */
+  prevSlots?: PropSlot[];
 }
 
 /**
@@ -747,7 +754,8 @@ export class WordDocument {
     if (own) para.attrsXml = own;
     // The whole `w:pPr` also travels as text. Reading it off the parsed tree would answer "which properties
     // does the model have a field for", which is not the same question as "what did the file write".
-    const carried = paraSlotsOf(childSpans(elementContent(elementOf(childSpans(elementContent(span ?? "")), "pPr"))));
+    const pprXml = elementOf(childSpans(elementContent(span ?? "")), "pPr");
+    const carried = paraSlotsOf(childSpans(elementContent(pprXml)));
     if (carried.length) para.pPrSlots = carried;
     const numPr = pPr.numPr;
     if (numPr) {
@@ -777,12 +785,14 @@ export class WordDocument {
     }
     const paraChange = pPr.pPrChange;
     if (paraChange) {
+      const recorded = paraSlotsOf(spansUnder(pprXml, "pPrChange", "pPr"));
       para.revFormat = {
         kind: "format",
         id: Number(paraChange["@_id"]) || 0,
         author: String(paraChange["@_author"] ?? ""),
         date: paraChange["@_date"],
         prev: paraStyle(paraChange.pPr ?? {}),
+        ...(recorded.length ? { prevSlots: recorded } : {}),
       };
     }
     for (const step of this.paragraphChildren(p, span)) {
@@ -1613,7 +1623,7 @@ export class WordDocument {
         if (gone.has(p)) continue;
         const fmt = p.revFormat;
         if (fmt && (id === undefined || fmt.id === id)) {
-          if (outcome === "reject") this.restoreParaStyle(p, fmt.prev);
+          if (outcome === "reject") this.restoreParaStyle(p, fmt);
           delete p.revFormat;
           touched += 1;
         }
@@ -1686,13 +1696,21 @@ export class WordDocument {
    * previous set, so a property it does not mention was not set — and alignment and indent come from
    * the paragraph's style when the record leaves them out, which is where they belonged before.
    */
-  private restoreParaStyle(p: Paragraph, prev: ParaStyle): void {
+  private restoreParaStyle(p: Paragraph, fmt: ParagraphFormatRevision): void {
+    const prev = fmt.prev;
     for (const key of PARA_STYLE_KEYS) delete p[key];
     Object.assign(p, prev);
     p.styleName = p.styleId ? this.styles.get(p.styleId)?.name : undefined;
-    // The record spells the properties the paragraph owns, so the owned children of its `w:pPr` follow the
-    // restored fields before anything the new style lends is folded back in.
-    syncParaSlots(p);
+    if (fmt.prevSlots?.length) {
+      // The record wrote more than the eight fields can name, so the paragraph takes its set as written;
+      // syncing the slots from fields would re-spell the eight and delete the rest.
+      p.pPrSlots = fmt.prevSlots;
+      p.asRead = { ...prev };
+    } else {
+      // The record spells the properties the paragraph owns, so the owned children of its `w:pPr` follow the
+      // restored fields before anything the new style lends is folded back in.
+      syncParaSlots(p);
+    }
     const inherited = p.styleId ? this.styles.get(p.styleId)?.pPr : undefined;
     p.align = p.align ?? inherited?.align;
     p.indentLeft = p.indentLeft ?? inherited?.indentLeft;

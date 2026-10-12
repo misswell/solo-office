@@ -107,13 +107,31 @@ describe("docx paragraph property fidelity", () => {
     expect(paragraphs(open(writeDocx(refused))).map(textOf)).toContain("被并进来的下段");
   });
 
-  it("puts back the alignment a refused record names without erasing what the paragraph still says", () => {
+  it("puts back the whole set a refused record names, properties no field can hold included", () => {
     const doc = open(makeParaPropsDocx());
     expect(doc.resolveRevisions("reject", 9)).toBe(1);
-    const out = paraXml(save(doc), "格式改动");
-    expect(out).toContain('<w:jc w:val="left"/>');
-    expect(out).toContain("<w:keepNext/>");
-    expect(out).not.toContain("pPrChange");
+    const out = save(doc);
+    // A record holds the previous set as it stood, so refusing puts that set back as it was written: the
+    // alignment it spells, the shading only it names, and the `w:snapToGrid` no field can hold.
+    expect(pPrOf(out, "格式改动")).toBe(
+      '<w:keepNext/><w:shd w:val="clear" w:color="auto" w:fill="E2EFDA"/><w:snapToGrid w:val="0"/><w:jc w:val="left"/>',
+    );
+    expect(paraXml(out, "格式改动")).not.toContain("pPrChange");
+
+    // Accepting keeps the set as it stands and takes only the record with it.
+    const yes = open(makeParaPropsDocx());
+    expect(yes.resolveRevisions("accept", 9)).toBe(1);
+    expect(pPrOf(save(yes), "格式改动")).toBe(
+      '<w:keepNext/><w:shd w:val="clear" w:color="auto" w:fill="FFF2CC"/><w:jc w:val="both"/>',
+    );
+  });
+
+  it("keeps a record's previous set through a round trip so a later refusal still has it", () => {
+    const doc = open(writeDocx(open(makeParaPropsDocx())));
+    const p = paragraphs(doc).find((x) => textOf(x).includes("格式改动"))!;
+    expect(p.revFormat?.prevSlots?.map((s) => s.tag)).toEqual(["keepNext", "shd", "snapToGrid", "jc"]);
+    expect(doc.resolveRevisions("reject", 9)).toBe(1);
+    expect(pPrOf(save(doc), "格式改动")).toContain('w:fill="E2EFDA"');
   });
 
   it("carries a paragraph's properties through every round trip, not just the first", () => {

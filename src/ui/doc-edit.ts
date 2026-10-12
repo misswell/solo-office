@@ -1606,6 +1606,8 @@ export class DocEditor {
     if (!paragraph) return;
     this.snapshot(this.caretPath());
     const was = paraStyleOf(paragraph);
+    // `syncParaSlots` replaces the array, so this reference keeps the set as the paragraph came in with it.
+    const wasSlots = paragraph.pPrSlots;
     if (patch.align !== undefined) paragraph.align = patch.align || undefined;
     if (patch.list !== undefined) {
       const numId = listNumId(this.doc, patch.list);
@@ -1616,7 +1618,7 @@ export class DocEditor {
     // An alignment click on a paragraph that already sits there changes nothing, and a change that is
     // nothing should not be put in front of a reviewer.
     if (this.trackRevisions && JSON.stringify(was) !== JSON.stringify(paraStyleOf(paragraph))) {
-      paragraph.revFormat = this.signParagraphRevision(paragraph, was);
+      paragraph.revFormat = this.signParagraphRevision(paragraph, was, wasSlots);
     }
     const caret = this.caretPath();
     this.render();
@@ -1826,13 +1828,14 @@ export class DocEditor {
 
   /**
    * The same for a paragraph: `prev` is the properties from before this edit, given in by the caller
-   * because the paragraph has already been changed by the time the record is hung on it.
+   * because the paragraph has already been changed by the time the record is hung on it — and so is its
+   * `prevSlots`, since the set the paragraph owned before is what a reviewer gets to refuse.
    */
-  private signParagraphRevision(p: Paragraph, prev: ParaStyle): ParagraphFormatRevision {
+  private signParagraphRevision(p: Paragraph, prev: ParaStyle, prevSlots?: PropSlot[]): ParagraphFormatRevision {
     const mine = p.revFormat?.author === this.authorName ? p.revFormat : undefined;
     if (mine) return mine;
     this.revSeq += 1;
-    return { kind: "format", id: this.revSeq, author: this.authorName, date: stampNow(), prev };
+    return { kind: "format", id: this.revSeq, author: this.authorName, date: stampNow(), prev, ...(prevSlots?.length ? { prevSlots } : {}) };
   }
 
   /**

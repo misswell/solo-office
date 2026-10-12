@@ -1,5 +1,5 @@
 import { strToU8, zipSync } from "fflate";
-import type { Block, BorderSet, Inline, ParaStyle, Paragraph, PropSlot, RunStyle, RowInfo, Table, TableBorder, TableCell, WordDocument } from "./docx.js";
+import type { Block, BorderSet, Inline, ParaStyle, Paragraph, ParagraphFormatRevision, PropSlot, RunStyle, RowInfo, Table, TableBorder, TableCell, WordDocument } from "./docx.js";
 import { bytesOfDataUrl } from "./media.js";
 import { BORDER_ORDER, ROW_REVISION_TAGS, revisionTag } from "./docx.js";
 import { childSpans, elementContent } from "./opc.js";
@@ -103,10 +103,7 @@ function paragraphProps(p: Paragraph): string {
     if (mark && !kids.some((k) => k.tag === "rPr"))
       kids.push({ tag: "rPr", xml: `<w:rPr><w:${revisionTag(mark)} ${revAttrs(mark)}/></w:rPr>` });
     const fmt = p.revFormat;
-    if (fmt) {
-      const inner = paraStyleTags(fmt.prev);
-      kids.push({ tag: "pPrChange", xml: `<w:pPrChange ${revAttrs(fmt)}><w:pPr${inner ? `>${inner}</w:pPr` : "/"}></w:pPrChange>` });
-    }
+    if (fmt) kids.push({ tag: "pPrChange", xml: paraChangeXml(fmt) });
     return kids.length ? `<w:pPr>${kids.map((k) => k.xml).join("")}</w:pPr>` : "";
   }
   const parts: string[] = [];
@@ -125,11 +122,18 @@ function paragraphProps(p: Paragraph): string {
   const mark = p.markRev;
   if (mark) parts.push(`<w:rPr><w:${revisionTag(mark)} ${revAttrs(mark)}/></w:rPr>`);
   const fmt = p.revFormat;
-  if (fmt) {
-    const inner = paraStyleTags(fmt.prev);
-    parts.push(`<w:pPrChange ${revAttrs(fmt)}><w:pPr${inner ? `>${inner}</w:pPr` : "/"}></w:pPrChange>`);
-  }
+  if (fmt) parts.push(paraChangeXml(fmt));
   return parts.length ? `<w:pPr>${parts.join("")}</w:pPr>` : "";
+}
+
+/**
+ * A `w:pPrChange`: the previous set as the record wrote it when it carries one, because a reviewer decides
+ * what the file said and not what this model could name. A record this editor signs on a paragraph it built
+ * itself has no source text, so that one is still spelled from the eight properties the model holds.
+ */
+function paraChangeXml(fmt: ParagraphFormatRevision): string {
+  const inner = fmt.prevSlots?.length ? fmt.prevSlots.map((s) => s.xml).join("") : paraStyleTags(fmt.prev);
+  return `<w:pPrChange ${revAttrs(fmt)}><w:pPr${inner ? `>${inner}</w:pPr` : "/"}></w:pPrChange>`;
 }
 
 /** The properties a `w:pPrChange` carries: the same tags, in the same order, from the recorded set. */

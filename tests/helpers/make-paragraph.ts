@@ -47,7 +47,9 @@ const STYLES = `<w:styles xmlns:w="${NS_W}">
  *
  * Four of its children the model does own (`pStyle`, `pageBreakBefore`, `numPr`, `jc`), and the last of those
  * is also what a paragraph's style can lend it, which is why the third paragraph here has an alignment it
- * never spelled and the fifth has a frame and a section break no field can hold.
+ * never spelled and the fifth has a frame and a section break no field can hold. The fifth also carries a
+ * `w:pPrChange` whose previous set names a shading and a `w:snapToGrid` its current set does not, because a
+ * reviewer decides what the paragraph said before, not what this model can spell.
  */
 export function makeParaPropsDocx(): Uint8Array {
   // The first paragraph's children follow `CT_PPrBase`'s own order, so a test can name the rank one of the
@@ -55,7 +57,7 @@ export function makeParaPropsDocx(): Uint8Array {
   const document = `<w:p><w:pPr><w:keepNext/><w:keepLines/><w:pageBreakBefore/><w:widowControl w:val="0"/><w:suppressLineNumbers/><w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="auto"/></w:pBdr><w:shd w:val="clear" w:color="auto" w:fill="FFF2CC"/><w:tabs><w:tab w:val="right" w:pos="4320"/></w:tabs><w:bidi/><w:adjustRightInd w:val="0"/><w:snapToGrid w:val="0"/><w:spacing w:before="120" w:after="60" w:line="360" w:lineRule="auto"/><w:ind w:left="420" w:right="120" w:firstLine="0"/><w:contextualSpacing/><w:textAlignment w:val="baseline"/><w:outlineLvl w:val="1"/><w:rPr><w:rFonts w:ascii="Times New Roman" w:eastAsia="宋体"/><w:b/><w:color w:val="FF0000"/><w:sz w:val="28"/><w:spacing w:val="20"/><w:highlight w:val="yellow"/></w:rPr></w:pPr><w:r><w:t>整段自述</w:t></w:r></w:p>
 <w:p><w:pPr><w:keepNext/><w:rPr><w:sz w:val="24"/><w:del ${REV(7, "林晓")}/></w:rPr></w:pPr><w:r><w:t>断点被删</w:t></w:r></w:p><w:p><w:r><w:t>被并进来的下段</w:t></w:r></w:p>
 <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>靠样式的对齐</w:t></w:r></w:p>
-<w:p><w:pPr><w:keepNext/><w:jc w:val="both"/><w:pPrChange ${REV(9, "顾峰")}><w:pPr><w:jc w:val="left"/></w:pPr></w:pPrChange></w:pPr><w:r><w:t>格式改动</w:t></w:r></w:p>
+<w:p><w:pPr><w:keepNext/><w:shd w:val="clear" w:color="auto" w:fill="FFF2CC"/><w:jc w:val="both"/><w:pPrChange ${REV(9, "顾峰")}><w:pPr><w:keepNext/><w:shd w:val="clear" w:color="auto" w:fill="E2EFDA"/><w:snapToGrid w:val="0"/><w:jc w:val="left"/></w:pPr></w:pPrChange></w:pPr><w:r><w:t>格式改动</w:t></w:r></w:p>
 <w:p><w:pPr><w:framePr w:wrap="around" w:vAnchor="text" w:hAnchor="text" w:x="108" w:y="1"/><w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr></w:pPr><w:r><w:t>带框与分节</w:t></w:r></w:p>`;
   return pack(document, STYLES);
 }

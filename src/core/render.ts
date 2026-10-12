@@ -384,9 +384,13 @@ export function renderWord(doc: WordDocument): string {
   const hf = (which: "header" | "footer"): string => {
     const area = which === "header" ? doc.header : doc.footer;
     if (!area) return "";
+    // `.hf-p` is `white-space: pre-wrap`, so a tab the part holds stays a tab on screen and comes back as
+    // one when the line is read out of the page again.
     const paras = area.paragraphs.map((t) => `<div class="hf-p">${esc(t) || "<br>"}</div>`).join("") || '<div class="hf-p"><br></div>';
-    const tip = area.editable ? "点击编辑页眉" : "此页眉含表格或图片等富内容，暂不支持编辑";
-    return `<div class="hf hf-${which}" data-hf="${which}" title="${tip}">${paras}</div>`;
+    const name = which === "header" ? "页眉" : "页脚";
+    const tip = area.editable ? `点击编辑${name}` : `此${name}含表格或图片等富内容，暂不支持编辑`;
+    // `hf-bottom` is the rule that puts a footer's padding under its text instead of above it.
+    return `<div class="hf hf-${which}${which === "footer" ? " hf-bottom" : ""}" data-hf="${which}" title="${tip}">${paras}</div>`;
   };
   return `${hf("header")}<div class="page" style="${style}">${renderBlocks(doc.blocks, doc, new Map(), {
     open: new Set(),

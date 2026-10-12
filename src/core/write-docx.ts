@@ -1,7 +1,7 @@
 import { strToU8, zipSync } from "fflate";
 import type { Block, BorderSet, Inline, ParaStyle, Paragraph, ParagraphFormatRevision, PropSlot, RunStyle, RowInfo, Table, TableBorder, TableCell, WordDocument } from "./docx.js";
 import { bytesOfDataUrl } from "./media.js";
-import { BORDER_ORDER, ROW_REVISION_TAGS, revisionTag } from "./docx.js";
+import { BORDER_ORDER, ROW_REVISION_TAGS, preserve, revisionTag } from "./docx.js";
 import { childSpans, elementContent } from "./opc.js";
 import { setChildren } from "./doc-table-revisions.js";
 import { commentDirty, commentElement, commentParaIds, commentsRootInfo, type DocComment } from "./comments.js";
@@ -308,14 +308,6 @@ function textRun(inline: Inline): string {
 
 /** A break goes back as the file wrote it — its type, its `w:clear`, all of it. Ours own is the plain soft return. */
 const breakXml = (inline: Inline): string => inline.brXml ?? "<w:br/>";
-
-/**
- * `xml:space="preserve"` is written when the text would otherwise lose something at its edges, which is the
- * rule WPS follows: of the 5,382 `w:t` in the local corpus it puts the attribute on 960. Spelling it on every
- * one is not a wrong document, it is a different one — and "same bytes when nothing moved" is what an
- * untouched save is measured against here.
- */
-const preserve = (text: string): string => (/^\s|\s$/.test(text) ? ' xml:space="preserve"' : "");
 
 const textTag = (text: string): string => (text === "" ? "" : `<w:t${preserve(text)}>${XML_ESC(text)}</w:t>`);
 

@@ -582,6 +582,12 @@ export interface HeaderFooter {
   paragraphs: string[];
   /** Texts as read, so a save knows whether the part needs regenerating. */
   baseline: string[];
+  /**
+   * The part as the file wrote it, `""` for one this session created. A save splices its edits into
+   * these bytes rather than rebuilding the part, so the root's declarations and every paragraph the
+   * user did not type in travel untouched.
+   */
+  source: string;
 }
 
 export interface NumberLevel {
@@ -596,16 +602,100 @@ const TWIPS_PER_PX = 15;
 export const twipsToPx = (tw: number): number => tw / TWIPS_PER_PX;
 
 const REL_R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+const NS_W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const DECL = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n`;
 const XML_ESC = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-/** A simple header/footer part, regenerated from the texts the model holds. */
+/**
+ * `xml:space="preserve"` goes on a text node only where the text would otherwise lose something at its
+ * edges, which is the rule the files follow: of the 5,382 `w:t` in the local body corpus it puts the
+ * attribute on 960, and of the 70 in its header/footer parts on exactly the 17 that open or close with
+ * whitespace — never on the other 53. Spelling it on every one is not a wrong document, it is a
+ * different one, and "same bytes when nothing moved" is what a save is measured against here.
+ */
+export const preserve = (text: string): string => (/^\s|\s$/.test(text) ? ' xml:space="preserve"' : "");
+
+/**
+ * What the page shows for one header/footer paragraph: every `w:t` of it in source order, with each
+ * literal `w:tab` put as the "\t" the body model gives a tab too. `w:pPr` is stepped over — the `<w:tab>`
+ * children of its `w:tabs` define where a tab lands, they are not text the reader sees.
+ */
+function hfParagraphText(span: { xml: string }): string {
+  let text = "";
+  for (const kid of childSpans(elementContent(span.xml))) {
+    if (kid.tag === "pPr") continue;
+    for (const m of kid.xml.matchAll(/<(?:[\w.-]+:)?t\b([^>]*)>([^<]*)<\/(?:[\w.-]+:)?t>|<(?:[\w.-]+:)?tab[ />]/g)) {
+      text += m[1] === undefined ? "\t" : decodeEntities(m[2] ?? "");
+    }
+  }
+  return text;
+}
+
+/**
+ * A header/footer part after an edit, spliced into the bytes it came in with rather than rebuilt from
+ * the texts: the root tag keeps every declaration the file wrote (the local corpus averages 17 prefixes
+ * per part, every one of them carrying `mc:Ignorable`), a paragraph whose text did not change travels
+ * byte for byte, and a paragraph that did keeps its own `w:pPr` and its first run's `w:rPr`. Rebuilding
+ * the part from `paragraphs` instead — which is what this did — takes the style, the alignment, the font
+ * size and the namespace declarations off every page the user typed in: of the 86 parts in that corpus
+ * a text edit could reach, 85 carry a `w:pStyle` and 18 a `w:jc`.
+ */
 function headerFooterXml(hf: HeaderFooter): string {
+  const root = hf.source ? childSpans(hf.source).find((s) => s.tag === "hdr" || s.tag === "ftr") : undefined;
+  if (!root) return spelledHeaderFooter(hf);
+  const open = root.xml.slice(0, root.xml.indexOf(">") + 1);
+  const close = /<\/[^>]*>$/.exec(root.xml)?.[0] ?? "";
+  const prologue = /^\s*<\?xml[^>]*\?>\s*/.exec(hf.source)?.[0] ?? "";
+  const seen = childSpans(elementContent(root.xml));
+  const paras = seen.filter((s) => s.tag === "p");
+  let at = -1;
+  const body = seen
+    .map((span) => {
+      if (span.tag !== "p") return span.xml;
+      const text = hf.paragraphs[++at];
+      if (text === undefined) return "";
+      return text === hf.baseline[at] ? span.xml : editedParagraph(span, text);
+    })
+    .join("");
+  const extra = hf.paragraphs.slice(paras.length).map((t) => spelledParagraph(t, "w")).join("");
+  return `${prologue}${open}${body}${extra}${close}`;
+}
+
+/** A paragraph the model holds text for, rewritten in place: properties kept, runs collapsed into one. */
+function editedParagraph(span: { xml: string }, text: string): string {
+  const prefix = /^<([\w.-]+):/.exec(span.xml)?.[1] ?? "w";
+  const attrs = (/^<[\w.-]*:?p\b([^>]*)>/.exec(span.xml)?.[1] ?? "").replace(/\/\s*$/, "");
+  const kids = childSpans(elementContent(span.xml));
+  // Properties and empty markers come back as written; run content does not, because the text the model
+  // holds is every `w:t` of the paragraph merged into one string, and keeping the runs too would say it
+  // twice. A paragraph with several differently formatted runs is therefore set in the first one's.
+  const kept = kids.filter((k) => k.tag === "pPr" || /^bookmark(Start|End)$/.test(k.tag)).map((k) => k.xml).join("");
+  const first = kids.find((k) => k.tag === "r");
+  const rPrefix = /^<([\w.-]+):/.exec(first?.xml ?? "")?.[1] ?? prefix;
+  const props = first ? childSpans(elementContent(first.xml)).find((k) => k.tag === "rPr")?.xml ?? "" : "";
+  const run = text === "" ? "" : `<${rPrefix}:r>${props}${textXml(text, rPrefix)}</${rPrefix}:r>`;
+  return `<${prefix}:p${attrs}>${kept}${run}</${prefix}:p>`;
+}
+
+/**
+ * The text as markup: a tab the model holds as "\t" goes back as the `w:tab` the file used for it, so a
+ * footer that splits its text across tab stops keeps them through a text edit instead of losing them.
+ */
+const textXml = (text: string, prefix: string): string =>
+  text
+    .split("\t")
+    .map((piece) => (piece === "" ? "" : `<${prefix}:t${preserve(piece)}>${XML_ESC(piece)}</${prefix}:t>`))
+    .join(`<${prefix}:tab/>`);
+
+/** A paragraph the part did not have: one run, one text, nothing invented beside them. */
+const spelledParagraph = (text: string, prefix: string): string =>
+  text === "" ? `<${prefix}:p/>` : `<${prefix}:p><${prefix}:r>${textXml(text, prefix)}</${prefix}:r></${prefix}:p>`;
+
+/** A part this session created, with no bytes to splice into. */
+function spelledHeaderFooter(hf: HeaderFooter): string {
   const root = hf.part.includes("footer") ? "ftr" : "hdr";
-  const body = hf.paragraphs.length
-    ? hf.paragraphs.map((text) => `<w:p><w:r><w:t xml:space="preserve">${XML_ESC(text)}</w:t></w:r></w:p>`).join("")
-    : "<w:p/>";
-  return `${DECL}<w:${root} xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="${REL_R}">${body}</w:${root}>`;
+  const body = hf.paragraphs.length ? hf.paragraphs.map((t) => spelledParagraph(t, "w")).join("") : "<w:p/>";
+  return `${DECL}<w:${root} xmlns:w="${NS_W}" xmlns:r="${REL_R}">${body}</w:${root}>`;
 }
 
 /** A comment body is one `w:p` per line of the editor's text. */
@@ -1246,7 +1336,7 @@ export class WordDocument {
     const highest = this.bodyRels.reduce((max, r) => Math.max(max, Number(/(\d+)$/.exec(r.id)?.[1] ?? 0)), 0);
     const id = `rId${highest + 1}`;
     this.bodyRels.push({ id, type: `${REL_R}/${kind}`, target: `${kind}${n}.xml`, targetMode: "Internal", path: `word/${kind}${n}.xml` });
-    const hf: HeaderFooter = { part: `word/${kind}${n}.xml`, id, editable: true, paragraphs: [""], baseline: ["__new__"] };
+    const hf: HeaderFooter = { part: `word/${kind}${n}.xml`, id, editable: true, paragraphs: [""], baseline: ["__new__"], source: "" };
     if (which === "header") this.header = hf;
     else this.footer = hf;
     return hf;
@@ -2138,41 +2228,45 @@ export class WordDocument {
     const raw = this.bodySectPr;
     if (!raw) return;
     const ns = /xmlns:([A-Za-z0-9_.-]+)="http:\/\/schemas\.openxmlformats\.org\/wordprocessingml\/2006\/main"/.exec(raw);
-    const p = (this.sectPrefix = ns ? ns[1] : "w");
-    this.sectHas = {
-      header: new RegExp(`<${p}:headerReference[\\s/>]`).test(raw),
-      footer: new RegExp(`<${p}:footerReference[\\s/>]`).test(raw),
-    };
+    this.sectPrefix = ns ? ns[1]! : "w";
+    // Read by name, not by position: WPS puts `r:id` before `w:type` on every one of the 59 header and 57
+    // footer references in the local corpus, where the order this used to look for is Word's, so a real
+    // WPS page reported no header at all — nothing to show, nothing to edit, nothing to splice back.
+    const bound = (kind: "header" | "footer") =>
+      childSpans(elementContent(raw))
+        .filter((s) => s.tag === `${kind}Reference`)
+        .map((s) => attrsOf(s.xml));
+    this.sectHas = { header: bound("header").length > 0, footer: bound("footer").length > 0 };
     for (const kind of ["header", "footer"] as const) {
-      // Prefer the default reference; fall back to whichever the section binds.
-      let pick: { id: string } | undefined;
-      for (const m of raw.matchAll(new RegExp(`<${p}:${kind}Reference [^>]*${p}:type="([^"]*)"[^>]*r:id="([^"]*)"[^>]*/>`, "g"))) {
-        if (m[2] && (m[1] === "default" || !pick)) pick = { id: m[2] };
-      }
-      if (!pick) continue;
-      const rel = rels.get(pick.id);
+      // The default reference wins; a section that binds only a first-page or an even one still has the
+      // part it holds.
+      const list = bound(kind);
+      const pick = list.find((a) => a["type"] === "default" && a["id"]) ?? list.find((a) => a["id"]);
+      const id = pick?.["id"];
+      if (!id) continue;
+      const rel = rels.get(id);
       if (!rel) continue;
       const part = pkg.resolve("word/document.xml", rel);
       if (!pkg.parts.has(part)) continue;
       const partRaw = pkg.text(part) ?? "";
-      const xml = pkg.xml(part);
-      const root = kind === "header" ? xml?.hdr : xml?.ftr;
-      const paragraphs = asArray(root?.p).map((pn: any) => {
-        let text = "";
-        for (const r of asArray(pn.r)) {
-          const t = typeof r.t === "string" ? r.t : r.t?.["#text"];
-          if (t) text += String(t);
-        }
-        return text;
-      });
+      // The texts come off the same span scan a save splices into, so paragraph i of the model is
+      // paragraph i of the bytes. Pairing a parsed tree against spans would let the two count paragraphs
+      // differently, and the save would then rewrite the wrong one.
+      const rootSpan = childSpans(partRaw).find((s) => s.tag === (kind === "header" ? "hdr" : "ftr"));
+      const paragraphs = (rootSpan ? childSpans(elementContent(rootSpan.xml)) : [])
+        .filter((s) => s.tag === "p")
+        .map(hfParagraphText);
       const hf: HeaderFooter = {
         part,
-        id: pick.id,
-        // A comment anchored in a header/footer is text this model reads as plain runs,
-        // so regenerating the part would drop the anchor: such parts stay byte-identical.
-        editable: !/<w:(tbl|drawing|pict|fldSimple|fldChar|hyperlink|sdt)[ />]|<w:comment(?:Range|Reference)/.test(partRaw),
+        id,
+        // Anything a flat string cannot say — a field, a picture, a container, a tracked change, a soft
+        // return, an anchored comment — is a reason to leave the part as its own bytes. The prefixes are
+        // matched loosely on purpose: a part that binds the wordprocessingml namespace under another name
+        // is still rich, and reading only `w:` is how a container slipped through and got dropped.
+        editable: !/<(?:[\w.-]+:)?(tbl|drawing|pict|object|fldSimple|fldChar|hyperlink|sdt|ins|del|br|sym)[ />]|<(?:[\w.-]+:)?comment(?:Range|Reference)/.test(partRaw),
         paragraphs,
         baseline: [...paragraphs],
+        source: partRaw,
       };
       if (kind === "header") this.header = hf;
       else this.footer = hf;
@@ -2398,6 +2492,18 @@ function ownAttrs(xml: string | undefined): string {
   const attrs = head.slice(space + 1).trim();
   const text = attrs.endsWith("/") ? attrs.slice(0, -1).trim() : attrs;
   return text ? ` ${text}` : "";
+}
+
+/**
+ * The attributes on an element's own opening tag, keyed by local name: `type`, `id`, `val`. Which one
+ * comes first and what prefix it wears are the file's choice — WPS writes `r:id` then `w:type` where Word
+ * writes the other way round — so an element that names a relationship is looked up by name, not by the
+ * position a particular producer happened to put it in.
+ */
+function attrsOf(xml: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const m of ownAttrs(xml).matchAll(/(?:^|\s)(?:[\w.-]+:)?([\w.-]+)\s*=\s*"([^"]*)"/g)) out[m[1]!] = m[2]!;
+  return out;
 }
 
 /**

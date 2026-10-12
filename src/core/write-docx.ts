@@ -369,10 +369,18 @@ function remapEmbed(xml: string, from: string | undefined, rid: string): string 
  * Anchors keep their place between runs: the range markers are paragraph children and
  * the reference mark is a run of its own, which is how Word writes both.
  */
-function anchorXml(anchor: NonNullable<Inline["anchor"]>): string {
+function anchorXml(anchor: NonNullable<Inline["anchor"]>, from: Inline): string {
   if (anchor.kind === "start") return `<w:commentRangeStart w:id="${anchor.id}"/>`;
   if (anchor.kind === "end") return `<w:commentRangeEnd w:id="${anchor.id}"/>`;
-  return `<w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:commentReference w:id="${anchor.id}"/></w:r>`;
+  // A mark the file wrote keeps the properties the file wrote with it — Word gives this run the
+  // `CommentReference` style, but a document may say more about it than that, and re-spelling the run from one
+  // field is how a save loses markup it never read. Only a mark this editor inserts has no source to answer to,
+  // and that one takes the shape Word writes.
+  const slots = from.rPrSlots;
+  if (!slots) return `<w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:commentReference w:id="${anchor.id}"/></w:r>`;
+  const prefix = /^<([A-Za-z_][-\w.]*):/.exec(slots[0]?.xml ?? "")?.[1] ?? "w";
+  const props = slots.length ? `<${prefix}:rPr>${slots.map((s) => s.xml).join("")}</${prefix}:rPr>` : `<${prefix}:rPr/>`;
+  return `<w:r>${props}<w:commentReference w:id="${anchor.id}"/></w:r>`;
 }
 
 /** Consecutive inlines sharing a link become one `w:hyperlink`, which needs a relationship id. */
@@ -388,7 +396,7 @@ function inlinesXml(inlines: Inline[], rels: RelBuilder): string {
       continue;
     }
     if (inlines[i].anchor) {
-      out.push(anchorXml(inlines[i].anchor!));
+      out.push(anchorXml(inlines[i].anchor!, inlines[i]));
       i += 1;
       continue;
     }
@@ -504,13 +512,15 @@ function tablePropsXml(t: Table): string {
   if (t.tblPrXml) return t.tblPrXml;
   const props = [
     t.styleId ? `<w:tblStyle w:val="${XML_ESC(t.styleId)}"/>` : "",
-    t.widthTwips !== undefined ? `<w:tblW w:w="${Math.round(t.widthTwips)}" w:type="${XML_ESC(t.widthType ?? "dxa")}"/>` : '<w:tblW w:w="0" w:type="auto"/>',
+    // `w:w="0" w:type="auto"` is what "no width declared" already means, so a table that never said one
+    // gains nothing from being given the tag and a save that writes it is inventing a property.
+    t.widthTwips !== undefined ? `<w:tblW w:w="${Math.round(t.widthTwips)}" w:type="${XML_ESC(t.widthType ?? "dxa")}"/>` : "",
     t.align ? `<w:jc w:val="${XML_ESC(t.align)}"/>` : "",
     t.indentTwips !== undefined ? `<w:tblInd w:w="${Math.round(t.indentTwips)}" w:type="dxa"/>` : "",
     bordersXml("tblBorders", t.borders),
     t.layout ? `<w:tblLayout w:type="${XML_ESC(t.layout)}"/>` : "",
   ].join("");
-  return `<w:tblPr>${props}</w:tblPr>`;
+  return props ? `<w:tblPr>${props}</w:tblPr>` : "";
 }
 
 function tableXml(t: Table, rels: RelBuilder): string {
@@ -573,6 +583,13 @@ function bodyXml(doc: WordDocument, rels: RelBuilder): string {
 function sectPrXml(doc: WordDocument): string {
   const preserved = doc.sectionPropertiesXml();
   if (preserved) return preserved;
+  // Nothing to be faithful to and nothing the model read: a file whose body never declared a section stays
+  // that way. Writing `pgSz`/`pgMar` here would pin page geometry the reader was free to choose — and the
+  // spelling this function falls back to (`<w:pgSz/>` with no width or height) declares a page of unknown
+  // size, which is worse than saying nothing. A document created here has no file behind it and keeps the
+  // page the app opens with. A header or footer the editor just added is the one thing that still needs a
+  // section to hang its reference in, so that case keeps spelling one.
+  if (!doc.sections.length && doc.source() && !doc.sectReferenceTags()) return "";
   const s = doc.sections[0];
   const size = s ? ` w:w="${s.pageWidthTwips}" w:h="${s.pageHeightTwips}"` : "";
   const mar = s

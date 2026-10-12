@@ -713,7 +713,13 @@ export class WordDocument {
     const body = docx?.document?.body;
     if (!body) throw new Error("word/document.xml 里找不到 w:body");
     const source = pkg.text("word/document.xml") ?? "";
-    this.bodySectPr = bodySectPrXml(source);
+    // The body-level `sectPr` is where a document binds headers, footers and column layout, and this model
+    // reads none of that — so the direct child keeps its bytes and goes back verbatim. "Direct child" is the
+    // whole rule: a section break in the middle of a document hangs its `sectPr` off a paragraph's `w:pPr`,
+    // and that one travels with the paragraph. Picking the last `sectPr` anywhere in the body text used to
+    // claim such a paragraph's section as the body's own, and the save then wrote it a second time at the
+    // end of the body — one section break became two.
+    this.bodySectPr = bodyChildSpans(source).find((s) => s.tag === "sectPr")?.xml ?? "";
     const root = rootMarkup(source);
     this.rootNamespaces = root.prefixes;
     this.rootIgnorable = root.ignorable;
@@ -1002,9 +1008,11 @@ export class WordDocument {
           break;
         case "commentReference": {
           const id = Number(child.node?.["@_id"]);
-          // The reference mark is re-emitted with Word's own `CommentReference` style, so the
-          // run's own properties are deliberately not carried onto the anchor.
-          if (Number.isFinite(id)) out.push({ text: "", anchor: { id, kind: "ref" } });
+          // The reference mark keeps the `w:rPr` the file wrote for it. Word styles this run
+          // `CommentReference`, and a save that re-spelled the run from that one field would drop whatever else
+          // the file put in there; a mark this editor inserts has no file behind it and gets Word's own shape.
+          if (Number.isFinite(id))
+            out.push({ text: "", anchor: { id, kind: "ref" }, ...(base.rPrSlots ? { rPrSlots: base.rPrSlots } : {}) });
           break;
         }
         case "sym":
@@ -2743,20 +2751,6 @@ function section(sectPr: any): Section {
 
 function unwrap(parsed: any, rootName: string): any {
   return parsed?.[rootName];
-}
-
-/**
- * The body-level `sectPr` is where a document binds headers, footers and column
- * layout, and this model reads none of that — so keep its XML text and put it
- * back verbatim on save instead of regenerating a section that lost its parts.
- */
-function bodySectPrXml(raw: string): string {
-  const ns = /xmlns:([A-Za-z0-9_.-]+)="http:\/\/schemas\.openxmlformats\.org\/wordprocessingml\/2006\/main"/.exec(raw);
-  const prefix = ns ? `${ns[1]}:` : "w:";
-  const open = raw.lastIndexOf(`<${prefix}sectPr`);
-  const close = raw.lastIndexOf(`</${prefix}sectPr>`);
-  if (open < 0 || close < open) return "";
-  return raw.slice(open, close + `</${prefix}sectPr>`.length);
 }
 
 /**

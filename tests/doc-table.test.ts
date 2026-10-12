@@ -240,7 +240,9 @@ describe("docx tables built by the editor", () => {
       rows: [[{ paragraphs: [], widthTwips: 4513 }, { paragraphs: [], widthTwips: 4513 }]],
     });
     const out = saved(doc);
-    expect(out).toContain("<w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr>");
+    // 表格自己没声明宽度，就不写 `w:tblW`：`w:w="0" w:type="auto"` 说的正是"没声明"，
+    // 为一列宽度都没定的表补上这一句只是写出模型自己造的属性。宽度由 `w:tblGrid` 与单元格各自的说法带着。
+    expect(out).not.toContain("<w:tblPr>");
     expect(out).toContain('<w:tblGrid><w:gridCol w:w="4513"/><w:gridCol w:w="4513"/></w:tblGrid>');
     expect(out).toContain('<w:tcPr><w:tcW w:w="4513" w:type="dxa"/></w:tcPr>');
     expect(tableOf(open(writeDocx(doc))).columnWidths).toEqual([4513, 4513]);

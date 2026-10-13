@@ -795,16 +795,34 @@ function commentsXml(list: DocComment[], rootAttrs: string): string {
 const commentRuns = (runs: Inline[]): string => runs.filter((r) => !r.anchor).map(textRun).join("");
 
 /**
+ * `w:nsid` / `w:tmpl` 那两枚 id：WPS 自己写的件里是 8 位大写十六进制，看着随机。这里由 `abstractId` 算出来，
+ * 所以同一份件反复保存是同一串字节（重写一遍就会让"只改了列表"的一次保存动满篇）。
+ */
+const hexId = (seed: string, id: number): string => {
+  let h = 0x811c9dc5;
+  for (const ch of `${seed}:${id}`) {
+    h ^= ch.charCodeAt(0);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  h = Math.imul(h ^ (h >>> 15), 0x27d4eb2d) >>> 0;
+  return (h >>> 0).toString(16).toUpperCase().padStart(8, "0");
+};
+
+/**
  * A list definition the model had to invent, because the file named no such shape (docx.ts
  * `ensureListNumbering`). The part is never rebuilt from the model — the definitions the document came with,
  * its `w:numPicBullet`, its `mc:` alternates and everything else this writer does not read travel as the bytes
  * that came in, and these are *joined onto* them. §17.4's one ordering rule holds either way: every
  * `w:abstractNum` precedes every `w:num`.
  *
- * What the level states is the core the corpus really does spell — `start`, `numFmt`, `lvlText`, `lvlJc` — and
- * no indentation or `w:suff`, which are layout claims this build has no evidence for. A part whose root this
- * cannot find comes back untouched: inventing a root around bytes of unknown shape would be the bigger lie, and
- * the paragraph then draws the definition-less list it was before the click.
+ * The spelling follows what WPS writes for its own single-level definitions: every `w:abstractNum` in the
+ * bundle's 11 distinct numbering parts opens `w:nsid` / `w:multiLevelType` / `w:tmpl` (23 of 23), every `w:lvl`
+ * carries `w:ilvl` then `w:tentative="0"` (55 of 55), and `w:start` is `1` on 52 of those 55. What it does *not*
+ * follow is `w:suff` and `w:pPr/w:ind`: among the single-level definitions 13 of 19 state `w:suff` but split
+ * 7 `space` / 6 `nothing`, and only 6 of 19 state any `w:pPr` — a layout claim with no majority to copy, so the
+ * level keeps the core the corpus really does spell. A part whose root this cannot find comes back untouched:
+ * inventing a root around bytes of unknown shape would be the bigger lie, and the paragraph then draws the
+ * definition-less list it was before the click.
  */
 function numberingXml(carried: string | undefined, adds: ListAddition[]): string {
   // Whatever prefix the part's own root declared is the prefix these elements use; `w:` is what every file in
@@ -815,8 +833,11 @@ function numberingXml(carried: string | undefined, adds: ListAddition[]): string
     adds
       .map(
         (a) =>
-          `<${q("abstractNum")} ${q("abstractNumId")}="${a.abstractId}"><${q("multiLevelType")} ${q("val")}="singleLevel"/>` +
-          `<${q("lvl")} ${q("ilvl")}="0"><${q("start")} ${q("val")}="1"/><${q("numFmt")} ${q("val")}="${a.numFmt}"/>` +
+          `<${q("abstractNum")} ${q("abstractNumId")}="${a.abstractId}">` +
+          `<${q("nsid")} ${q("val")}="${hexId("nsid", a.abstractId)}"/>` +
+          `<${q("multiLevelType")} ${q("val")}="singleLevel"/>` +
+          `<${q("tmpl")} ${q("val")}="${hexId("tmpl", a.abstractId)}"/>` +
+          `<${q("lvl")} ${q("ilvl")}="0" ${q("tentative")}="0"><${q("start")} ${q("val")}="1"/><${q("numFmt")} ${q("val")}="${a.numFmt}"/>` +
           `<${q("lvlText")} ${q("val")}="${XML_ESC(a.lvlText)}"/><${q("lvlJc")} ${q("val")}="left"/></${q("lvl")}>` +
           `</${q("abstractNum")}>`,
       )

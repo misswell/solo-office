@@ -719,6 +719,65 @@ describe("列表按钮在没有编号定义的文档上：定义由模型补，�
     expect((num.match(/<w:num /g) ?? []).length).toBe(2);
   });
 
+  it("补的那条按 WPS 自己的拼法写：nsid/multiLevelType/tmpl 三句在前，级上 w:ilvl 后跟 w:tentative 说假", () => {
+    // 实测：包内 11 份不同的件、23 条 `w:abstractNum` 全是这个顺序；55 条 `w:lvl` 55/55 都写 tentative，字面 1 位且为假。
+    const doc = bare("点到列表的一句");
+    click(doc, "点到列表的一句", "bullet");
+    const num = numberingOrNull(writeDocx(doc));
+    const at = (s: string): number => num.indexOf(s);
+    expect(at('<w:nsid w:val="')).toBeGreaterThanOrEqual(0);
+    expect(at('<w:nsid')).toBeLessThan(at('<w:multiLevelType'));
+    expect(at('<w:multiLevelType')).toBeLessThan(at('<w:tmpl'));
+    expect(at('<w:tmpl')).toBeLessThan(at('<w:lvl '));
+    expect(num).toContain('<w:lvl w:ilvl="0" w:tentative="0"><w:start w:val="1"/>');
+    // 两枚 id 各 8 位大写十六进制——WPS 的件里 20/23 带字母、3/23 全是数字，形状一致。
+    expect(num).toMatch(/<w:nsid w:val="[0-9A-F]{8}"\/>/);
+    expect(num).toMatch(/<w:tmpl w:val="[0-9A-F]{8}"\/>/);
+  });
+
+  it("suff 与 ind 还是不补：值对半开的东西不替文件编", () => {
+    // 单级的 WPS 定义里 13/19 写了 `w:suff`，却是 7 space / 6 nothing 对半；只有 6/19 写过 `w:pPr`。
+    const doc = bare("点到编号的一句");
+    click(doc, "点到编号的一句", "number");
+    const num = numberingOrNull(writeDocx(doc));
+    expect(num).not.toContain("<w:suff");
+    expect(num).not.toContain("<w:ind");
+    expect(num).not.toContain("<w:pPr");
+  });
+
+  it("两枚 id 由 abstractId 决定：两类定义各自不撞，再保存一次那一段逐字节不变", () => {
+    const doc = bare("甲", "乙", "丙");
+    click(doc, "甲", "bullet");
+    click(doc, "乙", "number");
+    const [a, b] = doc.listAdditions();
+    const first = numberingOrNull(writeDocx(doc));
+    const idsOf = (part: string, id: number): string[] => {
+      const block = new RegExp(`<w:abstractNum w:abstractNumId="${id}">([\\s\\S]*?)</w:abstractNum>`).exec(part)?.[1] ?? "";
+      return [...block.matchAll(/<w:(?:nsid|tmpl) w:val="([^"]*)"/g)].map((m) => m[1]);
+    };
+    expect(idsOf(first, a.abstractId)).toHaveLength(2);
+    expect(new Set([...idsOf(first, a.abstractId), ...idsOf(first, b.abstractId)]).size).toBe(4);
+    // 又动了一次正文（不是列表）：那条定义不该换 id，否则"只改了一行"的保存会重排整个部件。
+    doc.blocks.push({ kind: "paragraph", inlines: [{ text: "再补一句" }] });
+    expect(idsOf(numberingOrNull(writeDocx(doc)), a.abstractId)).toEqual(idsOf(first, a.abstractId));
+  });
+
+  it("带 nsid/tmpl/tentative 的件读得回来：再打开那颗点照旧，`w:ilvl` 也还在件自己说过的那一级", () => {
+    const doc = bare("点到列表的一句");
+    const numId = click(doc, "点到列表的一句", "bullet");
+    const out = writeDocx(doc);
+    const back = open(out);
+    expect(back.levelOf(numId, 0)).toMatchObject({ numFmt: "bullet", lvlText: "•", ilvl: 0 });
+    expect(drawn(back, "点到列表的一句")).toBe("•");
+    // #95 那一条守得住：补的是 singleLevel，第 1 级仍然没有，Tab 走不进去。
+    expect(back.levelOf(numId, 1)).toBeUndefined();
+    // 重新打开以后再保存：件里未建模的部分原样带回，一条定义都不多。
+    back.blocks.push({ kind: "paragraph", inlines: [{ text: "补一行" }] });
+    const again = numberingOrNull(writeDocx(back));
+    expect((again.match(/<w:abstractNum /g) ?? []).length).toBe(1);
+    expect(again).toBe(numberingOrNull(out));
+  });
+
   it("没点列表的文档不新建部件，也不添关系与内容类型（无中生有）", () => {
     const plain = bare("一句");
     plain.blocks.push({ kind: "paragraph", inlines: [{ text: "补一行" }] });

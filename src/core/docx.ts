@@ -583,6 +583,47 @@ export interface Section {
 }
 
 /**
+ * The page a document is drawn on when its file spelled no section: A4 with a one-inch margin all round. This
+ * has one owner because three places ask the same question — the view's fallback, a new document's first page,
+ * and 「页面设置」 pre-filling a file that stated nothing — and a page the app shows and a save writes have to be
+ * the same box.
+ */
+export const DEFAULT_SECTION: Section = { pageWidthTwips: 11906, pageHeightTwips: 16838, margins: { top: 1440, right: 1440, bottom: 1440, left: 1440 } };
+
+/** A copy, because a section a caller mutates must not move the page every other document falls back to. */
+const copySection = (s: Section): Section => ({ pageWidthTwips: s.pageWidthTwips, pageHeightTwips: s.pageHeightTwips, margins: { ...s.margins } });
+
+/**
+ * What 「页面设置」 changes on the section the page is drawn from: the seven `w:pgMar` distances and the paper's
+ * direction. Distances left out are left alone — a file that never stated `w:header` keeps saying nothing about
+ * it, because the number this model would write is a guess at the producer's default, not the user's intent.
+ *
+ * `landscape` is the direction the page is wanted in, and it is what decides which edge is which: the two
+ * dimensions already on the section are re-assigned rather than replaced, so A4 stays A4 when it turns. Measured
+ * on the 86 files this machine's WPS wrote: all 22 landscape sections spell `w:orient="landscape"` **and** put
+ * the long edge in `w:w`, and none of the 93 portrait sections spells `w:orient` at all. So turning back to
+ * portrait removes the attribute; writing `w:orient="portrait"` would be a spelling no file here uses.
+ */
+export interface PageSetup {
+  topTwips: number;
+  rightTwips: number;
+  bottomTwips: number;
+  leftTwips: number;
+  headerTwips?: number;
+  footerTwips?: number;
+  gutterTwips?: number;
+  landscape: boolean;
+}
+
+/** The page geometry a save owes, with the bytes it was read from — everything `setPageSetup` can move. */
+export interface PageGeometry {
+  bodySectPr: string;
+  sections: Section[];
+  /** True once the user set geometry on a document whose sections said nothing, so a save owes a `w:sectPr`. */
+  stated: boolean;
+}
+
+/**
  * One paragraph of a header/footer part, taken apart in the order the file wrote it: the text this model
  * edits, with the fields it carries standing between the pieces. A field is not text — its bytes go back
  * unchanged and the number it last cached never joins what the user typed — so it needs an entry of its
@@ -653,6 +694,14 @@ export interface NumberLevel {
 
 const TWIPS_PER_PX = 15;
 export const twipsToPx = (tw: number): number => tw / TWIPS_PER_PX;
+
+/**
+ * 「页面设置」上的单位是厘米，而 `w:pgSz`/`w:pgMar` 以缇计（ECMA-376 §17.3.2.13），一条 = 1440/2.54 缇。
+ * 换算只在输入框与模型之间做一次：模型和字节始终存缇，所以一次改动的往返不会因为反复取整而漂。
+ */
+const TWIPS_PER_CM = 1440 / 2.54;
+export const twipsToCm = (tw: number): number => tw / TWIPS_PER_CM;
+export const cmToTwips = (cm: number): number => Math.round(cm * TWIPS_PER_CM);
 
 const REL_R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 const NS_W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
@@ -1150,6 +1199,12 @@ export class WordDocument {
   private hyperlinks = new Map<string, string>();
   private bodyRels: { id: string; type: string; target: string; targetMode: string; path: string }[] = [];
   private bodySectPr = "";
+  /**
+   * Set once the user asked for page geometry on a document whose file spelled no section at all. It decides
+   * whether a save owes a `w:sectPr`: writing one that the file never had is what this model refuses on a plain
+   * save, and what a page-setup change explicitly asks for.
+   */
+  private pageSetupSeen = false;
   /** Namespace declarations read off the document root, so carried markup keeps its prefixes bound. */
   private rootNamespaces: Record<string, string> = {};
   private rootIgnorable = "";
@@ -1201,6 +1256,9 @@ export class WordDocument {
   static blank(): WordDocument {
     const doc = new WordDocument();
     doc.blocks.push({ kind: "paragraph", inlines: [] });
+    // Its page is stated rather than left for a fallback, so a save writes the box the app drew — `<w:pgSz/>`
+    // with no width on it is a page of unknown size, and 「页面设置」 on a new document has to start from numbers.
+    doc.sections = [copySection(DEFAULT_SECTION)];
     return doc;
   }
 
@@ -1223,7 +1281,12 @@ export class WordDocument {
     return (
       JSON.stringify(this.blocks, (key, value) => (key === "src" && typeof value === "string" ? value.length : value)) +
       JSON.stringify([hfSavedState(this.header), hfSavedState(this.footer)]) +
-      JSON.stringify(this.comments.map(commentState))
+      JSON.stringify(this.comments.map(commentState)) +
+      // Page geometry lives outside `blocks`: the body's `w:sectPr` travels as bytes the model does not own,
+      // and the section list is what the page is drawn from. Left out of the hash, a margin change would read
+      // as an untouched document — and `writeDocx` returns the source package byte for byte while `edited` says
+      // nothing changed, so the user's dialog would close and the file on disk keep the old page.
+      JSON.stringify([this.bodySectPr, this.sections, this.pageSetupSeen])
     );
   }
 
@@ -1744,6 +1807,74 @@ export class WordDocument {
     if (!tags) return xml;
     const open = new RegExp(`(<${this.sectPrefix}:sectPr[^>]*>)`);
     return open.test(xml) ? xml.replace(open, `$1${tags}`) : xml;
+  }
+
+  /**
+   * Whether a save owes page geometry the read file never had: true only after 「页面设置」 was used on a
+   * document with no section bytes to edit.
+   */
+  pageSetupStated(): boolean {
+    return this.pageSetupSeen;
+  }
+
+  /**
+   * Applies 「页面设置」 to the section the page is drawn from. Which bytes that is depends on how the document
+   * starts: one that opens with a section break hangs its `w:sectPr` off a paragraph, and one whose file never
+   * spelled a section has no bytes to edit at all — only then does the geometry live in the model alone, and a
+   * save writes the section the user asked for. A document with several sections has its **first** one changed,
+   * because that is the page this app draws and the one the dialog showed numbers from.
+   */
+  setPageSetup(set: PageSetup): void {
+    if (this.bandSectIsBody && this.bodySectPr) {
+      this.bodySectPr = applyPageSetup(this.bodySectPr, set);
+      this.sections = [sectionGeometry(this.bodySectPr), ...this.sections.slice(1)];
+      return;
+    }
+    // The same paragraph `citeBandReference` looks for: the first block-level section break, which is the one
+    // the opening page belongs to.
+    for (const b of this.blocks) {
+      if (b.kind !== "paragraph") continue;
+      const at = b.pPrSlots?.findIndex((s) => s.tag === "sectPr") ?? -1;
+      if (!b.pPrSlots || at < 0) continue;
+      const patched = applyPageSetup(b.pPrSlots[at]!.xml, set);
+      b.pPrSlots[at] = { tag: "sectPr", xml: patched };
+      this.sections = [sectionGeometry(patched), ...this.sections.slice(1)];
+      return;
+    }
+    const base = this.sections[0] ?? copySection(DEFAULT_SECTION);
+    const box = pageBoxOf(set, base.pageWidthTwips, base.pageHeightTwips);
+    this.sections = [
+      {
+        pageWidthTwips: box.w,
+        pageHeightTwips: box.h,
+        margins: {
+          top: set.topTwips,
+          right: set.rightTwips,
+          bottom: set.bottomTwips,
+          left: set.leftTwips,
+          header: set.headerTwips ?? base.margins.header,
+          footer: set.footerTwips ?? base.margins.footer,
+          gutter: set.gutterTwips ?? base.margins.gutter,
+        },
+      },
+      ...this.sections.slice(1),
+    ];
+    this.pageSetupSeen = true;
+  }
+
+  /**
+   * Everything 「页面设置」 moves, so one step back puts the page where it was. The paragraph's own section break
+   * needs no mention here — it travels inside `blocks`, which an undo step already clones — but the body's
+   * `w:sectPr` and the geometry read off it sit outside that clone.
+   */
+  pageGeometryState(): PageGeometry {
+    return { bodySectPr: this.bodySectPr, sections: structuredClone(this.sections), stated: this.pageSetupSeen };
+  }
+
+  restorePageGeometry(state: PageGeometry): void {
+    this.bodySectPr = state.bodySectPr;
+    this.sections = structuredClone(state.sections);
+    this.pageSetupSeen = state.stated;
   }
 
   /**
@@ -3089,6 +3220,161 @@ function attrsOf(xml: string): Record<string, string> {
 }
 
 /**
+ * The attributes of one element's own opening tag, with the named values moved. An attribute the file already
+ * spelled keeps the position and the prefix it was read with and only changes its value, so a section written
+ * with `w:top` before `w:left` still reads that way after a page-setup change; `null` drops one, which is how
+ * turning back to portrait removes `w:orient` rather than spelling a value no file in the corpus uses. A name
+ * the file never spelled is added at the place ECMA-376 gives it among its neighbours (`order`), with the
+ * prefix borrowed from the element's own attributes rather than assumed.
+ *
+ * `xmlns` declarations are kept byte for byte and are never renamed: their local half (`xmlns:w` → `w`) would
+ * otherwise collide with the `w:w` of a `w:pgSz` and rewrite a namespace as a page width.
+ */
+function patchElementAttrs(xml: string, fallbackPrefix: string, updates: Record<string, string | null>, order: string[]): string {
+  const gt = xml.indexOf(">");
+  if (gt < 0) return xml;
+  const head = xml.slice(1, gt);
+  const space = head.search(/\s/);
+  const name = space < 0 ? head : head.slice(0, space);
+  const spelled = ownAttrs(xml).trim();
+  const given: { key: string; name: string; text: string }[] = [];
+  for (const match of spelled.matchAll(/(?:[\w.-]+:)?[\w.-]+\s*=\s*"[^"]*"/g)) {
+    const eq = match[0]!.indexOf("=");
+    const attr = match[0]!.slice(0, eq).trim();
+    const local = attr.includes(":") ? attr.slice(attr.indexOf(":") + 1) : attr;
+    given.push({ key: attr.startsWith("xmlns") ? attr : local, name: attr, text: match[0]! });
+  }
+  // A prefix written on one of the element's own value attributes is the prefix its names use. An `xmlns`
+  // declaration is not evidence about which alias the words namespace got here, and neither is a colon inside
+  // a quoted value, so both are passed over.
+  const prefixed = given.find((a) => !a.name.startsWith("xmlns") && a.name.includes(":"));
+  const prefix = prefixed ? prefixed.name.slice(0, prefixed.name.indexOf(":")) : fallbackPrefix;
+  const rank = (key: string): number => {
+    const at = order.indexOf(key);
+    return at < 0 ? order.length : at;
+  };
+  // One pass over what the file spelled: named here, its value moves; named as `null`, it goes; anything
+  // else the file wrote stays exactly as it was read.
+  const kept = given
+    .filter((a) => updates[a.key] !== null)
+    .map((a) => ({ key: a.key, text: a.key in updates ? `${a.name}="${updates[a.key]}"` : a.text }));
+  for (const [key, value] of Object.entries(updates)) {
+    if (value === null || kept.some((a) => a.key === key)) continue;
+    const text = `${prefix}:${key}="${value}"`;
+    const at = kept.findIndex((a) => rank(a.key) > rank(key));
+    if (at < 0) kept.push({ key, text });
+    else kept.splice(at, 0, { key, text });
+  }
+  const attrs = kept.length ? ` ${kept.map((a) => a.text).join(" ")}` : "";
+  const closed = xml[gt - 1] === "/";
+  return `<${name}${attrs}${closed ? "/>" : `>`}${xml.slice(gt + 1)}`;
+}
+
+/**
+ * The order ECMA-376 §17.3 (CT_SectPr) allows a section's children in, which is the order the 115 sections in
+ * the 86 files this machine's WPS wrote use: references, then `w:pgSz`, then `w:pgMar`, then the column and grid
+ * settings. A geometry element a minimal file never spelled goes in at its place in this sequence rather than at
+ * the end, because a `w:pgMar` written after `w:docGrid` is a file Word refuses to open.
+ */
+const SECT_CHILD_ORDER = [
+  "headerReference",
+  "footerReference",
+  "footnotePr",
+  "endnotePr",
+  "type",
+  "pgSz",
+  "pgMar",
+  "paperSrc",
+  "pgBorders",
+  "lnNumType",
+  "pgNumType",
+  "cols",
+  "formProt",
+  "vAlign",
+  "noEndnote",
+  "titlePg",
+  "textDirection",
+  "bidi",
+  "rtlGutter",
+  "docGrid",
+  "printerSettings",
+];
+
+/** The attributes `w:pgSz` spells, in the order the corpus uses. */
+const PG_SZ_ATTRS = ["w", "h", "orient"];
+/** The attributes `w:pgMar` spells, in the order all 115 in the corpus use (§17.3.2.13). */
+const PG_MAR_ATTRS = ["top", "right", "bottom", "left", "header", "footer", "gutter"];
+
+/** The page box 「页面设置」 asks for: the section's two edges, with the long one first. */
+function pageBoxOf(set: PageSetup, widthTwips: number, heightTwips: number): { w: number; h: number } {
+  const long = Math.max(widthTwips, heightTwips);
+  const short = Math.min(widthTwips, heightTwips);
+  return { w: set.landscape ? long : short, h: set.landscape ? short : long };
+}
+
+/** The seven `w:pgMar` values this setup writes; a distance the dialog left out is not written at all. */
+function marginAttrsOf(set: PageSetup): Record<string, string> {
+  const attrs: Record<string, string> = {
+    top: String(set.topTwips),
+    right: String(set.rightTwips),
+    bottom: String(set.bottomTwips),
+    left: String(set.leftTwips),
+  };
+  for (const [key, value] of [["header", set.headerTwips], ["footer", set.footerTwips], ["gutter", set.gutterTwips]] as const) {
+    if (value !== undefined) attrs[key] = String(value);
+  }
+  return attrs;
+}
+
+/**
+ * A section's own bytes with the page geometry written into them. Only `w:pgSz` and `w:pgMar` change, and each
+ * is edited where it stands; a section that never spelled one gets it at its place in §17.3's sequence. Every
+ * other child keeps its bytes **and** the text written between the children — the 115 sections in the 86 files
+ * this machine's WPS wrote have none, but a producer that indents its markup should not lose it here, because
+ * the change the user asked for was the page, not the file's layout.
+ */
+function applyPageSetup(xml: string, set: PageSetup): string {
+  const prefix = /^<([A-Za-z_][-\w.]*):/.exec(xml)?.[1] ?? "w";
+  const content = elementContent(xml);
+  const read = (tag: string): Record<string, string> => attrsOf(childSpans(content).find((k) => k.tag === tag)?.xml ?? "");
+  // A section that spelled no page box is not a page of unknown size: this is the box the app drew it with.
+  const sz = read("pgSz");
+  const box = pageBoxOf(set, Number(sz["w"]) || DEFAULT_SECTION.pageWidthTwips, Number(sz["h"]) || DEFAULT_SECTION.pageHeightTwips);
+  const size: Record<string, string | null> = { w: String(box.w), h: String(box.h), orient: set.landscape ? "landscape" : null };
+  const mar: Record<string, string | null> = marginAttrsOf(set);
+  const written = (tag: string): Record<string, string | null> => (tag === "pgSz" ? size : mar);
+  const order = (tag: string): string[] => (tag === "pgSz" ? PG_SZ_ATTRS : PG_MAR_ATTRS);
+
+  // Walk the children in the order they were read, keeping the bytes between them.
+  const kids: { tag: string; xml: string }[] = childSpans(content);
+  const pieces: { tag: string; xml: string; before: string }[] = [];
+  let rest = content;
+  for (const k of kids) {
+    const at = rest.indexOf(k.xml);
+    if (at < 0) continue;
+    pieces.push({ tag: k.tag, xml: k.tag === "pgSz" || k.tag === "pgMar" ? patchElementAttrs(k.xml, prefix, written(k.tag), order(k.tag)) : k.xml, before: rest.slice(0, at) });
+    rest = rest.slice(at + k.xml.length);
+  }
+  for (const tag of ["pgSz", "pgMar"] as const) {
+    if (pieces.some((p) => p.tag === tag)) continue;
+    const attrs = Object.entries(written(tag))
+      .filter(([, v]) => v !== null)
+      .sort((a, b) => order(tag).indexOf(a[0]) - order(tag).indexOf(b[0]))
+      .map(([k, v]) => `${prefix}:${k}="${v}"`)
+      .join(" ");
+    const at = pieces.findIndex((p) => SECT_CHILD_ORDER.indexOf(p.tag) > SECT_CHILD_ORDER.indexOf(tag));
+    const el = { tag, xml: `<${prefix}:${tag} ${attrs}/>`, before: at < 0 ? "" : pieces[at]!.before };
+    if (at >= 0) pieces[at] = { ...pieces[at]!, before: "" };
+    if (at < 0) pieces.push(el);
+    else pieces.splice(at, 0, el);
+  }
+  const gt = xml.indexOf(">");
+  const open = xml[gt - 1] === "/" ? `${xml.slice(0, gt - 1)}>` : xml.slice(0, gt + 1);
+  const name = /^<([^/\s>]+)/.exec(xml)?.[1] ?? "";
+  return `${open}${pieces.map((p) => p.before + p.xml).join("")}${rest}</${name}>`;
+}
+
+/**
  * The children of one `w:trPr` as slots, each with its own source text. `w:trPr` is the only property set
  * a save rewrites child by child: the row's signature is decided one at a time, and the neighbour that
  * stays has to stay where the file put it. The signature itself is not a slot — it leaves the set here and
@@ -3442,13 +3728,13 @@ function sectionGeometry(xml: string): Section {
   };
   const mar = attrs("pgMar");
   return {
-    pageWidthTwips: num(attrs("pgSz"), "w", 11906),
-    pageHeightTwips: num(attrs("pgSz"), "h", 16838),
+    pageWidthTwips: num(attrs("pgSz"), "w", DEFAULT_SECTION.pageWidthTwips),
+    pageHeightTwips: num(attrs("pgSz"), "h", DEFAULT_SECTION.pageHeightTwips),
     margins: {
-      top: num(mar, "top", 1440),
-      right: num(mar, "right", 1440),
-      bottom: num(mar, "bottom", 1440),
-      left: num(mar, "left", 1440),
+      top: num(mar, "top", DEFAULT_SECTION.margins.top),
+      right: num(mar, "right", DEFAULT_SECTION.margins.right),
+      bottom: num(mar, "bottom", DEFAULT_SECTION.margins.bottom),
+      left: num(mar, "left", DEFAULT_SECTION.margins.left),
       header: stated(mar, "header"),
       footer: stated(mar, "footer"),
       gutter: stated(mar, "gutter"),

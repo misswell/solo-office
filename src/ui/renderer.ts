@@ -510,6 +510,11 @@ function buildDocRibbon(): void {
     },
   );
 
+  // 布局: the page itself rather than the text on it. WPS keeps these on a 「页面」 tab; this ribbon is one row,
+  // so the page's own settings get a group at the end, before the zoom control.
+  const layout = group();
+  button(layout, "pageSetup", "页面设置", "页边距、页眉页脚距离、装订线与纸张方向", () => editor?.openPageSetup());
+
   ribbon.append(zoomGroup());
 }
 

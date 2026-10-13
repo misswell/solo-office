@@ -1,13 +1,14 @@
-import type { Block, Carried, CarriedInline, FormatRevision, HfSegment, Inline, ParaStyle, Paragraph, ParagraphFormatRevision, PropSlot, Revision, RevisionEntry, RowInfo, RunStyle, Table, TableCell, WordDocument } from "../core/docx.js";
+import type { Block, Carried, CarriedInline, FormatRevision, HfSegment, Inline, ParaStyle, PageGeometry, PageSetup, Paragraph, ParagraphFormatRevision, PropSlot, Revision, RevisionEntry, RowInfo, RunStyle, Table, TableCell, WordDocument } from "../core/docx.js";
 import type { CommentAnchor, DocComment } from "../core/comments.js";
 import { bodyShape, commentTexts } from "../core/comments.js";
-import { RUN_STYLE_KEYS, paraStyleOf, runStyleOf, stampNow, syncParaSlots, twipsToPx } from "../core/docx.js";
+import { DEFAULT_SECTION, RUN_STYLE_KEYS, paraStyleOf, runStyleOf, stampNow, syncParaSlots, twipsToPx } from "../core/docx.js";
 import type { CellWhere, TableEdit } from "../core/doc-table-ops.js";
 import { cellRangeFor, cellRect, cellsInRect, cellsInSweep, deleteColumnHere, deleteRowHere, gridColumns, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, splitHere, splitTableAt } from "../core/doc-table-ops.js";
 import { IMAGE_EXT_BY_MIME } from "../core/media.js";
 import { CARRY_CLASS, CARRY_STYLE, RUN_CARRY_CLASS, highlightColor, renderWord } from "../core/render.js";
 import { CommentPanel } from "./doc-comments.js";
 import { ReviewPanel } from "./doc-review.js";
+import { openPageSetup as showPageSetupDialog } from "./doc-page-setup.js";
 
 /**
  * Word-like editing over the whole page: one `contenteditable` owns the body, so
@@ -388,8 +389,13 @@ export class DocEditor {
   private carries = new Map<number, Inline>();
   private placedCarries = new Set<number>();
   private nextId = 1;
-  private undoStack: { blocks: Block[]; comments: DocComment[]; caret: DocPath | null }[] = [];
-  private redoStack: { blocks: Block[]; comments: DocComment[]; caret: DocPath | null }[] = [];
+  /**
+   * An undo step holds the text, the comments and the page. `blocks` carries a paragraph's own section break,
+   * but the body's `w:sectPr` and the geometry the page is drawn from sit outside it, so a step that cloned
+   * only the text would step a margin change back into a page that never moved.
+   */
+  private undoStack: { blocks: Block[]; comments: DocComment[]; caret: DocPath | null; page: PageGeometry }[] = [];
+  private redoStack: { blocks: Block[]; comments: DocComment[]; caret: DocPath | null; page: PageGeometry }[] = [];
   private burst = 0;
   private composing = false;
   private panel: CommentPanel | null = null;
@@ -1078,7 +1084,12 @@ export class DocEditor {
 
   private snapshot(at: DocPath | null): void {
     this.burst = 0;
-    this.undoStack.push({ blocks: structuredClone(this.doc.blocks), comments: structuredClone(this.doc.comments), caret: at });
+    this.undoStack.push({
+      blocks: structuredClone(this.doc.blocks),
+      comments: structuredClone(this.doc.comments),
+      caret: at,
+      page: this.doc.pageGeometryState(),
+    });
     if (this.undoStack.length > 80) this.undoStack.shift();
     this.redoStack.length = 0;
   }
@@ -1094,9 +1105,10 @@ export class DocEditor {
   undo(): boolean {
     const step = this.undoStack.pop();
     if (!step) return false;
-    this.redoStack.push({ blocks: structuredClone(this.doc.blocks), comments: structuredClone(this.doc.comments), caret: this.caretPath() });
+    this.redoStack.push({ blocks: structuredClone(this.doc.blocks), comments: structuredClone(this.doc.comments), caret: this.caretPath(), page: this.doc.pageGeometryState() });
     this.doc.blocks = step.blocks;
     this.doc.comments = step.comments;
+    this.doc.restorePageGeometry(step.page);
     this.render();
     if (step.caret) this.setCaret(this.clamp(step.caret));
     this.hooks.changed();
@@ -1106,13 +1118,31 @@ export class DocEditor {
   redo(): boolean {
     const step = this.redoStack.pop();
     if (!step) return false;
-    this.undoStack.push({ blocks: structuredClone(this.doc.blocks), comments: structuredClone(this.doc.comments), caret: this.caretPath() });
+    this.undoStack.push({ blocks: structuredClone(this.doc.blocks), comments: structuredClone(this.doc.comments), caret: this.caretPath(), page: this.doc.pageGeometryState() });
     this.doc.blocks = step.blocks;
     this.doc.comments = step.comments;
+    this.doc.restorePageGeometry(step.page);
     this.render();
     if (step.caret) this.setCaret(this.clamp(step.caret));
     this.hooks.changed();
     return true;
+  }
+
+  /** Ribbon command: 「页面设置」 for the page this document is drawn on. */
+  openPageSetup(): void {
+    showPageSetupDialog(this.doc.sections[0] ?? DEFAULT_SECTION, (set) => this.applyPageSetup(set));
+  }
+
+  /**
+   * 「页面设置」: the page's margins, band distances, binding width and direction. The section the numbers land in
+   * is the one the page is drawn from, and the step back restores it — the body's own `w:sectPr` bytes included,
+   * which a text-only undo step would leave where they were.
+   */
+  applyPageSetup(set: PageSetup): void {
+    this.snapshot(this.caretPath());
+    this.doc.setPageSetup(set);
+    this.render();
+    this.hooks.changed();
   }
 
   // -------------------------------------------------------------- inserting
@@ -1541,8 +1571,8 @@ export class DocEditor {
     const paragraph = caret ? this.paragraphAt(caret.path) : undefined;
     if (!caret || !paragraph) return;
     const { width, height } = await imageSize(url);
-    const section = this.doc.sections[0];
-    const usable = section ? twipsToPx(section.pageWidthTwips - section.margins.left - (section.margins.gutter ?? 0) - section.margins.right) : 620;
+    const section = this.doc.sections[0] ?? DEFAULT_SECTION;
+    const usable = twipsToPx(section.pageWidthTwips - section.margins.left - (section.margins.gutter ?? 0) - section.margins.right);
     const scale = Math.min(1, usable / Math.max(1, width));
     const w = Math.max(24, Math.round(width * scale));
     const h = Math.max(24, Math.round(height * scale));

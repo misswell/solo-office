@@ -1,5 +1,5 @@
 import type { Block, Carried, CarriedInline, Inline, Paragraph, RowInfo, Table, TableBorder, WordDocument } from "./docx.js";
-import { twipsToPx } from "./docx.js";
+import { DEFAULT_SECTION, twipsToPx } from "./docx.js";
 import type { CommentAnchor } from "./comments.js";
 import type { Presentation, Shape, SlideParagraph } from "./pptx.js";
 
@@ -399,7 +399,7 @@ function renderCarried(b: Carried): string {
 }
 
 export function renderWord(doc: WordDocument): string {
-  const sec = doc.sections[0] ?? { pageWidthTwips: 11906, pageHeightTwips: 16838, margins: { top: 1440, right: 1440, bottom: 1440, left: 1440 } };
+  const sec = doc.sections[0] ?? DEFAULT_SECTION;
   const width = twipsToPx(sec.pageWidthTwips);
   // `w:gutter` is binding width: ECMA-376 §17.3.2.13 adds it to the margin on the binding side, and a section
   // that says nothing has none. This model holds no RTL section, so the binding side is the left.

@@ -598,11 +598,22 @@ function sectPrXml(doc: WordDocument): string {
   // `sectReferenceTags()` is the other half of the question, and it says "" for more than "nothing owed":
   // a band whose section is a paragraph's break is cited there by the model itself, so that section's
   // bytes already travel and spelling a second one beside it is how a file gained a `sectPr` it never had.
-  if (doc.source() && !doc.sectReferenceTags()) return "";
+  //
+  // A third case decides the other way: 「页面设置」 on a file that never spelled a section. The numbers the user
+  // typed are then the whole reason a section exists, and a save that dropped them would close the dialog on
+  // a page that never moved.
+  if (doc.source() && !doc.sectReferenceTags() && !doc.pageSetupStated()) return "";
   const s = doc.sections[0];
-  const size = s ? ` w:w="${s.pageWidthTwips}" w:h="${s.pageHeightTwips}"` : "";
+  // `w:orient` is spelled only for landscape. None of the 93 portrait sections in the 86 files this machine's
+  // WPS wrote says so, while every one of its 22 landscape sections does and puts the long edge in `w:w`.
+  const size = s
+    ? ` w:w="${s.pageWidthTwips}" w:h="${s.pageHeightTwips}"${s.pageWidthTwips > s.pageHeightTwips ? ' w:orient="landscape"' : ""}`
+    : "";
+  // The three distances §17.3.2.13 counts from the paper edge follow the four body margins in the order WPS
+  // spells all seven, and a section that holds no number for one says nothing about it here.
+  const dist = (key: "header" | "footer" | "gutter"): string => (s?.margins[key] === undefined ? "" : ` w:${key}="${s.margins[key]}"`);
   const mar = s
-    ? ` w:top="${s.margins.top}" w:right="${s.margins.right}" w:bottom="${s.margins.bottom}" w:left="${s.margins.left}"`
+    ? ` w:top="${s.margins.top}" w:right="${s.margins.right}" w:bottom="${s.margins.bottom}" w:left="${s.margins.left}"${dist("header")}${dist("footer")}${dist("gutter")}`
     : ' w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"';
   // Header/footer references lead the section's children in schema order.
   return `<w:sectPr>${doc.sectReferenceTags()}<w:pgSz${size}/><w:pgMar${mar}/></w:sectPr>`;

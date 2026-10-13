@@ -53,6 +53,14 @@ export const WPS_LANDSCAPE_SECTION =
 export const WPS_SECTION_NO_DISTANCES = '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>';
 
 /**
+ * The near-A4 sheet four of the 115 corpus sections spell — 11900×16840, six twips off A4's width and two off
+ * its height. It is on no preset list, so it is the case where a dialog that offered sizes by name could pull
+ * the page to the named sheet instead of keeping the numbers the file wrote.
+ */
+export const WPS_NEAR_A4_SECTION =
+  '<w:sectPr><w:pgSz w:w="11900" w:h="16840"/><w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800" w:header="851" w:footer="992" w:gutter="0"/><w:cols w:space="425"/><w:docGrid w:type="lines" w:linePitch="312"/></w:sectPr>';
+
+/**
  * A section that says nothing about the page at all: no `w:pgSz`, no `w:pgMar`, and a column setting that has
  * to survive a change untouched. This is the shape a minimal producer writes, and the one where a save owes
  * both elements rather than neither.

@@ -3,7 +3,7 @@ import { WordDocument, cmToTwips, twipsToCm, twipsToPx } from "../src/core/docx.
 import { writeDocx } from "../src/core/write-docx.js";
 import { OpcPackage, text } from "../src/core/opc.js";
 import { renderWord } from "../src/core/render.js";
-import { BARE_SECTION, WPS_LANDSCAPE_SECTION, WPS_SECTION, WPS_SECTION_NO_DISTANCES, makePageSetupDocx } from "./helpers/make-page-setup.js";
+import { BARE_SECTION, WPS_LANDSCAPE_SECTION, WPS_NEAR_A4_SECTION, WPS_SECTION, WPS_SECTION_NO_DISTANCES, makePageSetupDocx } from "./helpers/make-page-setup.js";
 import { makeFullPageDistanceDocx, makeTwoSectionDocx } from "./helpers/make-header-footer.js";
 
 const bodyXml = (bytes: Uint8Array): string => text(OpcPackage.from(bytes).bytes("word/document.xml")!);
@@ -12,7 +12,7 @@ const tagOf = (xml: string, name: string): string => new RegExp(`<w:${name}[^>]*
 /** The page box's own `style`, which is where the geometry a user typed has to show up. */
 const page = (html: string): string => /<div class="page" style="([^"]*)"/.exec(html)?.[1] ?? "";
 
-describe("docx 页面设置：页边距/距离/装订线/方向", () => {
+describe("docx 页面设置：纸张大小/页边距/距离/装订线/方向", () => {
   it("converts centimetres the way the dialog counts them", () => {
     // The dialog speaks centimetres and the part counts twips (§17.3.2.13): 1440 twips = 2.54 cm exactly.
     expect(cmToTwips(2.54)).toBe(1440);
@@ -181,5 +181,115 @@ describe("docx 页面设置：页边距/距离/装订线/方向", () => {
     const again = WordDocument.openBytes(writeDocx(fresh));
     expect(again.sections[0]!.margins.gutter).toBe(283);
     expect(page(renderWord(again))).toContain(`--page-w:${twipsToPx(16838)}px`);
+  });
+
+  it("counts the sheets the list names in the twips a producer spells", () => {
+    // `w:pgSz` stores two distances and has no names (§17.3.2.12), so 「A4」 is the dialog's word for a pair.
+    // Each pair below is the sheet as its own standard states it — ISO 216 in whole tenths of a centimetre,
+    // 信纸 as 8.5×11 inches — and each converts to the count the files carry: A4's 11906×16838 is what 111 of
+    // the corpus's 115 sections write.
+    expect([cmToTwips(21), cmToTwips(29.7)]).toEqual([11906, 16838]);
+    expect([cmToTwips(29.7), cmToTwips(42)]).toEqual([16838, 23811]);
+    expect([cmToTwips(14.8), cmToTwips(21)]).toEqual([8391, 11906]);
+    expect([cmToTwips(25), cmToTwips(35.3)]).toEqual([14173, 20013]);
+    expect([cmToTwips(17.6), cmToTwips(25)]).toEqual([9978, 14173]);
+    expect([cmToTwips(21.59), cmToTwips(27.94)]).toEqual([12240, 15840]);
+    expect([cmToTwips(21.59), cmToTwips(35.56)]).toEqual([12240, 20160]);
+  });
+
+  it("cuts the page to the sheet the dialog named and moves nothing else", () => {
+    const doc = WordDocument.openBytes(makePageSetupDocx(WPS_SECTION));
+    doc.setPageSetup({ topTwips: 1440, rightTwips: 1440, bottomTwips: 1440, leftTwips: 1800, landscape: false, paperTwips: { width: 12240, height: 15840 } });
+    const xml = bodyXml(writeDocx(doc));
+    expect(tagOf(xml, "pgSz")).toBe('<w:pgSz w:w="12240" w:h="15840"/>');
+    // The distances the file stated stay its own, and the settings behind them travel byte for byte: the sheet
+    // is the only thing that was asked for.
+    expect(tagOf(xml, "pgMar")).toBe('<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1800" w:header="851" w:footer="992" w:gutter="283"/>');
+    expect(xml).toContain('<w:cols w:space="425"/><w:docGrid w:type="lines" w:linePitch="312"/></w:sectPr>');
+    expect(WordDocument.openBytes(writeDocx(doc)).sections[0]!.pageWidthTwips).toBe(12240);
+    expect(page(renderWord(doc))).toContain(`--page-w:${twipsToPx(12240)}px`);
+  });
+
+  it("reads the two numbers as one sheet, whichever box each was typed in", () => {
+    // The direction the page lies in is asked about on its own, so the pair only says which sheet: the long
+    // edge goes where the direction puts it. A dialog that filled 宽 with 42 while 横向 is checked and one that
+    // filled it with 29.7 while 纵向 is checked both say A3 lying as the radios ask.
+    const bytes = makePageSetupDocx(WPS_SECTION);
+    const margins = { topTwips: 1440, rightTwips: 1440, bottomTwips: 1440, leftTwips: 1440 };
+    const sideways = WordDocument.openBytes(bytes);
+    sideways.setPageSetup({ ...margins, landscape: true, paperTwips: { width: 23811, height: 16838 } });
+    expect(tagOf(bodyXml(writeDocx(sideways)), "pgSz")).toBe('<w:pgSz w:w="23811" w:h="16838" w:orient="landscape"/>');
+
+    const upright = WordDocument.openBytes(bytes);
+    upright.setPageSetup({ ...margins, landscape: false, paperTwips: { width: 23811, height: 16838 } });
+    expect(tagOf(bodyXml(writeDocx(upright)), "pgSz")).toBe('<w:pgSz w:w="16838" w:h="23811"/>');
+  });
+
+  it("keeps the page lying as it was when only the sheet moves", () => {
+    const doc = WordDocument.openBytes(makePageSetupDocx(WPS_LANDSCAPE_SECTION));
+    doc.setPageSetup({ topTwips: 1440, rightTwips: 1440, bottomTwips: 1440, leftTwips: 1440, landscape: true, paperTwips: { width: 15840, height: 12240 } });
+    // Long edge first and `w:orient` still spelled — the only way the corpus's 22 landscape sections say it.
+    expect(tagOf(bodyXml(writeDocx(doc)), "pgSz")).toBe('<w:pgSz w:w="15840" w:h="12240" w:orient="landscape"/>');
+  });
+
+  it("leaves a sheet that is on no list at the numbers the file wrote", () => {
+    // Four of the 115 sections spell a near-A4 11900×16840. The dialog shows it as 自定义尺寸 with 20.99 and
+    // 29.704 in the boxes, and those centimetres have to convert back to the pair the file had — a page pulled
+    // to the nearest named sheet would be six twips narrower than the document it came from.
+    expect(cmToTwips(Number(twipsToCm(11900).toFixed(3)))).toBe(11900);
+    expect(cmToTwips(Number(twipsToCm(16840).toFixed(3)))).toBe(16840);
+    const doc = WordDocument.openBytes(makePageSetupDocx(WPS_NEAR_A4_SECTION));
+    doc.setPageSetup({ topTwips: 1440, rightTwips: 1800, bottomTwips: 1440, leftTwips: 1800, landscape: false, paperTwips: { width: 11900, height: 16840 } });
+    const xml = bodyXml(writeDocx(doc));
+    expect(tagOf(xml, "pgSz")).toBe('<w:pgSz w:w="11900" w:h="16840"/>');
+    expect(tagOf(xml, "pgMar")).toContain('w:right="1800"');
+    expect(WordDocument.openBytes(writeDocx(doc)).sections[0]!.pageHeightTwips).toBe(16840);
+  });
+
+  it("patches the page box where it stands, keeping its order and what this model has no field for", () => {
+    const doc = WordDocument.openBytes(
+      makePageSetupDocx('<w:sectPr><w:pgSz w:h="16838" w:w="11906" w:code="9"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>'),
+    );
+    doc.setPageSetup({ topTwips: 1440, rightTwips: 1440, bottomTwips: 1440, leftTwips: 1440, landscape: false, paperTwips: { width: 12240, height: 15840 } });
+    // `w:h` first because the file wrote it first, and `w:code` because nothing here owns it. Rewriting the
+    // element to §17.3's order would take both down, and a portrait page gains no `w:orient` on its own.
+    expect(tagOf(bodyXml(writeDocx(doc)), "pgSz")).toBe('<w:pgSz w:h="15840" w:w="12240" w:code="9"/>');
+  });
+
+  it("writes a sheet the user named into a section that stated none, ahead of the margins", () => {
+    const doc = WordDocument.openBytes(makePageSetupDocx(BARE_SECTION));
+    doc.setPageSetup({ topTwips: 1440, rightTwips: 1800, bottomTwips: 1440, leftTwips: 1800, landscape: false, paperTwips: { width: 9978, height: 14173 } });
+    expect(bodyXml(writeDocx(doc))).toContain('<w:sectPr><w:pgSz w:w="9978" w:h="14173"/><w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800"/><w:cols w:space="720"/></w:sectPr>');
+  });
+
+  it("resizes the section that hangs off a paragraph, and only that one", () => {
+    const doc = WordDocument.openBytes(makePageSetupDocx(WPS_SECTION, "paragraph"));
+    doc.setPageSetup({ topTwips: 1440, rightTwips: 1440, bottomTwips: 1440, leftTwips: 1440, landscape: false, paperTwips: { width: 14173, height: 20013 } });
+    const xml = bodyXml(writeDocx(doc));
+    expect(tagOf(xml, "pgSz")).toBe('<w:pgSz w:w="14173" w:h="20013"/>');
+    expect(xml.indexOf('<w:pgSz w:w="14173"')).toBeLessThan(xml.indexOf("</w:pPr>"));
+    expect((xml.match(/<w:sectPr/g) ?? []).length).toBe(1);
+    expect(WordDocument.openBytes(writeDocx(doc)).sections[0]!.pageHeightTwips).toBe(20013);
+  });
+
+  it("sizes the page a document created here is drawn on", () => {
+    const fresh = WordDocument.blank();
+    fresh.setPageSetup({ topTwips: 1440, rightTwips: 1440, bottomTwips: 1440, leftTwips: 1440, landscape: false, paperTwips: { width: 14173, height: 20013 } });
+    const xml = bodyXml(writeDocx(fresh));
+    expect(tagOf(xml, "pgSz")).toBe('<w:pgSz w:w="14173" w:h="20013"/>');
+    const again = WordDocument.openBytes(writeDocx(fresh));
+    expect(again.sections[0]!.pageWidthTwips).toBe(14173);
+    expect(page(renderWord(again))).toContain(`--page-w:${twipsToPx(14173)}px`);
+  });
+
+  it("carries the sheet in the undo step, with the margins", () => {
+    const doc = WordDocument.openBytes(makePageSetupDocx(WPS_SECTION));
+    const before = doc.pageGeometryState();
+    doc.setPageSetup({ topTwips: 1440, rightTwips: 1440, bottomTwips: 1440, leftTwips: 1440, landscape: false, paperTwips: { width: 12240, height: 15840 } });
+    expect(doc.sections[0]!.pageWidthTwips).toBe(12240);
+    doc.restorePageGeometry(before);
+    expect(doc.sections[0]!.pageWidthTwips).toBe(11906);
+    expect(doc.pageGeometryState().bodySectPr).toBe(before.bodySectPr);
+    expect(doc.edited).toBe(false);
   });
 });

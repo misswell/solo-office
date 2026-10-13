@@ -612,6 +612,14 @@ export interface PageSetup {
   headerTwips?: number;
   footerTwips?: number;
   gutterTwips?: number;
+  /**
+   * The sheet of paper in twips, as the dialog's 宽/高 boxes state it, and always as a pair — one edge from
+   * the new paper and the other from the old one would be a sheet no standard defines. Left out, the section
+   * keeps the sheet it had and only its direction changes. `w:pgSz` has no presets: every one of the 115
+   * sections in the 86 files this machine's WPS wrote spells its own two numbers (89 and 22 of them A4's
+   * 11906×16838 and 16838×11906, 4 a near-A4 11900×16840), so a name like 「A4」 belongs to the dialog, not here.
+   */
+  paperTwips?: { width: number; height: number };
   landscape: boolean;
 }
 
@@ -3305,10 +3313,15 @@ const PG_SZ_ATTRS = ["w", "h", "orient"];
 /** The attributes `w:pgMar` spells, in the order all 115 in the corpus use (§17.3.2.13). */
 const PG_MAR_ATTRS = ["top", "right", "bottom", "left", "header", "footer", "gutter"];
 
-/** The page box 「页面设置」 asks for: the section's two edges, with the long one first. */
+/** The page box 「页面设置」 asks for: the sheet wanted (or the one the section already had), turned as asked. */
 function pageBoxOf(set: PageSetup, widthTwips: number, heightTwips: number): { w: number; h: number } {
-  const long = Math.max(widthTwips, heightTwips);
-  const short = Math.min(widthTwips, heightTwips);
+  // The two numbers say which sheet, `landscape` only says which way it lies — so the long edge lands in `w:w`
+  // for landscape and in `w:h` for portrait. A dialog that sets Letter while the page lies sideways therefore
+  // writes 15840×12240, the same spelling the corpus's 22 landscape sections use.
+  const a = set.paperTwips?.width ?? widthTwips;
+  const b = set.paperTwips?.height ?? heightTwips;
+  const long = Math.max(a, b);
+  const short = Math.min(a, b);
   return { w: set.landscape ? long : short, h: set.landscape ? short : long };
 }
 

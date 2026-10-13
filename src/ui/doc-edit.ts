@@ -7,6 +7,7 @@ import { cellRangeFor, cellRect, cellsInRect, cellsInSweep, deleteColumnHere, de
 import { IMAGE_EXT_BY_MIME } from "../core/media.js";
 import { CARRY_CLASS, CARRY_STYLE, RUN_CARRY_CLASS, highlightColor, renderWord } from "../core/render.js";
 import { CommentPanel } from "./doc-comments.js";
+import { ReviewPanel } from "./doc-review.js";
 
 /**
  * Word-like editing over the whole page: one `contenteditable` owns the body, so
@@ -392,6 +393,8 @@ export class DocEditor {
   private burst = 0;
   private composing = false;
   private panel: CommentPanel | null = null;
+  /** 审阅窗格: the list of every change still waiting, docked beside the page. */
+  private review: ReviewPanel | null = null;
   /**
    * Comment ids the body anchored at or after the last render. Only these may be pruned when
    * their markers go away: a comment anchored in a header or footer has no body anchor to find.
@@ -435,6 +438,7 @@ export class DocEditor {
     this.revSeq = this.doc.maxRevisionId();
     injectRevisionStyles();
     this.panel = new CommentPanel(this.host, this);
+    this.review = new ReviewPanel(this.host, this);
     document.addEventListener("selectionchange", () => this.trackSelection());
     this.render();
   }
@@ -443,6 +447,7 @@ export class DocEditor {
     this.host.innerHTML = renderWord(this.doc);
     this.page = this.host.querySelector<HTMLElement>(".page");
     this.panel?.mount();
+    this.review?.mount();
     if (!this.page) return;
     this.page.contentEditable = "true";
     this.page.spellcheck = false;
@@ -1792,6 +1797,9 @@ export class DocEditor {
     )];
     if (!marks.length) return false;
     this.activeRevision = entry.id;
+    // One change at a time is lit: without this, stepping 下一条 accumulates a flash on every row visited
+    // since the last render, so the page shows the whole walk rather than where the reader now is.
+    for (const stale of this.page.querySelectorAll<HTMLElement>(".solo-rev-hit")) stale.classList.remove("solo-rev-hit");
     for (const el of marks) el.classList.add("solo-rev-hit");
     const sel = document.getSelection();
     if (sel) {
@@ -1810,6 +1818,7 @@ export class DocEditor {
     }
     marks[0].scrollIntoView({ block: "center" });
     this.page.focus({ preventScroll: true });
+    this.review?.revealFromPage(entry.id);
     return true;
   }
 
@@ -1872,6 +1881,15 @@ export class DocEditor {
   setRevisionView(view: RevisionView): void {
     this.revisionView = view;
     this.applyRevisionView();
+  }
+
+  /** Ribbon toggle for 审阅窗格; with no argument it flips whatever the reader is looking at. */
+  showReviewPane(show = !(this.review?.isOpen() ?? false)): void {
+    this.review?.setOpen(show);
+  }
+
+  get reviewPaneOpen(): boolean {
+    return this.review?.isOpen() ?? false;
   }
 
   get revisionShown(): RevisionView {

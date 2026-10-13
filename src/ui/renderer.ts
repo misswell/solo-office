@@ -8,7 +8,7 @@ import { History } from "../core/history.js";
 import { isError } from "../core/formula.js";
 import { rangeSpec, rect, refOf, type Rect } from "../core/sheet-ops.js";
 import { SheetView } from "./sheet-view.js";
-import { DocEditor, type DocPath } from "./doc-edit.js";
+import { DocEditor, type DocPath, type RevisionView } from "./doc-edit.js";
 import { DeckEditor, type PresetGeometry } from "./deck-edit.js";
 import { DeckShow } from "./deck-show.js";
 import { dataUrl, IMAGE_MIME_BY_EXT } from "../core/media.js";
@@ -468,6 +468,48 @@ function buildDocRibbon(): void {
   button(insert, "header", "页眉", "编辑页眉（无则新建）", () => editor?.openHF("header"));
   button(insert, "footer", "页脚", "编辑页脚（无则新建）", () => editor?.openHF("footer"));
 
+  // 审阅: the commands a reader needs to work through somebody else's changes. WPS keeps these on their own
+  // tab; this ribbon is one row, so they get their own group at the end, before the zoom control.
+  const review = group();
+  button(review, "track", "修订", "修订：开启后编辑记为待判修订，而不是直接落定", () => {
+    if (editor) editor.setTrackChanges(!editor.trackingChanges);
+    syncDocRibbon();
+  });
+  button(review, "revPane", "审阅窗格", "列出全部待判修订：逐条判定、按作者判定、定位到那一处", () => {
+    editor?.showReviewPane();
+    syncDocRibbon();
+  });
+  button(review, "revPrev", "‹", "上一条修订", () => {
+    editor?.stepRevision(-1);
+    syncDocRibbon();
+  });
+  button(review, "revNext", "›", "下一条修订", () => {
+    editor?.stepRevision(1);
+    syncDocRibbon();
+  });
+  button(review, "revAccept", "接受全部", "接受修订：插入的留下，删除的生效", () => {
+    editor?.acceptRevisions();
+    syncDocRibbon();
+  });
+  button(review, "revReject", "拒绝全部", "拒绝修订：删除的文字回来，插入的文字去掉", () => {
+    editor?.rejectRevisions();
+    syncDocRibbon();
+  });
+  chooser(
+    review,
+    "revView",
+    "显示对文档的修改",
+    [
+      ["marks", "显示修订"],
+      ["final", "最终状态"],
+      ["original", "原文"],
+    ],
+    (v) => {
+      editor?.setRevisionView(v as RevisionView);
+      syncDocRibbon();
+    },
+  );
+
   ribbon.append(zoomGroup());
 }
 
@@ -488,6 +530,10 @@ function syncDocRibbon(): void {
   mark("number", state?.list === "number");
   const size = ctl.size as HTMLSelectElement | undefined;
   if (size && state?.sizePt) size.value = String(DOC_SIZES.includes(state.sizePt) ? state.sizePt : DOC_SIZES[4]);
+  mark("track", editor?.trackingChanges ?? false);
+  mark("revPane", editor?.reviewPaneOpen ?? false);
+  const revView = ctl.revView as HTMLSelectElement | undefined;
+  if (revView && editor) revView.value = editor.revisionShown;
   const undoBtn = ctl.undo as HTMLButtonElement | undefined;
   const redoBtn = ctl.redo as HTMLButtonElement | undefined;
   if (undoBtn) undoBtn.disabled = !editor?.canUndo;

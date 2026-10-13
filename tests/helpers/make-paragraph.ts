@@ -180,3 +180,61 @@ export function makeSpacingRevisionDocx(): Uint8Array {
   );
   return pack(document, styles);
 }
+
+/** A style as `word/styles.xml` spells it, for the tests about how far up `w:basedOn` the read walks. */
+export interface ChainStyle {
+  id: string;
+  name?: string;
+  basedOn?: string;
+  /** `w:default="1"`: the style a paragraph that names none falls back on. */
+  isDefault?: boolean;
+  /** The style's `w:pPr` children, written the way the files write them. */
+  pPr?: string;
+  /** `w:type`, needed only for the case that must not leak: a character style that is the default. */
+  type?: "paragraph" | "character";
+}
+
+/**
+ * A styles part of the given styles and one paragraph per entry, for the shape §17.7.2 puts the model's read
+ * against. The census is `.scratch/basedon-chain.ts` over the 86 WPS-written documents:
+ *
+ * - 1,337 paragraph styles, 1,182 of them carrying `w:basedOn` — every one of those references a style the part
+ *   declares, so no chain in these files dangles or circles. Chain depth runs 1 to 4 (155 / 1,011 / 169 / 2
+ *   styles).
+ * - 879 paragraphs ask for a property only an ancestor states it: 501 line heights (every one `w:exact`, at hop
+ *   2 in 453 of them and hop 3 in 48), 327 alignments, 254 indents, 115 段前段后 gaps.
+ * - 38,475 of the 46,258 paragraphs name no style, and 3,147 of those take a property from the default
+ *   paragraph style (1,956 alignments, 613 固定值 heights, 478 of each gap). All 86 files declare a default
+ *   paragraph style, and 47 of them state a line height there.
+ * - `w:docDefaults/w:pPrDefault` states no paragraph property in any of the 86, which is why the fixture's
+ *   `w:docDefaults` carries only the run font and size the files carry.
+ *
+ * The style ids are readable rather than the `a1`/`af0` WPS writes, since a test about which style in the chain
+ * a value came from has to name them; every attribute spelling is the files' own.
+ */
+export function makeChainDocx(
+  styles: readonly ChainStyle[],
+  paras: readonly { readonly pStyle?: string; readonly pPr?: string; readonly text: string }[],
+): Uint8Array {
+  const sx = `<w:styles xmlns:w="${NS_W}">
+<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri"/><w:sz w:val="22"/></w:rPr></w:rPrDefault></w:docDefaults>
+${styles
+  .map((s) => {
+    const attrs = [`w:type="${s.type ?? "paragraph"}"`, s.isDefault ? 'w:default="1"' : "", `w:styleId="${s.id}"`]
+      .filter(Boolean)
+      .join(" ");
+    return `<w:style ${attrs}><w:name w:val="${s.name ?? s.id}"/>${s.basedOn ? `<w:basedOn w:val="${s.basedOn}"/>` : ""}${
+      s.type === "character" ? "" : "<w:qFormat/>"
+    }${s.pPr ? `<w:pPr>${s.pPr}</w:pPr>` : ""}</w:style>`;
+  })
+  .join("\n")}
+</w:styles>`;
+  const document =
+    paras
+      .map((e) => {
+        const kids = [e.pStyle ? `<w:pStyle w:val="${e.pStyle}"/>` : "", e.pPr ?? ""].join("");
+        return `<w:p>${kids ? `<w:pPr>${kids}</w:pPr>` : ""}<w:r><w:t>${e.text}</w:t></w:r></w:p>`;
+      })
+      .join("\n") + `<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800"/></w:sectPr>`;
+  return pack(document, sx);
+}

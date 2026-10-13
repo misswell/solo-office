@@ -1273,13 +1273,28 @@ const commentParagraphs = (text: string): Inline[][] => text.split("\n").map((li
 /** Word's `w:date` shape: UTC to the second. */
 export const stampNow = (): string => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 
+/**
+ * One `w:style` as this model keeps it: the properties it states itself (`pPr`, `rPr`), the style whose
+ * unstated properties it takes over (`basedOn`), and the name the UI shows.
+ */
+export interface StyleDef {
+  name: string;
+  basedOn?: string;
+  rPr?: RunStyle;
+  pPr?: Partial<ParaStyle>;
+}
+
 export class WordDocument {
   blocks: Block[] = [];
   sections: Section[] = [];
   header?: HeaderFooter;
   footer?: HeaderFooter;
   comments: DocComment[] = [];
-  private styles = new Map<string, { name: string; basedOn?: string; rPr?: RunStyle; pPr?: Partial<Paragraph> }>();
+  private styles = new Map<string, StyleDef>();
+  /** The `w:default="1"` paragraph style: what a paragraph that names no style falls back on (§17.7.2). */
+  private defaultParaStyleId?: string;
+  /** Resolved style chains, keyed by the style id the paragraph names. See `paraLent`. */
+  private lentMemo = new Map<string | undefined, Partial<ParaStyle> | undefined>();
   private numbering = new Map<number, NumberLevel[]>();
   private media = new Map<string, string>();
   private pkg?: OpcPackage;
@@ -1421,6 +1436,8 @@ export class WordDocument {
   }
 
   private readStyles(pkg: OpcPackage): void {
+    this.defaultParaStyleId = undefined;
+    this.lentMemo.clear();
     if (!pkg.parts.has("word/styles.xml")) return;
     const st = pkg.xml("word/styles.xml");
     const root = unwrap(st, "styles");
@@ -1435,7 +1452,51 @@ export class WordDocument {
         rPr,
         pPr: s.pPr ? { align: s.pPr.jc?.["@_val"], ...indOf(s.pPr.ind), ...spacingOf(s.pPr.spacing) } : undefined,
       });
+      if (this.defaultParaStyleId === undefined && s["@_type"] === "paragraph" && s["@_default"] === "1") this.defaultParaStyleId = id;
     }
+  }
+
+  /**
+   * What a paragraph borrows from its styles, resolved the way §17.7.2 describes the chain: the style the
+   * paragraph names first, then each `w:basedOn` ancestor in order and, when it names no style — or names one
+   * the part does not declare — the document's default paragraph style. Each property comes from the first
+   * style in that chain that states it, so no chain has to merge a whole `w:pPr`, and an attribute nobody
+   * states stays absent rather than being filled in from the specification's own default.
+   *
+   * The depth is not a hypothetical. Over the 86 WPS-written documents (`.scratch/basedon-chain.ts`), 1,182 of
+   * its 1,337 paragraph styles carry `w:basedOn`, the chains run one to four styles deep with no cycles and no
+   * dangling reference, and 879 paragraphs ask for a property only an ancestor states: 501 line heights — every
+   * one of them 固定值, so they go from the browser's default line height to a `px` height the moment they are
+   * read — plus 327 alignments, 220 indents (122 left, 65 right, 33 first-line) and 115 段前段后 gaps. A further
+   * 38,475 paragraphs name no style at all, and 3,147 of those take a property from the default paragraph style
+   * (1,956 alignments and 613 固定值 line heights among them), including 32 paragraphs whose named chain states
+   * nothing while the default style states a first-line indent. Below the default style the ladder has one more
+   * rung, §17.7.2's `w:docDefaults/w:pPrDefault`, which states no paragraph property in any of the 86 and so is
+   * not read here; `w:basedOn` is walked with a seen-set because a chain that circled would otherwise hang the
+   * read.
+   */
+  private paraLent(styleId: string | undefined): Partial<ParaStyle> | undefined {
+    if (this.lentMemo.has(styleId)) return this.lentMemo.get(styleId);
+    const out: Record<string, unknown> = {};
+    const start = styleId !== undefined && this.styles.has(styleId) ? styleId : this.defaultParaStyleId;
+    const seen = new Set<string>();
+    for (let cur = start; cur !== undefined && !seen.has(cur); ) {
+      seen.add(cur);
+      const stated = this.styles.get(cur)?.pPr as Record<string, unknown> | undefined;
+      // §17.7.2 puts the default paragraph style beneath the *whole* chain rather than only beneath a paragraph
+      // that names no style, so a chain that never reaches it still ends there: 32 paragraphs in 16 of the 86
+      // name a style whose ancestors state no first-line indent while the default style does.
+      const based = this.styles.get(cur)?.basedOn;
+      cur = based ?? (this.defaultParaStyleId === undefined || seen.has(this.defaultParaStyleId) ? undefined : this.defaultParaStyleId);
+      if (!stated) continue;
+      for (const key of LENT_PARA_KEYS) {
+        if (out[key] !== undefined) continue;
+        if (stated[key] !== undefined) out[key] = stated[key];
+      }
+    }
+    const lent = Object.keys(out).length ? (out as Partial<ParaStyle>) : undefined;
+    this.lentMemo.set(styleId, lent);
+    return lent;
   }
 
   private readNumbering(pkg: OpcPackage): void {
@@ -1472,7 +1533,7 @@ export class WordDocument {
   private paragraph(p: any, rels: Map<string, Rel2>, span?: string): Paragraph {
     const pPr = p.pPr ?? {};
     const styleId = pPr.pStyle?.["@_val"];
-    const lent = styleId ? this.styles.get(styleId)?.pPr : undefined;
+    const lent = this.paraLent(styleId);
     const ind = indOf(pPr.ind);
     const sp = spacingOf(pPr.spacing);
     const para: Paragraph = {
@@ -1895,7 +1956,7 @@ export class WordDocument {
   }
 
   /** Referenced style definitions, for a writer that has to regenerate word/styles.xml. */
-  styleDef(styleId: string): { name: string; basedOn?: string; rPr?: RunStyle; pPr?: Partial<Paragraph> } | undefined {
+  styleDef(styleId: string): StyleDef | undefined {
     return this.styles.get(styleId);
   }
 
@@ -2675,7 +2736,7 @@ export class WordDocument {
       // restored fields before anything the new style lends is folded back in.
       syncParaSlots(p);
     }
-    const inherited = p.styleId ? this.styles.get(p.styleId)?.pPr : undefined;
+    const inherited = this.paraLent(p.styleId);
     p.align = p.align ?? inherited?.align;
     // Every `w:ind` attribute resolves on its own, the way the paragraph's first read did it: a record that
     // left the indent out hands the style's indent back, and one that said `w:firstLine="0"` keeps that zero.
@@ -3257,9 +3318,10 @@ function lineRuleOf(spacing: any): LineSpacingRule | undefined {
  *
  * Read through the style because 5,110 of the paragraphs in the 86 WPS-written documents ask for a line height
  * that way: they state no `w:line` themselves while the style named by their `w:pStyle` does (4,847 of them
- * `w:auto`, 247 `w:exact`, 16 `w:atLeast` — `.scratch/spacing-lent.ts`, which counts only the style the
- * paragraph names, since `w:basedOn` is one hop deeper than this model resolves). The same elements lend
- * 段前 to 64 paragraphs and 段后 to 57 more.
+ * `w:auto`, 247 `w:exact`, 16 `w:atLeast` — `.scratch/spacing-lent.ts`). The same elements lend 段前 to 64
+ * paragraphs and 段后 to 57 more. A further 501 heights, 54 段前 and 61 段后 come only from higher up the
+ * `w:basedOn` chain, and 613 heights with 478 of each gap from the default paragraph style, which is what
+ * `paraLent` walks to; the counts are in `.scratch/basedon-chain.ts`.
  */
 function spacingOf(spacing: any): Partial<ParaStyle> {
   const out: Record<string, number | LineSpacingRule> = {};
@@ -3323,10 +3385,52 @@ export const PARA_STYLE_KEYS: (keyof ParaStyle)[] = [
   "spacingBefore", "spacingAfter", "lineSpacing", "lineSpacingRule", "pageBreakBefore", "numPr",
 ];
 
-/** The paragraph's own properties, without its text or the revision records hanging off it. */
+/**
+ * The properties a paragraph may take from its styles, in the order `paraLent` fills them. `w:pageBreakBefore`
+ * and `w:numPr` are deliberately not among them: this model reads neither off a style, and `w:numPr` is what
+ * the 49 paragraphs whose numbering comes only from their style would need before that changed
+ * (`.scratch/basedon-chain.ts`).
+ */
+const LENT_PARA_KEYS: (keyof ParaStyle)[] = [
+  "align", "indentLeft", "indentRight", "indentFirstLine", "indentFirstLineChars", "indentHanging",
+  "spacingBefore", "spacingAfter", "lineSpacing", "lineSpacingRule",
+];
+
+/** Every paragraph property the model holds for it, from its own `w:pPr` and from its styles. */
 export function paraStyleOf(p: Paragraph): ParaStyle {
   const out: Record<string, unknown> = {};
   for (const key of PARA_STYLE_KEYS) if (p[key] !== undefined) out[key] = p[key];
+  return out as ParaStyle;
+}
+
+/**
+ * Whether a property field still holds what the read snapshot has for it. Every writer in this file and
+ * `write-docx.ts` spells a property only once it has moved: a value the paragraph or run only borrowed from its
+ * style is the style's to state, and writing it again as direct formatting is how a save makes the file claim
+ * properties it never wrote.
+ */
+export const samePropValue = (a: unknown, b: unknown): boolean =>
+  a === b || (typeof a === "object" && typeof b === "object" && JSON.stringify(a) === JSON.stringify(b));
+
+/**
+ * Out of a set of paragraph properties, the ones the paragraph said for itself.
+ *
+ * A paragraph's fields are filled from its style chain as well as from its own `w:pPr` (§17.7.2), so a field
+ * being set says nothing about who set it, and neither the writer nor a `w:pPrChange` record may claim a
+ * borrowed property as the paragraph's own: §17.13.5.19 records the direct formatting, and 159 of the corpus's
+ * paragraphs state no `w:pPr` at all while still showing a whole set of properties, because a style lends them
+ * (`.scratch/para-no-pr.ts`). The read snapshot answers the question — a value still equal to the one the
+ * paragraph was read with came from the chain, and a paragraph this editor built has no snapshot, so every
+ * field on it is its own.
+ */
+export function ownParaStyle(asRead: ParaStyle | undefined, s: ParaStyle): ParaStyle {
+  const out: Record<string, unknown> = {};
+  for (const key of PARA_STYLE_KEYS) {
+    const v = s[key];
+    if (v === undefined || v === false) continue;
+    if (asRead && samePropValue(asRead[key], v)) continue;
+    out[key] = v;
+  }
   return out as ParaStyle;
 }
 
@@ -3630,14 +3734,12 @@ export function syncParaSlots(p: Paragraph): void {
   if (!slots) return;
   const esc = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
   const prefix = /^<([A-Za-z_][-\w.]*):/.exec(slots[0]?.xml ?? "")?.[1] ?? "w";
-  const same = (a: unknown, b: unknown): boolean =>
-    a === b || (typeof a === "object" && typeof b === "object" && JSON.stringify(a) === JSON.stringify(b));
   const wanted: PropSlot[] = [];
   // A property the paragraph spelled for itself follows the field, because a reviewer's decision or a toolbar
   // click may have moved it. One it only borrowed from its style is written only when it really moved.
   const keep = (tag: string, key: keyof ParaStyle, value: unknown, xml: string): void => {
     if (value === undefined || value === false) return;
-    if (slots.some((s) => s.tag === tag) || !same(p.asRead?.[key], value)) wanted.push({ tag, xml });
+    if (slots.some((s) => s.tag === tag) || !samePropValue(p.asRead?.[key], value)) wanted.push({ tag, xml });
   };
   keep("pStyle", "styleId", p.styleId, `<${prefix}:pStyle w:val="${esc(p.styleId ?? "")}"/>`);
   keep("pageBreakBefore", "pageBreakBefore", p.pageBreakBefore, `<${prefix}:pageBreakBefore/>`);

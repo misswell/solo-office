@@ -1,7 +1,7 @@
 import type { Block, Carried, CarriedInline, FormatRevision, HfSegment, Inline, ParaStyle, PageGeometry, PageSetup, Paragraph, ParagraphFormatRevision, PropSlot, Revision, RevisionEntry, RowInfo, RunStyle, Table, TableCell, WordDocument } from "../core/docx.js";
 import type { CommentAnchor, DocComment } from "../core/comments.js";
 import { bodyShape, commentTexts } from "../core/comments.js";
-import { DEFAULT_SECTION, RUN_STYLE_KEYS, paraStyleOf, runStyleOf, stampNow, syncParaSlots, twipsToPx } from "../core/docx.js";
+import { DEFAULT_SECTION, RUN_STYLE_KEYS, ownParaStyle, paraStyleOf, runStyleOf, stampNow, syncParaSlots, twipsToPx } from "../core/docx.js";
 import type { CellWhere, TableEdit } from "../core/doc-table-ops.js";
 import { cellRangeFor, cellRect, cellsInRect, cellsInSweep, deleteColumnHere, deleteRowHere, gridColumns, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, splitHere, splitTableAt } from "../core/doc-table-ops.js";
 import { IMAGE_EXT_BY_MIME } from "../core/media.js";
@@ -1974,7 +1974,11 @@ export class DocEditor {
     const mine = p.revFormat?.author === this.authorName ? p.revFormat : undefined;
     if (mine) return mine;
     this.revSeq += 1;
-    return { kind: "format", id: this.revSeq, author: this.authorName, date: stampNow(), prev, ...(prevSlots?.length ? { prevSlots } : {}) };
+    // The reviewer gets the set the paragraph wrote. When it carried a `w:pPr` the record carries that text; when
+    // it carried none, the properties on it came down the style chain and §17.13.5.19 records none of them, so
+    // the record says nothing and a refusal puts the paragraph back to borrowing.
+    const recorded = prevSlots?.length ? prev : ownParaStyle(p.asRead, prev);
+    return { kind: "format", id: this.revSeq, author: this.authorName, date: stampNow(), prev: recorded, ...(prevSlots?.length ? { prevSlots } : {}) };
   }
 
   /**

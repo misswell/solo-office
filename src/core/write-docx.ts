@@ -1,7 +1,7 @@
 import { strToU8, zipSync } from "fflate";
 import type { Block, BorderSet, Inline, ParaStyle, Paragraph, ParagraphFormatRevision, PropSlot, RunStyle, RowInfo, Table, TableBorder, TableCell, WordDocument } from "./docx.js";
 import { bytesOfDataUrl } from "./media.js";
-import { BORDER_ORDER, ROW_REVISION_TAGS, preserve, revisionTag } from "./docx.js";
+import { BORDER_ORDER, ROW_REVISION_TAGS, ownParaStyle, paraStyleOf, preserve, revisionTag, samePropValue } from "./docx.js";
 import { childSpans, elementContent } from "./opc.js";
 import { setChildren } from "./doc-table-revisions.js";
 import { commentDirty, commentElement, commentParaIds, commentsRootInfo, type DocComment } from "./comments.js";
@@ -125,20 +125,35 @@ function paragraphProps(p: Paragraph): string {
     if (fmt) kids.push({ tag: "pPrChange", xml: paraChangeXml(fmt) });
     return kids.length ? `<w:pPr>${kids.map((k) => k.xml).join("")}</w:pPr>` : "";
   }
+  // Nothing was carried, so the fields spell the set — only the ones the paragraph said for itself, which
+  // `ownParaStyle` decides against the read snapshot. A paragraph whose file wrote no `w:pPr` states nothing of
+  // its own, yet every property it now shows comes down the style chain (`paraLent`): the style goes on lending
+  // it, so spelling it here would write a `w:pPr` the file never had. 159 of the corpus's paragraphs are in that
+  // shape, 91 of them in files whose default paragraph style states a property (`.scratch/para-no-pr.ts`). A
+  // paragraph this editor built has no snapshot, so all of its fields are its own and get spelled, which is
+  // what keeps a paragraph split in two looking like the one it came from.
+  const own = ownParaStyle(p.asRead, paraStyleOf(p));
+  const has = (key: keyof ParaStyle): boolean => own[key] !== undefined;
   const parts: string[] = [];
-  if (p.styleId) parts.push(`<w:pStyle w:val="${XML_ESC(p.styleId)}"/>`);
-  if (p.pageBreakBefore) parts.push("<w:pageBreakBefore/>");
-  if (p.numPr) parts.push(`<w:numPr><w:ilvl w:val="${p.numPr.ilvl}"/><w:numId w:val="${p.numPr.numId}"/></w:numPr>`);
+  if (has("styleId")) parts.push(`<w:pStyle w:val="${XML_ESC(p.styleId ?? "")}"/>`);
+  if (has("pageBreakBefore")) parts.push("<w:pageBreakBefore/>");
+  if (has("numPr")) parts.push(`<w:numPr><w:ilvl w:val="${p.numPr!.ilvl}"/><w:numId w:val="${p.numPr!.numId}"/></w:numPr>`);
   const spacing: string[] = [];
-  if (p.spacingBefore !== undefined) spacing.push(` w:before="${Math.round(p.spacingBefore)}"`);
-  if (p.spacingAfter !== undefined) spacing.push(` w:after="${Math.round(p.spacingAfter)}"`);
+  if (has("spacingBefore")) spacing.push(` w:before="${Math.round(p.spacingBefore!)}"`);
+  if (has("spacingAfter")) spacing.push(` w:after="${Math.round(p.spacingAfter!)}"`);
   // A height the model holds without a rule of its own is signed `w:auto`: that is §17.3.1.27's default, and
   // the 13,396 `w:auto` elements are what the files this comes from write anyway.
-  if (p.lineSpacing) spacing.push(` w:line="${Math.round(p.lineSpacing)}" w:lineRule="${p.lineSpacingRule ?? "auto"}"`);
+  if (has("lineSpacing")) spacing.push(` w:line="${Math.round(p.lineSpacing!)}" w:lineRule="${p.lineSpacingRule ?? "auto"}"`);
   if (spacing.length) parts.push(`<w:spacing${spacing.join("")}/>`);
-  const ind = indTag(p);
+  const ind = indTag({
+    ...(has("indentLeft") ? { indentLeft: p.indentLeft } : {}),
+    ...(has("indentRight") ? { indentRight: p.indentRight } : {}),
+    ...(has("indentFirstLine") ? { indentFirstLine: p.indentFirstLine } : {}),
+    ...(has("indentFirstLineChars") ? { indentFirstLineChars: p.indentFirstLineChars } : {}),
+    ...(has("indentHanging") ? { indentHanging: p.indentHanging } : {}),
+  });
   if (ind) parts.push(ind);
-  if (p.align) parts.push(`<w:jc w:val="${XML_ESC(p.align)}"/>`);
+  if (has("align")) parts.push(`<w:jc w:val="${XML_ESC(p.align ?? "")}"/>`);
   // The paragraph mark's own revision, then the properties record: `CT_PPr` puts `w:rPr` after the
   // base properties and `w:pPrChange` last, and a validator that reads them out of order rejects the part.
   const mark = p.markRev;
@@ -279,14 +294,12 @@ function carriedRunProps(r: Inline): string {
   // A prefix is taken from the set rather than assumed: `w` is only an alias for the words namespace where the
   // part binds it, and a child written with another prefix than its neighbours reads as another element.
   const prefix = /^<([A-Za-z_][-\w.]*):/.exec(slots[0]?.xml ?? "")?.[1] ?? "w";
-  const same = (a: unknown, b: unknown): boolean =>
-    a === b || (typeof a === "object" && typeof b === "object" && JSON.stringify(a) === JSON.stringify(b));
   const drops = new Set<PropSlot>();
   const inserts: PropSlot[] = [];
   for (const prop of RUN_PROPS) {
     // A field that has not moved off its read snapshot keeps the source text, so an attribute the model has no
     // field for — `w:kern`, `w:themeColor`, `w:eastAsia` — survives a save that never touched it.
-    if (same(r.asRead?.[prop.key], r[prop.key])) continue;
+    if (samePropValue(r.asRead?.[prop.key], r[prop.key])) continue;
     const own = slots.filter((s) => prop.tags.includes(s.tag));
     const xml = prop.spell(r, prefix, own[0]?.xml ?? "");
     for (const s of own) drops.add(s);

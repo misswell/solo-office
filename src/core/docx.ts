@@ -801,6 +801,16 @@ export interface NumberLevel {
   start: number;
   ilvl?: number;
   indent?: number;
+  /**
+   * The font this level names for its own mark (`w:lvl/w:rPr/w:rFonts`). It is part of the glyph, not decoration:
+   * over the 86 WPS-written documents the 170 `bullet` levels put the mark in `w:lvlText` as a literal
+   * private-use codepoint (F06E 44, F0A7 42, F075 38, F06C 30, F0B7 6, F0D8 4, and 6 plain `o`), and say which
+   * font it belongs to in the level's own `w:rPr` (Wingdings 158, Symbol 6, other 6) — drawn in the paragraph's
+   * font those codepoints are tofu (`.scratch/sym-count.ts`). `w:sym` appears 0 times in that corpus: the
+   * element this model already reads for body runs is not how WPS spells a list mark, so the level's font is
+   * where the shape comes from here.
+   */
+  font?: string;
 }
 
 const TWIPS_PER_PX = 15;
@@ -1591,13 +1601,17 @@ export class WordDocument {
       const key = String(a["@_abstractNumId"]);
       abstracts.set(
         key,
-        asArray(a.lvl).map((l: any) => ({
-          numFmt: l.numFmt?.["@_val"] ?? "decimal",
-          lvlText: l.lvlText?.["@_val"] ?? "%1.",
-          start: Number(l.start?.["@_val"] ?? 1),
-          ilvl: num(l["@_ilvl"]),
-          indent: num(l.pPr?.ind?.["@_left"]),
-        })),
+        asArray(a.lvl).map((l: any) => {
+          const rFonts = asArray(l.rPr?.rFonts)[0];
+          return {
+            numFmt: l.numFmt?.["@_val"] ?? "decimal",
+            lvlText: l.lvlText?.["@_val"] ?? "%1.",
+            start: Number(l.start?.["@_val"] ?? 1),
+            ilvl: num(l["@_ilvl"]),
+            indent: num(l.pPr?.ind?.["@_left"]),
+            font: rFonts?.["@_ascii"] ?? rFonts?.["@_hAnsi"],
+          };
+        }),
       );
     }
     for (const n of asArray(root?.num)) {

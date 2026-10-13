@@ -268,10 +268,15 @@ function smoke(): void {
         await wait(80);
         const marker = [...document.querySelectorAll("#ribbon button.rb")].find((b) => b.textContent.includes("符号"));
         const bullets = document.querySelectorAll("#view .page .bullet").length;
+        // A mark wearing a face its own paragraph does not is what the level's w:rPr asks for. Only the count is
+        // reported, so a document's font names never leave the page.
+        const bulletWorn = [...document.querySelectorAll("#view .page .bullet")].filter(
+          (s) => getComputedStyle(s).fontFamily !== getComputedStyle(s.parentElement ?? document.body).fontFamily,
+        ).length;
         marker?.click();
         await wait(150);
         const after = document.querySelector("#view .page");
-        const docPart = { title: document.getElementById("title")?.textContent, editable: after?.getAttribute("contenteditable"), blocksBefore: blocks, blocksAfter: after?.children.length, typed: after?.textContent?.includes("SMOKE"), bulletsBefore: bullets, bulletsAfter: after?.querySelectorAll(".bullet").length, ribbonGroups: document.querySelectorAll("#ribbon .grp").length };
+        const docPart = { title: document.getElementById("title")?.textContent, editable: after?.getAttribute("contenteditable"), blocksBefore: blocks, blocksAfter: after?.children.length, typed: after?.textContent?.includes("SMOKE"), bulletsBefore: bullets, bulletsWearingOwnFont: bulletWorn, bulletsAfter: after?.querySelectorAll(".bullet").length, ribbonGroups: document.querySelectorAll("#ribbon .grp").length };
 
         // Insertion round: a 2×3 table, a page break and a picture land in the body.
         const rb = (label) => [...document.querySelectorAll("#ribbon button.rb")].find((b) => b.textContent === label);

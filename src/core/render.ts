@@ -273,7 +273,11 @@ function renderParagraph(p: Paragraph, doc: WordDocument, counters: Map<string, 
     const key = `${numId}:${ilvl}`;
     const seen = counters.get(key) ?? (level?.start ?? 1) - 1;
     counters.set(key, seen + 1);
-    prefix = `<span class="bullet">${esc(numberText(doc, counters, numId, ilvl, seen + 1, level))}</span>`;
+    // The mark wears the font the level names, not the paragraph's: WPS spells a bullet as a private-use
+    // codepoint in `w:lvlText`, and that codepoint only has a shape under the font its `w:rPr` points at.
+    // Drawn in the paragraph's font it is tofu, and the list loses the one thing that made it that bullet.
+    const mark = esc(numberText(doc, counters, numId, ilvl, seen + 1, level));
+    prefix = `<span class="bullet"${level?.font ? ` style="font-family:${esc(level.font)}"` : ""}>${mark}</span>`;
     style.push(`padding-left:${8 + ilvl * 24}px`);
   }
   const body = wordRuns(p.inlines, state) || "&nbsp;";

@@ -50,7 +50,10 @@ const drawnPara = (doc: WordDocument, needle: string): string => {
 };
 /** The symbol in front of the paragraph that says `needle`, or "" when it stands in no list. */
 const drawn = (doc: WordDocument, needle: string): string =>
-  /<span class="bullet">([\s\S]*?)<\/span>/.exec(drawnPara(doc, needle))?.[1] ?? "";
+  /<span class="bullet"(?:\s[^>]*)?>([\s\S]*?)<\/span>/.exec(drawnPara(doc, needle))?.[1] ?? "";
+/** The whole mark element, so a test can see what the level put on it. */
+const markOf = (doc: WordDocument, needle: string): string =>
+  /<span class="bullet"[^>]*>[\s\S]*?<\/span>/.exec(drawnPara(doc, needle))?.[0] ?? "";
 const propOf = (doc: WordDocument, needle: string, prop: string): string =>
   new RegExp(`(?:^|;)${prop}:([^;]*)`).exec(/ style="([^"]*)"/.exec(drawnPara(doc, needle))?.[1] ?? "")?.[1] ?? "";
 
@@ -234,7 +237,7 @@ describe("docx 编号：符号按 w:lvlText 画、w:numId 0 不画、列表可�
 
   it("exposes the numbering part as the model reads it", () => {
     const doc = open(makeNumberingDocx([{ pPr: numPr(2, 0), text: "台账" }]));
-    expect(doc.numberingTable().map((n) => n.numId)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(doc.numberingTable().map((n) => n.numId)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     expect(doc.numberingTable().find((n) => n.numId === 3)?.levels[1]).toMatchObject({
       numFmt: "lowerLetter",
       lvlText: "%2)",
@@ -247,5 +250,35 @@ describe("docx 编号：符号按 w:lvlText 画、w:numId 0 不画、列表可�
     const dangling = open(makeNumberingDocx([{ pPr: numPr(99, 0), text: "无定义" }]));
     expect(dangling.levelOf(99, 0)).toBeUndefined();
     expect(drawn(dangling, "无定义")).toBe("•");
+  });
+});
+
+describe("列表符号的字体：私用区那颗码点按级自己声明的 w:rFonts 画", () => {
+  /** The corpus's own spelling of a Wingdings bullet: the codepoint in `w:lvlText`, the font in the level's `w:rPr`. */
+  const MARK = String.fromCharCode(0xf0a7);
+
+  it("w:lvl/w:rPr/w:rFonts 进了模型，符号就穿着它", () => {
+    const doc = open(makeNumberingDocx([{ pPr: numPr(7, 0), text: "方块" }]));
+    expect(doc.levelOf(7, 0)).toMatchObject({ numFmt: "bullet", lvlText: MARK, font: "Wingdings" });
+    expect(markOf(doc, "方块")).toBe(`<span class="bullet" style="font-family:Wingdings">${MARK}</span>`);
+  });
+
+  it("级没写 rFonts：符号不添字体——页面不能画文件没说过的东西", () => {
+    const doc = open(makeNumberingDocx([{ pPr: numPr(8, 0), text: "方块" }]));
+    expect(doc.levelOf(8, 0)?.font).toBeUndefined();
+    expect(markOf(doc, "方块")).toBe(`<span class="bullet">${MARK}</span>`);
+  });
+
+  it("只有符号穿这颗字体的脸，正文那串字照旧", () => {
+    const doc = open(makeNumberingDocx([{ pPr: numPr(7, 0), text: "方块" }]));
+    const para = drawnPara(doc, "方块");
+    expect((para.match(/font-family:Wingdings/g) ?? []).length).toBe(1);
+    expect(/<span class="bullet"[^>]*font-family:Wingdings/.test(para)).toBe(true);
+  });
+
+  it("读进模型的字体不改写出侧：段落仍然只说自己那个 w:numPr", () => {
+    const doc = open(makeNumberingDocx([{ pPr: numPr(7, 0), text: "方块" }]));
+    expect(pPrOf(saved(doc), "方块")).toContain('<w:numPr><w:ilvl w:val="0"/><w:numId w:val="7"/></w:numPr>');
+    expect(pPrOf(saved(doc), "方块")).not.toContain("Wingdings");
   });
 });

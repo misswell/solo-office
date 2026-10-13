@@ -6,6 +6,7 @@ import type { CellWhere, TableEdit } from "../core/doc-table-ops.js";
 import { cellRangeFor, cellRect, cellsInRect, cellsInSweep, deleteColumnHere, deleteRowHere, gridColumns, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, splitHere, splitTableAt } from "../core/doc-table-ops.js";
 import { IMAGE_EXT_BY_MIME } from "../core/media.js";
 import { CARRY_CLASS, CARRY_STYLE, PAGE_BORDER_CLASS, RUN_CARRY_CLASS, highlightColor, renderWord } from "../core/render.js";
+import { flatOf, inlineLength, keepRunIdentity } from "../core/run-identity.js";
 import { CommentPanel } from "./doc-comments.js";
 import { ReviewPanel } from "./doc-review.js";
 import { OutlinePanel } from "./doc-outline.js";
@@ -251,18 +252,10 @@ const sameStyle = (a: Inline, b: Inline): boolean =>
 /** NBSP is how the renderer makes an empty paragraph take vertical space; it is not document text. */
 const cleanText = (text: string): string => text.replace(/\u00a0/g, " ");
 
-const inlineLength = (inline: Inline): number => (inline.text !== "" ? inline.text.length : 1);
+const charLength = (inlines: Inline[]): number => inlines.reduce((n, i) => n + inlineLength(i), 0);
 
 const isMark = (inline: Inline): boolean =>
   !!inline.image || !!inline.break || !!inline.tab || !!inline.anchor || !!inline.carry;
-
-/**
- * The body as one comparable string. A mark (image, break, tab, anchor) stands for one character,
- * which is how `splitAt` counts it too; NUL is the placeholder because document text never holds one.
- */
-const flatOf = (inlines: Inline[]): string => inlines.map((i) => (i.text !== "" ? i.text : "\u0000")).join("");
-
-const charLength = (inlines: Inline[]): number => inlines.reduce((n, i) => n + inlineLength(i), 0);
 
 function merge(inlines: Inline[]): Inline[] {
   const out: Inline[] = [];
@@ -978,6 +971,9 @@ export class DocEditor {
     };
     walk(el, {});
     const merged = merge(out);
+    // Before anything is appended from the old list: the alignment below is between what the page shows and what
+    // it was drawn from, and a carry the browser swallowed has no place in either.
+    keepRunIdentity(merged, prev);
     keepCarries(prev, merged, this.placedCarries);
     return merged.every((i) => i.text.trim() === "" && !isMark(i)) ? [] : merged;
   }

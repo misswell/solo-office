@@ -166,3 +166,26 @@ export function makeHighlightDocx(): Uint8Array {
       `</w:styles>`,
   );
 }
+
+/**
+ * The shapes a 悬光标 (collapsed-caret) format click has to land on, taken from what the files actually state
+ * (`.scratch/wps-rpr-names.ts`, 86 WPS-written documents, 101825 run property sets): `w:sz` **93946**, `w:szCs`
+ * **96165**, `w:color` **61554**, `w:b` **8889**, `w:highlight` 2666. Sizes come in pairs and the two halves are not
+ * always equal — 字号成对 is `<w:sz w:val="21"/><w:szCs w:val="24"/>`, the shape the model holds in one field, so a
+ * changed size re-spells both (which Word does too when you pick a 字号).
+ *
+ * The ribbon's 字号 chooser offers 10/10.5/12/14/16/18/24/36 (`DOC_SIZES`), and the gap this fixture exists to keep
+ * is the pending-format one: with nothing selected, a click on 字号 used to reach `applyStyle` and return without
+ * doing anything, because Blink's `fontSize` command only takes the 1-7 enum and cannot say 22 磅 at all. 高亮 needed
+ * the same editor-carried channel (§89), so the two families share it and a click across families stacks.
+ */
+export function makePendingFormatDocx(): Uint8Array {
+  const document = `<w:p><w:r><w:rPr><w:sz w:val="24"/><w:szCs w:val="24"/></w:rPr><w:t>十二磅</w:t></w:r></w:p>
+<w:p><w:r><w:t>没写磅数</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:sz w:val="21"/><w:szCs w:val="24"/></w:rPr><w:t>字号成对</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:color w:val="C00000"/></w:rPr><w:t>红字</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>粗字</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:highlight w:val="yellow"/></w:rPr><w:t>黄底</w:t></w:r></w:p>
+<w:p><w:r><w:t>什么都没点</w:t></w:r></w:p>`;
+  return pack(document);
+}

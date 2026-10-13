@@ -408,14 +408,20 @@ export class DocEditor {
   private burst = 0;
   private composing = false;
   /**
-   * 悬光标待用的那一次高亮。Blink 的待用格式在这条路上交不出「无」：折叠光标处 `execCommand("hiliteColor", false,
-   * "transparent")` 返回 `true` 却是空操作，随后打的字照旧坐在原有的/借来的底色里（第 2 问）。它带得动颜色，但那是
-   * 另一张嘴：新字被包进它自己的 span，我们举着的 span 盖不住它（第 7 问：待用的「无」之后改点「绿」，打出来是绿）。
-   * 两种机制混着点，谁赢看不出来。所以高亮的待用整族改由编辑器自己举一个 span，每点一次换一个，最后一次说话的那次算。
-   * span 里那个零宽空格是撑位置的——空的 span Blink 直接跨过去，字落在左边的文本节点里（第 6 问）。占位字符绝不能吃进
-   * 文档：每次回折模型前由 `settleHlPending` 摘掉。
+   * 悬光标待用的那一次格式，现在举着「突出显示」和「字号」两族——这两族 Blink 都交不出来。高亮：折叠光标处
+   * `execCommand("hiliteColor", false, "transparent")` 返回 `true` 却是空操作，随后打的字照旧坐在原有的/借来的底色里
+   * （第 2 问）；它带得动颜色，但那是另一张嘴：新字被包进它自己的 span，我们举着的 span 盖不住它（第 7 问：待用的「无」
+   * 之后改点「绿」，打出来是绿）。字号：`fontSize` 只吃 1–7 那七个枚举，22 磅根本没有对应的命令，悬光点点字号从前是
+   * 什么都不发生。所以这条通道由编辑器自己举一个 span，把待用的 CSS 写在它身上：同族再点换掉自己那一项（最后说话
+   * 的那次算），跨族往上叠（先「黄」后「22」，打出来的字两样都有）。span 里那个零宽空格是撑位置的——空的 span Blink
+   * 直接跨过去，字落在左边的文本节点里（第 6 问）。占位字符绝不能吃进文档：每次回折模型前由 `settlePending` 摘掉。
    */
-  private hlPending: HTMLElement | null = null;
+  private pendingFormat: HTMLElement | null = null;
+  /**
+   * 占位 span 上那一次点过的格式，攒着的样子（不是最后一次的）：同族再点换掉自己那一项，别族点到往上叠。
+   * span 是它的投影，`settlePending` 一收就清空。
+   */
+  private pendingFormatPatch: StylePatch = {};
   private panel: CommentPanel | null = null;
   /** 审阅窗格: the list of every change still waiting, docked beside the page. */
   private review: ReviewPanel | null = null;
@@ -751,12 +757,12 @@ export class DocEditor {
 
   /** Remembered because a ribbon or panel click moves the focus out of the page. */
   private trackSelection(): void {
-    // 待用的取消只是光标底下的一件事：光标走到它外面，它就没被用过，占位符不能留在页面里。
-    const pending = this.hlPending;
+    // 待用的格式只是光标底下的一件事：光标走到它外面，它就没被用过，占位符不能留在页面里。
+    const pending = this.pendingFormat;
     if (pending?.isConnected) {
       const sel = document.getSelection();
       const at = sel && sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
-      if (at && !pending.contains(at.startContainer)) this.settleHlPending();
+      if (at && !pending.contains(at.startContainer)) this.settlePending();
     }
     const ends = this.rangeEnds();
     if (!ends) return;
@@ -775,23 +781,41 @@ export class DocEditor {
   }
 
   /**
-   * Stand the pending highlight up under the caret. Blink's own pending format is not usable here for the whole
-   * family: `hiliteColor` with `transparent` returns true and does nothing at a collapsed caret, and when it *does*
-   * carry a colour it wraps the new character in a span of its own — which beats whatever the caret was sitting in,
-   * so clicking 黄 then 无 types yellow, the earlier of the two clicks. Carrying the pending format ourselves in one
-   * span (and replacing it on every click) makes the last click the one that counts. The placeholder is what makes
-   * the span usable: Blink steps over an empty one and lands the character in the text node to the left.
+   * The CSS the pending format stands in for, in the shape `styleOf` reads back off the page. 高亮 needs both faces:
+   * the background for the names CSS can carry, `data-hl` for the ones it cannot (§17.17.64 has 17 members, CSS
+   * cannot name `blue`). 字号 needs only the size, and the writer spells the pair the file keeps (`w:sz`/`w:szCs`)
+   * off the one field. A key this model has no place for holds nothing.
    */
-  private armHlPending(name: string): void {
-    this.settleHlPending();
+  private pendingStyle(patch: StylePatch): string {
+    const parts: string[] = [];
+    if (patch.highlight !== undefined) parts.push(`background:${highlightColor(patch.highlight || "none")};`);
+    if (patch.sizePt !== undefined && Number.isFinite(patch.sizePt)) parts.push(`font-size:${patch.sizePt}pt;`);
+    return parts.join("");
+  }
+
+  /**
+   * Stand the pending format up under the caret. Blink's own pending format is not usable here for these two
+   * families: `hiliteColor` with `transparent` returns true and does nothing at a collapsed caret, and when it *does*
+   * carry a colour it wraps the new character in a span of its own — which beats whatever the caret was sitting in,
+   * so clicking 黄 then 无 types yellow, the earlier of the two clicks. 字号 has no command at all (`fontSize` takes
+   * the 1-7 enum, so 22 磅 was simply dropped). Carrying the pending format ourselves makes the last click within a
+   * family the one that counts, and keeps clicks across families stacked — Word leaves a pending highlight standing
+   * when you then pick a size, so the next character gets both. The placeholder is what makes the span usable: Blink
+   * steps over an empty one and lands the character in the text node to the left.
+   */
+  private armPending(patch: StylePatch): void {
+    const next: StylePatch = { ...this.pendingFormatPatch, ...patch };
+    const style = this.pendingStyle(next);
+    this.settlePending();
+    if (!style) return;
     const sel = document.getSelection();
     if (!sel || sel.rangeCount === 0) return;
     const at = sel.getRangeAt(0);
     if (!at.collapsed || !this.page?.contains(at.startContainer)) return;
     at.collapse(true);
     const span = document.createElement("span");
-    span.setAttribute("data-hl", name);
-    span.setAttribute("style", `background:${highlightColor(name)};`);
+    if (next.highlight !== undefined) span.setAttribute("data-hl", next.highlight || "none");
+    span.setAttribute("style", style);
     const holder = document.createTextNode(ZWSP);
     span.append(holder);
     at.insertNode(span);
@@ -800,18 +824,20 @@ export class DocEditor {
     caret.setEnd(holder, ZWSP.length);
     sel.removeAllRanges();
     sel.addRange(caret);
-    this.hlPending = span;
+    this.pendingFormat = span;
+    this.pendingFormatPatch = next;
   }
 
   /**
    * The placeholder is not text: settle it before every fold back into the model and whenever the caret walks away.
    * A span that still holds only it was never used and goes; one the characters landed in keeps them and loses the
-   * placeholder — the cancellation now lives in the model and in the stamp the renderer puts back, so this one pass
-   * is enough.
+   * placeholder — the format now lives in the model and in what the renderer puts back, so this one pass is enough.
+   * Either way the pending patch is spent: what gets typed next starts from the run the caret sits in again.
    */
-  private settleHlPending(): void {
-    const span = this.hlPending;
-    this.hlPending = null;
+  private settlePending(): void {
+    const span = this.pendingFormat;
+    this.pendingFormat = null;
+    this.pendingFormatPatch = {};
     if (!span?.isConnected) return;
     if ((span.textContent ?? "") === ZWSP) {
       span.remove();
@@ -824,7 +850,7 @@ export class DocEditor {
   /** Re-derives the model from the DOM, then repairs anything structural the browser changed. */
   private mutated(): void {
     if (!this.page) return;
-    this.settleHlPending();
+    this.settlePending();
     const before = shape(this.doc.blocks);
     const anchorsBefore = countAnchors(this.doc.blocks);
     const caret = this.caretPath();
@@ -1760,9 +1786,9 @@ export class DocEditor {
       };
       const key = Object.keys(patch)[0];
       const value = patch[key as keyof StylePatch];
-      if (key === "sizePt") return;
-      // 高亮这一族的待用格式自己举（`armHlPending`），余下的仍交给 Blink。
-      if (key === "highlight") this.armHlPending(value ? String(value) : "none");
+      // 高亮与字号这两族的待用格式由编辑器自己举（`armPending`）：Blink 交不出「无」，也没有写得出磅数的命令。
+      // 余下的（粗体/斜体/下划线/删除线/墨色）实测待用有效，仍交给它。
+      if (key === "highlight" || key === "sizePt") this.armPending(patch);
       else {
         document.execCommand("styleWithCSS", false, "true");
         document.execCommand(command[key]!, false, typeof value === "string" ? value : undefined);

@@ -568,6 +568,29 @@ export const ROW_REVISION_TAGS: ReadonlySet<string> = new Set(["ins", "del", "mo
 /** `CT_Borders`, the sides named by both `w:tblBorders` and `w:tcBorders`. */
 export const BORDER_ORDER = ["top", "start", "left", "bottom", "end", "right", "insideH", "insideV", "tl2br", "tr2bl"] as const;
 
+/** The four sides a `w:pgBorders` element can state a line for, in the order §17.3.2.10 lists its children. */
+export const PAGE_BORDER_SIDES = ["top", "left", "bottom", "right"] as const;
+export type PageBorderSide = (typeof PAGE_BORDER_SIDES)[number];
+
+/**
+ * One side of a page border: the line the file asks for and the gap it is held off the edge with. `size` is the
+ * file's `w:sz`, eighths of a point, spelled as `TableBorder` spells it so the one stroke table draws a table's
+ * rule and the page's; `space` counts whole points (§17.3.2.10), which is why the two keep separate names —
+ * they are multiplied by different factors on the way to a pixel.
+ *
+ * `val` is kept as the file spells it rather than turned into a shape, because the page's border styles are a
+ * long enumeration, the drawing side maps them, and a token this model did not invent has to be able to come
+ * back unchanged.
+ */
+export interface PageBorder {
+  val: string;
+  size?: number;
+  space?: number;
+  color?: string;
+  /** `w:frame`, which asks for the line as a frame rather than a border around the text. */
+  frame?: boolean;
+}
+
 export interface Section {
   pageWidthTwips: number;
   pageHeightTwips: number;
@@ -580,6 +603,21 @@ export interface Section {
    * number this model invented.
    */
   margins: { top: number; right: number; bottom: number; left: number; header?: number; footer?: number; gutter?: number };
+  /**
+   * `w:pgBorders`, the line drawn around the page. Absent means the section states no page border at all — the
+   * common case, and one this model must not fill in: 24 of the 115 sections in the 86 files this machine's WPS
+   * wrote carry the element, the other 91 carry nothing. `offsetFrom` says what the gap is measured against, and
+   * none of those 24 spelled it, so they all land on the default §17.3.2.10 gives it — the page edge. (How WPS
+   * itself reads an omitted `w:offsetFrom` is 未取证; this is the spec's word, not an observation.) A side that
+   * states no `w:val` is left out rather than drawn as a line of unknown shape.
+   *
+   * What those 24 actually look like is worth stating, because it is the opposite of what a reader of this field
+   * would expect: every one writes all four sides, each with `w:val`, `w:sz` and `w:space` and no `w:color`, and
+   * **all 96 of those sides say `none`**. Real WPS files carry a page border that was turned off, not one drawn —
+   * so a document with a visible frame around the page is, in this corpus, a shape that has never been observed.
+   * The reading and drawing of one is spec-derived; its fidelity to WPS is 未取证.
+   */
+  pageBorders?: { offsetFrom: "page" | "text"; sides: Partial<Record<PageBorderSide, PageBorder>> };
 }
 
 /**
@@ -591,7 +629,14 @@ export interface Section {
 export const DEFAULT_SECTION: Section = { pageWidthTwips: 11906, pageHeightTwips: 16838, margins: { top: 1440, right: 1440, bottom: 1440, left: 1440 } };
 
 /** A copy, because a section a caller mutates must not move the page every other document falls back to. */
-const copySection = (s: Section): Section => ({ pageWidthTwips: s.pageWidthTwips, pageHeightTwips: s.pageHeightTwips, margins: { ...s.margins } });
+const copySection = (s: Section): Section => ({
+  pageWidthTwips: s.pageWidthTwips,
+  pageHeightTwips: s.pageHeightTwips,
+  margins: { ...s.margins },
+  // The sides copy by value, the lines inside them do not: a `PageBorder` is read once and never edited in
+  // place, so giving each copy its own map is enough to keep a caller's add-or-drop of a side contained.
+  pageBorders: s.pageBorders ? { offsetFrom: s.pageBorders.offsetFrom, sides: { ...s.pageBorders.sides } } : undefined,
+});
 
 /**
  * What 「页面设置」 changes on the section the page is drawn from: the seven `w:pgMar` distances and the paper's
@@ -1864,6 +1909,9 @@ export class WordDocument {
           footer: set.footerTwips ?? base.margins.footer,
           gutter: set.gutterTwips ?? base.margins.gutter,
         },
+        // A section that is being built from nothing still has to keep the borders of whatever it was read
+        // off — dropping them here would erase a page border as a side effect of changing a margin.
+        pageBorders: base.pageBorders,
       },
       ...this.sections.slice(1),
     ];
@@ -3740,6 +3788,25 @@ function sectionGeometry(xml: string): Section {
     return v === undefined || v === "" || Number.isNaN(Number(v)) ? undefined : Number(v);
   };
   const mar = attrs("pgMar");
+  const borderEl = kids.find((k) => k.tag === "pgBorders");
+  const sides: Partial<Record<PageBorderSide, PageBorder>> = {};
+  if (borderEl) {
+    for (const k of childSpans(elementContent(borderEl.xml))) {
+      const side = k.tag as PageBorderSide;
+      if (!PAGE_BORDER_SIDES.includes(side)) continue;
+      const a = attrsOf(k.xml);
+      // A side with no `w:val` states no line — the shape is the one attribute that cannot be guessed at.
+      if (!a["val"]) continue;
+      const line: PageBorder = { val: a["val"] };
+      const sz = stated(a, "sz");
+      if (sz !== undefined) line.size = sz;
+      const space = stated(a, "space");
+      if (space !== undefined) line.space = space;
+      if (a["color"]) line.color = a["color"];
+      if (a["frame"] !== undefined) line.frame = a["frame"] === "true" || a["frame"] === "1";
+      sides[side] = line;
+    }
+  }
   return {
     pageWidthTwips: num(attrs("pgSz"), "w", DEFAULT_SECTION.pageWidthTwips),
     pageHeightTwips: num(attrs("pgSz"), "h", DEFAULT_SECTION.pageHeightTwips),
@@ -3752,6 +3819,7 @@ function sectionGeometry(xml: string): Section {
       footer: stated(mar, "footer"),
       gutter: stated(mar, "gutter"),
     },
+    pageBorders: borderEl ? { offsetFrom: attrsOf(borderEl.xml)["offsetFrom"] === "text" ? "text" : "page", sides } : undefined,
   };
 }
 

@@ -5,7 +5,7 @@ import { DEFAULT_SECTION, RUN_STYLE_KEYS, paraStyleOf, runStyleOf, stampNow, syn
 import type { CellWhere, TableEdit } from "../core/doc-table-ops.js";
 import { cellRangeFor, cellRect, cellsInRect, cellsInSweep, deleteColumnHere, deleteRowHere, gridColumns, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, splitHere, splitTableAt } from "../core/doc-table-ops.js";
 import { IMAGE_EXT_BY_MIME } from "../core/media.js";
-import { CARRY_CLASS, CARRY_STYLE, RUN_CARRY_CLASS, highlightColor, renderWord } from "../core/render.js";
+import { CARRY_CLASS, CARRY_STYLE, PAGE_BORDER_CLASS, RUN_CARRY_CLASS, highlightColor, renderWord } from "../core/render.js";
 import { CommentPanel } from "./doc-comments.js";
 import { ReviewPanel } from "./doc-review.js";
 import { openPageSetup as showPageSetupDialog } from "./doc-page-setup.js";
@@ -795,6 +795,9 @@ export class DocEditor {
     const shown: Element[] = [];
     let previous: Paragraph | undefined;
     for (const el of [...this.page.children]) {
+      // A page border is drawn into the paper box rather than written on it. It holds no text and is not a
+      // block, so reading it back would turn the file's `w:pgBorders` into an empty paragraph in the body.
+      if (el.classList.contains(PAGE_BORDER_CLASS)) continue;
       if (el.tagName === "TABLE") {
         const known = this.ownedAt(el);
         next.push(this.tableOf(el as HTMLTableElement, known?.kind === "table" ? known : undefined));

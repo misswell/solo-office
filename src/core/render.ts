@@ -1,5 +1,5 @@
-import type { Block, Carried, CarriedInline, Inline, Paragraph, RowInfo, Table, TableBorder, WordDocument } from "./docx.js";
-import { DEFAULT_SECTION, twipsToPx } from "./docx.js";
+import type { Block, Carried, CarriedInline, Inline, PageBorder, Paragraph, RowInfo, Section, Table, TableBorder, WordDocument } from "./docx.js";
+import { DEFAULT_SECTION, PAGE_BORDER_SIDES, twipsToPx } from "./docx.js";
 import type { CommentAnchor } from "./comments.js";
 import type { Presentation, Shape, SlideParagraph } from "./pptx.js";
 
@@ -241,9 +241,23 @@ const STROKE: Record<string, string> = {
   ridge: "ridge",
 };
 
-/** One edge as CSS. `none`, `hidden` and `nil` draw nothing, which is what they say. */
+/** The stroke tokens that name no line, which is what they say. Everything else draws a line. */
+const NO_LINE: ReadonlySet<string> = new Set(["none", "hidden", "nil"]);
+
+/**
+ * Whether a `w:val` asks for a visible stroke. The file's own answer, not the renderer's fallback: an unknown
+ * token still draws, as solid.
+ */
+export const drawsLine = (val?: string): boolean => val !== undefined && !NO_LINE.has(val);
+
+/**
+ * One edge as CSS — a table's rule, a cell's, or the page's own border, which is why the edge is taken by
+ * structure rather than by name. A token `STROKE` has no entry for draws a solid line of the width asked for,
+ * the least-wrong reading of a stroke the file invented. 未取证: how each of these looks in WPS' own page view
+ * was never observed.
+ */
 function borderCss(property: string, edge?: TableBorder): string {
-  if (!edge || edge.val === "none" || edge.val === "hidden" || edge.val === "nil") return "";
+  if (!edge || !drawsLine(edge.val)) return "";
   const width = Math.max(1, Math.round((edge.size ?? 8) / 6)); // eighths of a point → CSS px
   const color = !edge.color || edge.color === "auto" ? "currentColor" : "#" + edge.color.replace(/^#/, "").toUpperCase();
   return `${property}:${width}px ${STROKE[edge.val] ?? "solid"} ${color};`;
@@ -398,6 +412,39 @@ function renderCarried(b: Carried): string {
   return `<div class="${CARRY_CLASS}" contenteditable="false" data-tag="${esc(b.tag)}" style="${CARRY_STYLE}">${body}</div>`;
 }
 
+/** The class a page border's element wears: drawn inside the paper box, and never a block of text. */
+export const PAGE_BORDER_CLASS = "doc-page-border";
+
+/**
+ * The line `w:pgBorders` asks for, drawn as one absolutely positioned element per stated side inside the paper
+ * box. Sides are separate because each names its own stroke and its own gap: a document with a thick bottom and
+ * no right side has to draw that, and one rectangle with four CSS borders could not — nor could a box whose
+ * missing side still holds the gap of its neighbour.
+ *
+ * The gap is `w:space` in points, measured against what `w:offsetFrom` names: the paper's edge, or the body,
+ * whose edge on a side is that side's margin (plus the binding width on the left, as the padding counts it).
+ * Each line spans the paper in the other direction, so four sides meet at the corners the way a frame does.
+ */
+function renderPageBorders(sec: Section): string {
+  const borders = sec.pageBorders;
+  if (!borders) return "";
+  const gutter = sec.margins.gutter ?? 0;
+  const inset = (side: (typeof PAGE_BORDER_SIDES)[number]): number => {
+    const space = ((borders.sides[side]?.space ?? 0) * 4) / 3;
+    if (borders.offsetFrom !== "text") return space;
+    const margin =
+      side === "top" ? sec.margins.top : side === "bottom" ? sec.margins.bottom : side === "left" ? sec.margins.left + gutter : sec.margins.right;
+    return space + twipsToPx(margin);
+  };
+  const cross = (side: (typeof PAGE_BORDER_SIDES)[number]): string => (side === "top" || side === "bottom" ? "left:0;right:0" : "top:0;bottom:0");
+  return PAGE_BORDER_SIDES.map((side) => {
+    const css = borderCss(`border-${side}`, borders.sides[side]);
+    return css
+      ? `<div class="${PAGE_BORDER_CLASS}" data-side="${side}" contenteditable="false" aria-hidden="true" style="position:absolute;pointer-events:none;${cross(side)};${side}:${Math.round(inset(side))}px;${css}"></div>`
+      : "";
+  }).join("");
+}
+
 export function renderWord(doc: WordDocument): string {
   const sec = doc.sections[0] ?? DEFAULT_SECTION;
   const width = twipsToPx(sec.pageWidthTwips);
@@ -443,11 +490,14 @@ export function renderWord(doc: WordDocument): string {
     const spacing = gap === undefined ? "" : `;padding-${which === "header" ? "bottom" : "top"}:${gap}px`;
     return `<div class="hf hf-${which}${which === "footer" ? " hf-bottom" : ""}" data-hf="${which}" style="${style};padding-left:var(--pad-l);padding-right:var(--pad-r)${spacing}" title="${tip}">${paras}${bar}</div>`;
   };
-  return `${hf("header")}<div class="page" style="${style}">${renderBlocks(doc.blocks, doc, new Map(), {
+  const borders = renderPageBorders(sec);
+  // The border elements come last, inside the paper box: the editor addresses a block by its position among
+  // `.page`'s children, and a leading decoration would move every one of those positions by a step.
+  return `${hf("header")}<div class="page" style="${style}${borders ? ";position:relative" : ""}">${renderBlocks(doc.blocks, doc, new Map(), {
     open: new Set(),
     numbers: new Map(doc.comments.map((c, i) => [c.id, i + 1])),
     done: new Set(doc.comments.filter((c) => c.resolved === true).map((c) => c.id)),
-  })}</div>${hf("footer")}`;
+  })}${borders}</div>${hf("footer")}`;
 }
 
 function renderSlideParagraph(p: SlideParagraph): string {

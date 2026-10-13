@@ -66,3 +66,25 @@ export const WPS_NEAR_A4_SECTION =
  * both elements rather than neither.
  */
 export const BARE_SECTION = '<w:sectPr><w:cols w:space="720"/></w:sectPr>';
+
+/**
+ * A section carrying a page border, in the shape the 24 of the 115 corpus sections spell one: `w:pgBorders`
+ * after `w:pgMar` and before `w:cols`, its sides written `w:top`, `w:left`, `w:bottom`, `w:right`, and no
+ * `w:offsetFrom` on the container — none of those 24 spelled it. What was observed in the corpus is that shape
+ * and how often it appears; the stroke tokens, widths, gaps and colours below are this fixture's own choice
+ * from what §17.3.2.10 admits, because a probe over the 24 found nothing to copy: all four sides of every one
+ * of them state `none`, so no real file in this corpus draws a line.
+ */
+export const WPS_PAGE_BORDER_SECTION =
+  '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1800" w:header="851" w:footer="992" w:gutter="283"/><w:pgBorders><w:top w:val="single" w:sz="8" w:space="6" w:color="auto"/><w:left w:val="dashed" w:sz="12" w:space="0" w:color="FF0000"/><w:bottom w:val="double" w:sz="4" w:space="12"/><w:right w:val="none" w:sz="4" w:space="0"/></w:pgBorders><w:cols w:space="425"/><w:docGrid w:type="lines" w:linePitch="312"/></w:sectPr>';
+
+/**
+ * The page border as WPS' own 24 files write it: four sides, each stating `w:val="none"` plus a `w:sz` and a
+ * `w:space`, and no `w:color`. This is a border that was cleared rather than drawn, and it is the only
+ * page-border shape real files in this corpus show — so the obligation it pins is that the element is read, kept,
+ * and above all draws **nothing** on the page. Observed: the four sides, the three attributes each carries, and
+ * the `none` token. Not observed: the two numbers, which are this fixture's — a probe counts attribute names and
+ * the closed stroke enumeration, never a file's values.
+ */
+export const WPS_CLEARED_BORDER_SECTION =
+  '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1800" w:header="851" w:footer="992" w:gutter="283"/><w:pgBorders><w:top w:val="none" w:sz="0" w:space="0"/><w:left w:val="none" w:sz="0" w:space="0"/><w:bottom w:val="none" w:sz="0" w:space="0"/><w:right w:val="none" w:sz="0" w:space="0"/></w:pgBorders><w:cols w:space="425"/><w:docGrid w:type="lines" w:linePitch="312"/></w:sectPr>';

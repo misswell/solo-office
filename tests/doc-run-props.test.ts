@@ -3,7 +3,7 @@ import type { Inline, Paragraph } from "../src/core/docx.js";
 import { WordDocument } from "../src/core/docx.js";
 import { writeDocx } from "../src/core/write-docx.js";
 import { childSpans, elementContent, OpcPackage, text } from "../src/core/opc.js";
-import { makeOnOffDocx, makeRunPropsDocx, makeUnderlineDocx } from "./helpers/make-run.js";
+import { makeHighlightDocx, makeOnOffDocx, makeRunPropsDocx, makeUnderlineDocx } from "./helpers/make-run.js";
 import { renderInline } from "../src/core/render.js";
 
 const part = (bytes: Uint8Array): string => text(OpcPackage.from(bytes).bytes("word/document.xml")!);
@@ -336,5 +336,108 @@ describe("docx on/off family read as a statement", () => {
     const back = open(twice);
     expect(runAt(back, "说了没划").strike).toBe(false);
     expect(runAt(back, "回到基线").vertAlign).toBe("baseline");
+  });
+});
+
+/** Every `w:highlight` tag, as the file wrote it. */
+const hlTags = (xml: string): string[] => [...xml.matchAll(/<w:highlight(?:\s[^>]*)?\/>/g)].map((m) => m[0]);
+
+/**
+ * `w:highlight` is the third member of the "the value says which family member" line-up — §17.17.64's
+ * `ST_HighlightColor`, seventeen names of which one, `none`, means the same as `0`/`false`/`baseline` does for the
+ * on/off and alignment families: the run spoke, and what it spoke was no colour.
+ *
+ * Counted three ways and reconciled (`.scratch/highlight-counted.ts` walks the tag stack over 298 parts of 86 WPS
+ * files, then asks the production model what it resolves): the bodies state `w:highlight` **4605 times** and only
+ * two members ever appear — **`none` 4135** and `yellow` 470. Cut by owner: 2417 `none` plus 249 `yellow` on a
+ * run's own set, 1718 plus 221 on a paragraph mark. The run layer answers "who can reach it": of those 2666,
+ * **2369 are on runs this reader models** (2361 carrying text — 1474 inside table cells, 887 in body paragraphs —
+ * and 8 as marks), and the other **48 sit inside runs kept as the bytes they came in with**, which is exactly the
+ * 2417. Every one of them states `w:val`; no run leaves it off, and nothing in the corpus uses a name outside the
+ * seventeen.
+ *
+ * Who could lend a colour: **nobody**. `word/styles.xml` states `w:highlight` 0 times, `w:rPrDefault` 0, and the
+ * numbering definitions and the header/footer/footnote/endnote parts 0 each, so in these files the 4135 `none`
+ * sentences cancel a silence rather than a colour, and the rescue this round makes visible — a typed run no longer
+ * resurrecting a lent `yellow` — has 0 audience today. `LendHl` and the `blue` run are shapes the corpus points at
+ * without carrying, built to the patterns above. What does have audience is the file's own words: 2417 runs say
+ * `w:val="none"`, and reading back off the CSS lost that sentence (`background:none` hands its longhand to
+ * Chromium as `initial`, and only the seven names the renderer spells come back as a lookable `rgb(...)` —
+ * `.scratch/hl-pending.ts`).
+ */
+describe("docx highlight read as three states", () => {
+  it("tells the cancellation from the silence, under a name the page could not guess", () => {
+    const doc = open(makeHighlightDocx());
+    // §17.17.64's `none` is a value the run gave, so the model holds it as one rather than as an absence.
+    expect(runAt(doc, "说了没高亮").highlight).toBe("none");
+    expect(runAt(doc, "说了没高亮").asRead?.highlight).toBe("none");
+    expect(runAt(doc, "什么都没点").highlight).toBeUndefined();
+    // A name outside the seven the ribbon offers reads as itself; it is not a colour the page can look up.
+    expect(runAt(doc, "页面叫不出名字的高亮").highlight).toBe("blue");
+  });
+
+  it("stops the ladder per property at the rung that stated one", () => {
+    const doc = open(makeHighlightDocx());
+    // The run's own `w:rPr` outranks the character style it names (§17.7.2), so `none` beats the colour the style
+    // lends — and a style nobody contradicts still lends it.
+    expect(runAt(doc, "链上借来的高亮").highlight).toBe("yellow");
+    expect(runAt(doc, "盖掉借来的高亮").highlight).toBe("none");
+    expect(runAt(doc, "黄底").highlight).toBe("yellow");
+    // The borrowed colour is not the run's own sentence: it shows on screen but travels in no `w:rPr` slot.
+    expect(runAt(doc, "链上借来的高亮").rPrSlots?.some((s) => s.tag === "highlight")).toBe(false);
+    expect(runAt(doc, "盖掉借来的高亮").rPrSlots?.some((s) => s.tag === "highlight")).toBe(true);
+  });
+
+  it("hands back a stated cancellation, and a name it cannot draw, exactly as they sat", () => {
+    const before = part(makeHighlightDocx());
+    const after = save(open(makeHighlightDocx()));
+    expect(rPrOf(after, "说了没高亮")).toBe('<w:rPr><w:highlight w:val="none"/></w:rPr>');
+    expect(rPrOf(after, "盖掉借来的高亮")).toBe('<w:rPr><w:rStyle w:val="LendHl"/><w:highlight w:val="none"/></w:rPr>');
+    expect(rPrOf(after, "页面叫不出名字的高亮")).toBe(rPrOf(before, "页面叫不出名字的高亮"));
+    // The run that stated nothing keeps stating nothing: no `w:rPr` is invented to hold a colour that isn't there.
+    expect(rPrOf(after, "什么都没点")).toBe("");
+    expect(hlTags(after)).toEqual(hlTags(before));
+  });
+
+  it("writes the cancellation when the page turns off a colour the style lent", () => {
+    const doc = open(makeHighlightDocx());
+    const out = rPrOf(
+      retyped(doc, "链上借来的高亮", { ...runAt(doc, "链上借来的高亮"), highlight: "none" }),
+      "链上借来的高亮",
+    );
+    // Spelled, not deleted: the file's way of saying no is the enum name, and a silence is an answer no file wrote.
+    expect(out).toBe('<w:rPr><w:rStyle w:val="LendHl"/><w:highlight w:val="none"/></w:rPr>');
+  });
+
+  it("keeps the name the document chose when the page moves a run from one colour to another", () => {
+    const doc = open(makeHighlightDocx());
+    const moved = rPrOf(retyped(doc, "黄底", { ...runAt(doc, "黄底"), highlight: "green" }), "黄底");
+    expect(moved).toBe('<w:rPr><w:highlight w:val="green"/></w:rPr>');
+    // `blue` is a §17.17.64 member the renderer has never met: it must go back out as the name, not as a colour.
+    const kept = rPrOf(retyped(doc, "页面叫不出名字的高亮", { ...runAt(doc, "页面叫不出名字的高亮"), text: "页面叫不出名字的高亮字" }), "页面叫不出名字的高亮");
+    expect(kept).toBe('<w:rPr><w:highlight w:val="blue"/></w:rPr>');
+  });
+
+  it("draws the cancellation as nothing, and stamps the name the run stated on the span it draws", () => {
+    const doc = open(makeHighlightDocx());
+    expect(renderInline(runAt(doc, "说了没高亮"))).toBe('<span style="background:transparent;" data-hl="none">说了没高亮</span>');
+    expect(renderInline(runAt(doc, "黄底"))).toBe('<span style="background:#ffff00;" data-hl="yellow">黄底</span>');
+    expect(renderInline(runAt(doc, "页面叫不出名字的高亮"))).toBe('<span style="background:blue;" data-hl="blue">页面叫不出名字的高亮</span>');
+    // The run that said nothing gets no stamp: an empty `data-hl` would be a sentence the file never wrote.
+    expect(renderInline(runAt(doc, "什么都没点"))).toBe("<span>什么都没点</span>");
+    // A borrowed colour draws, but the run's own words are what the stamp carries.
+    expect(renderInline(runAt(doc, "链上借来的高亮"))).toBe('<span style="background:#ffff00;" data-hl="yellow">链上借来的高亮</span>');
+    expect(renderInline(runAt(doc, "盖掉借来的高亮"))).toBe('<span style="background:transparent;" data-hl="none">盖掉借来的高亮</span>');
+  });
+
+  it("carries every state through every round trip, and through an edit elsewhere in the body", () => {
+    const once = writeDocx(open(makeHighlightDocx()));
+    const twice = writeDocx(open(once));
+    expect(part(twice)).toBe(part(once));
+    const back = open(twice);
+    expect(runAt(back, "说了没高亮").highlight).toBe("none");
+    expect(runAt(back, "页面叫不出名字的高亮").highlight).toBe("blue");
+    expect(runAt(back, "盖掉借来的高亮").highlight).toBe("none");
+    expect(hlTags(elsewhere(makeHighlightDocx()))).toEqual(hlTags(part(makeHighlightDocx())));
   });
 });

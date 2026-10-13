@@ -25,7 +25,14 @@ import { openPageSetup as showPageSetupDialog } from "./doc-page-setup.js";
 /** What one structure command came back with, including which table it ran on and how the page names it. */
 type CommandOutcome = { ok: true; at: CellWhere; prefix: number[]; table: Table } | { ok: false; reason: string };
 
-const HIGHLIGHT_NAMES = ["yellow", "green", "cyan", "magenta", "red", "darkYellow", "lightGray"];
+/**
+ * The names this page can bring back off a CSS colour: the seven the toolbar offers, plus §17.17.64's
+ * cancellation, which draws `transparent` and has to be read as a sentence rather than as an absence. It is a
+ * fallback only — the renderer stamps the document's own name as `data-hl`, and every name outside this list
+ * (`blue`, `darkGray`, a face the ribbon has never offered) comes back from that attribute instead of from a
+ * reverse lookup that could not have named it.
+ */
+const HIGHLIGHT_NAMES = ["yellow", "green", "cyan", "magenta", "red", "darkYellow", "lightGray", "none"];
 
 /** Chromium reports colors as `rgb(...)`; routing both sides through one element compares them. */
 const probe = document.createElement("span");
@@ -71,8 +78,16 @@ function styleOf(el: Element): RunStyle {
   if (deco.includes("line-through")) s.strike = true;
   if (inline.fontSize.endsWith("pt")) s.sizePt = Number.parseFloat(inline.fontSize);
   if (inline.color) s.color = hexOf(inline.color);
-  const bg = inline.backgroundColor || inline.background;
-  if (bg) s.highlight = HIGHLIGHT_BY_CSS.get(cssValue("background", bg));
+  // The document's own highlight name, stamped by the renderer, beats any guess from the colour: only seven of
+  // §17.17.64's members survive a trip through CSS as something this page can look up again, and the
+  // cancellation survives it as `transparent`. An element with no stamp — markup the browser made for a pending
+  // format, or pasted — still goes through the colour.
+  const stated = el.getAttribute("data-hl");
+  if (stated) s.highlight = stated;
+  else {
+    const bg = inline.backgroundColor || inline.background;
+    if (bg) s.highlight = HIGHLIGHT_BY_CSS.get(cssValue("background", bg));
+  }
   if (inline.verticalAlign === "super") s.vertAlign = "superscript";
   if (inline.verticalAlign === "sub") s.vertAlign = "subscript";
   return s;

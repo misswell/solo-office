@@ -70,10 +70,17 @@ export function renderInline(inline: Inline): string {
   if (inline.color) css += `color:${inline.color};`;
   const family = fontStack(inline);
   if (family) css += `font-family:${esc(family)};`;
+  // The name the document chose travels as data, not just as a colour: §17.17.64's members are what the file says,
+  // and a colour is what the page makes of one. Reading it back off the CSS is the route that loses a sentence —
+  // measured in the browser the page runs in, `background:none` hands its longhand back as `initial`, `blue` comes
+  // back as `blue`, and the seven names this renderer spells are the only ones whose `rgb(...)` can be looked up
+  // again (`.scratch/hl-pending.ts`). A run that stated `w:highlight w:val="none"` therefore came back from the
+  // page saying nothing, and the writer dropped the sentence with it.
+  const hl = inline.highlight ? ` data-hl="${esc(inline.highlight)}"` : "";
   if (inline.highlight) css += `background:${highlightColor(inline.highlight)};`;
   if (inline.vertAlign && inline.vertAlign !== "baseline")
     css += `vertical-align:${inline.vertAlign === "superscript" ? "super" : "sub"};font-size:.75em;`;
-  let html = inline.text === "" ? "" : `<span${css ? ` style="${css}"` : ""}>${esc(inline.text)}</span>`;
+  let html = inline.text === "" ? "" : `<span${css ? ` style="${css}"` : ""}${hl}>${esc(inline.text)}</span>`;
   if (html === "" && !css) html = esc(inline.text);
   // A link to a place in this document keeps its window to itself: `target="_blank"` on a `#name` href hands
   // the app's own page address to the system browser, where nobody has the bookmark open. The attributes the
@@ -120,6 +127,10 @@ export function highlightColor(name: string): string {
     red: "#ff0000",
     darkYellow: "#808000",
     lightGray: "#d4d4d4",
+    // §17.17.64's cancellation draws nothing, and it is still a sentence the document said. Spelled
+    // `background:transparent` rather than `background:none` because the shorthand resets more than the colour and
+    // hands its longhand back as `initial`, which no reverse lookup can name; `transparent` reads back as itself.
+    none: "transparent",
   };
   return map[name] ?? name;
 }

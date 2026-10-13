@@ -133,3 +133,36 @@ export function makeOnOffDocx(): Uint8Array {
       `</w:styles>`,
   );
 }
+
+/**
+ * `w:highlight`'s three states, in the shapes the files write.
+ *
+ * What the files write. Over the 298 body-bearing parts of the 86 WPS documents (正文、页眉、页脚、脚注、尾注) 4605
+ * `w:highlight` elements sit there, and only two enum members appear: **2417 `none`** and 249 `yellow` on a run's own
+ * set, 1718 `none` and 221 `yellow` on a paragraph mark (`.scratch/highlight-counted.ts` walks the tag stack and
+ * reconciles both ways). Nothing leaves `w:val` off, and no name outside §17.17.64's list appears. Of the 2417
+ * run-level cancellations this reader resolves 2369 into runs — 2361 of them carrying text, 1474 inside table cells
+ * and 887 in body paragraphs — and the other 48 ride along as the bytes of a run it does not model.
+ *
+ * Who could lend a colour: **nobody**. `word/styles.xml` states `w:highlight` 0 times, `w:rPrDefault` 0, the
+ * numbering part 0, and the header/footer/footnote parts 0 — so every one of those 2417 sentences cancels a rung
+ * that says nothing, which makes this a statement kept rather than pixels rescued, exactly as `w:u w:val="none"` and
+ * `w:vertAlign w:val="baseline"` were. `LendHl` is therefore a shape **no file in hand has**, built so the run's
+ * sentence has something to beat; and `blue`, an §17.17.64 name the page cannot call back off its CSS, has 0
+ * audience here too — these files only ever use `yellow`. What WPS itself writes for 无突出显示颜色 is the evidence
+ * this fixture is built to keep: `<w:highlight w:val="none"/>`, not silence.
+ */
+export function makeHighlightDocx(): Uint8Array {
+  const document = `<w:p><w:r><w:rPr><w:highlight w:val="none"/></w:rPr><w:t>说了没高亮</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:rStyle w:val="LendHl"/><w:highlight w:val="none"/></w:rPr><w:t>盖掉借来的高亮</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:rStyle w:val="LendHl"/></w:rPr><w:t>链上借来的高亮</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:highlight w:val="yellow"/></w:rPr><w:t>黄底</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:highlight w:val="blue"/></w:rPr><w:t>页面叫不出名字的高亮</w:t></w:r></w:p>
+<w:p><w:r><w:t>什么都没点</w:t></w:r></w:p>`;
+  return pack(
+    document,
+    `<w:styles xmlns:w="${NS_W}">` +
+      `<w:style w:type="character" w:styleId="LendHl"><w:name w:val="点了高亮的字符样式"/><w:rPr><w:highlight w:val="yellow"/></w:rPr></w:style>` +
+      `</w:styles>`,
+  );
+}

@@ -5,7 +5,7 @@ import { SEEN_BY_VIEW, inlineLength, keepRunIdentity } from "../src/core/run-ide
 import { writeDocx } from "../src/core/write-docx.js";
 import { OpcPackage, text } from "../src/core/opc.js";
 import { makeChainDocx } from "./helpers/make-paragraph.js";
-import { makeOnOffDocx, makeUnderlineDocx } from "./helpers/make-run.js";
+import { makeHighlightDocx, makeOnOffDocx, makeUnderlineDocx } from "./helpers/make-run.js";
 
 /**
  * #78 — the page is a rendering of the resolved run style, and the editor re-derives the model from it on every
@@ -52,6 +52,12 @@ const retyped = (inlines: Inline[], needle: string, add: string): Inline[] => {
  * `sup`/`sub` tag or `vertical-align:super/sub`, so a property the file turned off has nothing on screen to show
  * it and comes back as nothing at all. `bold` is the one that can report its off side, through `font-weight`.
  * `viewOf` above lets a run keep a `false` it was handed, which is what the page cannot do.
+ *
+ * `highlight` is deliberately not in that delete list: since #88 the renderer stamps the name the document chose
+ * as `data-hl`, and `styleOf` reads the attribute, so a run that said `w:val="none"` comes back saying `"none"`
+ * rather than as a colour guessed from CSS — which is what the round measured as lost (`.scratch/hl-pending.ts`:
+ * `background:none` hands Chromium's longhand back as `initial`, and only seven names survive a trip through CSS
+ * as something a reverse lookup can name). `unstampedView` below is the case the stamp does not cover.
  */
 function pageView(run: Inline, text = run.text): Inline {
   const out = viewOf(run, text);
@@ -59,6 +65,13 @@ function pageView(run: Inline, text = run.text): Inline {
   if (run.vertAlign === "baseline") delete out.vertAlign;
   return out;
 }
+
+/** The page when the markup carries none of our stamps: markup Blink made for a pending format, or pasted in. */
+const unstampedView = (run: Inline, text = run.text): Inline => {
+  const out = pageView(run, text);
+  delete out.highlight;
+  return out;
+};
 
 /** The same rebuild, from the page as it actually answers. */
 const retypedByPage = (inlines: Inline[], needle: string, add: string): Inline[] => {
@@ -164,6 +177,42 @@ describe("a run rebuilt from the page keeps what the page cannot show", () => {
       expect(p.inlines[0]!.text).toContain("打字");
     }
     expect(rPrs(save(doc))).toEqual(before);
+  });
+
+  it("saves a typed sentence without erasing the no-highlight it was typed into", () => {
+    const doc = open(makeHighlightDocx());
+    const before = rPrs(save(doc));
+    // Three sentences the file wrote about colour: its own `none`, a §17.17.64 name the page could never guess
+    // from CSS, and a `none` standing against a colour the style would lend. All three come back off `data-hl`.
+    for (const needle of ["说了没高亮", "页面叫不出名字的高亮", "盖掉借来的高亮"]) {
+      const p = paraAt(doc, needle);
+      p.inlines = retypedByPage(p.inlines, needle, "打字");
+      expect(p.inlines[0]!.highlight, needle).toBe(needle === "页面叫不出名字的高亮" ? "blue" : "none");
+      expect(p.inlines[0]!.text).toContain("打字");
+    }
+    expect(rPrs(save(doc))).toEqual(before);
+  });
+
+  it("keeps a no-highlight through markup that carries no stamp", () => {
+    const prev: Inline[] = [
+      {
+        text: "没高亮",
+        highlight: "none",
+        asRead: { highlight: "none" },
+        rPrSlots: [{ tag: "highlight", xml: '<w:highlight w:val="none"/>' } as PropSlot],
+      },
+    ];
+    // A span Blink made for a pending format, or pasted markup: nothing of ours on it, so it says nothing about
+    // the colour the run gave. Page silence is not a contradiction of a cancellation.
+    const next = [unstampedView(prev[0]!, "没高亮打的字")];
+    keepRunIdentity(next, prev);
+    expect(next[0]!.highlight).toBe("none");
+    expect(next[0]!.asRead).toEqual({ highlight: "none" });
+
+    // A colour the page does show is still the page's answer, the way `bold` was above.
+    const contradicted = [pageView({ ...prev[0]!, highlight: "yellow" }, "没高亮")];
+    keepRunIdentity(contradicted, [{ ...prev[0]! }]);
+    expect(contradicted[0]!.highlight).toBe("yellow");
   });
 
   it("keeps the file's own \`w:rPr\` and the read snapshot through a keystroke", () => {

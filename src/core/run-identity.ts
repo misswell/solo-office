@@ -109,10 +109,15 @@ export function keepRunIdentity(next: Inline[], prev: Inline[]): void {
       for (const key of Object.keys(from) as (keyof Inline)[]) {
         // The page can show a property that is *on*; it has nothing to show for one the file turned off. So a
         // rebuilt run that says nothing is not a contradiction of the origin's `false` — that statement lives
-        // only in `w:rPr` (`<w:u w:val="none"/>`, `<w:i w:val="0"/>`, `<w:strike w:val="0"/>`, and for
-        // `w:vertAlign` the enum name `baseline`), and letting the silence stand would turn an explicit
-        // cancellation back into "the run never mentioned it", which the writer then deletes.
-        const cancelled = run[key] === undefined && (from[key] === false || from[key] === "baseline");
+        // only in `w:rPr` (`<w:u w:val="none"/>`, `<w:i w:val="0"/>`, `<w:strike w:val="0"/>`, and for the two
+        // enum families the member that means no: `baseline` for `w:vertAlign` (§17.3.2.24) and `none` for
+        // `w:highlight` (§17.17.64), and letting the silence stand would turn an explicit cancellation back into
+        // "the run never mentioned it", which the writer then deletes. `w:highlight`'s name normally comes back
+        // off the `data-hl` the renderer stamps, so this branch is for the markup that carries no stamp: a span
+        // the browser made for a pending format, or pasted.
+        const cancelled =
+          run[key] === undefined &&
+          (from[key] === false || from[key] === "baseline" || (key === "highlight" && from[key] === "none"));
         if (!cancelled && (SEEN_BY_VIEW.includes(key) || run[key] !== undefined)) continue;
         if (ONCE_ONLY.includes(key) && given.has(from)) continue;
         (run as unknown as Record<string, unknown>)[key] = from[key];

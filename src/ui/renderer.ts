@@ -436,7 +436,7 @@ function buildDocRibbon(): void {
     font,
     "highlight",
     "突出显示",
-    [["", "高亮：无"], ["yellow", "黄"], ["green", "绿"], ["cyan", "青"], ["magenta", "品红"], ["red", "红"], ["darkYellow", "深黄"], ["lightGray", "浅灰"]],
+    [["none", "高亮：无"], ["yellow", "黄"], ["green", "绿"], ["cyan", "青"], ["magenta", "品红"], ["red", "红"], ["darkYellow", "深黄"], ["lightGray", "浅灰"]],
     (v) => {
       editor?.applyStyle({ highlight: v });
       syncDocRibbon();

@@ -32,6 +32,13 @@ export interface RunStyle {
   strike?: boolean;
   sizePt?: number;
   color?: string;
+  /**
+   * §17.17.64's `ST_HighlightColor` name, held as the three states the element has: absent is "this run said
+   * nothing", `"none"` is "this run said no highlight", and any other member is the colour it chose. `none` is a
+   * value rather than an absence because the file wrote it as one — the 86 WPS documents state
+   * `<w:highlight w:val="none"/>` 4,135 times (`.scratch/highlight-counted.ts`) — and §17.7.2 stops a property at
+   * the first rung that stated one, so keeping it as "nothing said" would let a colour lower down win.
+   */
   highlight?: string;
   /**
    * The Latin face, `w:rFonts@w:ascii`. Word dispatches a run's text by script: ASCII letters take `w:ascii`,
@@ -4394,6 +4401,9 @@ function runStyle(rPr: any): RunStyle {
   if (rPr.sz) s.sizePt = Number(rPr.sz["@_val"]) / 2;
   const color = rPr.color?.["@_val"];
   if (color && color !== "auto") s.color = hex(color);
+  // `none` is kept as the value it is, not folded into the absence above it: §17.17.64 spells its cancellation with
+  // that enum name, and the files use it for 4,135 of the 4,605 `w:highlight` elements they state — the other 470
+  // all say `yellow`, and no run in these 86 documents leaves `w:val` off (`.scratch/highlight-counted.ts`).
   if (rPr.highlight?.["@_val"]) s.highlight = rPr.highlight["@_val"];
   if (rPr.rFonts) {
     // One element, several faces, and a document may state any subset of them. Each attribute is read on its

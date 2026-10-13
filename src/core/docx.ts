@@ -4373,7 +4373,15 @@ function runStyle(rPr: any): RunStyle {
   const s: RunStyle = {};
   if (rPr.b !== undefined) s.bold = rPr.b["@_val"] !== "0" && rPr.b["@_val"] !== "false";
   if (rPr.i !== undefined) s.italic = rPr.i["@_val"] !== "0" && rPr.i["@_val"] !== "false";
-  if (rPr.u !== undefined && rPr.u["@_val"] !== "none") s.underline = true;
+  // `w:u` belongs to this same family and spells its cancellation with an enum name instead of `0`: §17.3.2.25's
+  // `ST_Underline` says `none`. Reading that as silence left the property the odd one out — a run that said
+  // "no underline" under a style that lends one kept the style's line, because §17.7.2 stops per property at the
+  // first rung that *stated* one, and this rung stated it. The files write the sentence: 952 `w:u` with `val`
+  // `none` in the 86 body parts, 254 of them on runs this reader resolves into fields (`.scratch/underline-counted.ts`,
+  // `.scratch/underline-audience.ts`), and not one of those 254 leaves `w:val` off — the shape read here is the
+  // shape WPS writes. None of the 254 sits on a chain that lends a line today, so this is a representation fix,
+  // not a pixel fix; what it buys is that the statement survives an edit that should not have changed it.
+  if (rPr.u !== undefined) s.underline = rPr.u["@_val"] !== "none";
   if (rPr.strike !== undefined) s.strike = true;
   if (rPr.sz) s.sizePt = Number(rPr.sz["@_val"]) / 2;
   const color = rPr.color?.["@_val"];

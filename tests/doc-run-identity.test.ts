@@ -5,6 +5,7 @@ import { SEEN_BY_VIEW, inlineLength, keepRunIdentity } from "../src/core/run-ide
 import { writeDocx } from "../src/core/write-docx.js";
 import { OpcPackage, text } from "../src/core/opc.js";
 import { makeChainDocx } from "./helpers/make-paragraph.js";
+import { makeUnderlineDocx } from "./helpers/make-run.js";
 
 /**
  * #78 — the page is a rendering of the resolved run style, and the editor re-derives the model from it on every
@@ -45,6 +46,26 @@ const retyped = (inlines: Inline[], needle: string, add: string): Inline[] => {
   return next;
 };
 
+/**
+ * The list the page hands back as it really is. `styleOf` only ever switches `italic`, `underline` and `strike`
+ * to true — an `<i>`, a `<u>`, a `text-decoration` — so a property the file turned off has nothing on screen to
+ * show it and comes back as nothing at all. `bold` is the one that can report its off side, through
+ * `font-weight`. `viewOf` above lets a run keep a `false` it was handed, which is what the page cannot do.
+ */
+function pageView(run: Inline, text = run.text): Inline {
+  const out = viewOf(run, text);
+  for (const key of ["italic", "underline", "strike"] as const) if (run[key] === false) delete out[key];
+  return out;
+}
+
+/** The same rebuild, from the page as it actually answers. */
+const retypedByPage = (inlines: Inline[], needle: string, add: string): Inline[] => {
+  const prev = inlines.map((r) => ({ ...r }));
+  const next = prev.map((r) => (r.text.includes(needle) ? pageView(r, r.text + add) : pageView(r)));
+  keepRunIdentity(next, prev);
+  return next;
+};
+
 /** Every field a run can hold, so a new one cannot join the list of things the page silently forgets. */
 const FULL: Inline = {
   text: "正文",
@@ -78,6 +99,41 @@ describe("a run rebuilt from the page keeps what the page cannot show", () => {
       if (key === "text") continue; // the text is the one thing the page does tell us, and it grew
       expect(next[0]![key], String(key)).toEqual(FULL[key]);
     }
+  });
+
+  it("keeps a cancellation the page has nothing to show for", () => {
+    const prev: Inline[] = [
+      {
+        text: "这句话",
+        underline: false,
+        italic: false,
+        asRead: { underline: false, italic: false },
+        rPrSlots: [
+          { tag: "i", xml: '<w:i w:val="0"/>' } as PropSlot,
+          { tag: "u", xml: '<w:u w:val="none"/>' } as PropSlot,
+        ],
+      },
+    ];
+    const next = [pageView(prev[0]!, "这句话打的字")];
+    keepRunIdentity(next, prev);
+    // A run that says nothing about the line is not the run taking its `none` back — only an off switch the page
+    // can show is a contradiction. Left standing, the silence makes the writer delete what the file stated.
+    expect(next[0]!.underline).toBe(false);
+    expect(next[0]!.italic).toBe(false);
+
+    // The one property the page does switch off on its own stays the page's answer.
+    const contradicted = [pageView({ ...prev[0]!, bold: false }, "这句话打的字")];
+    keepRunIdentity(contradicted, [{ ...prev[0]!, bold: true }]);
+    expect(contradicted[0]!.bold).toBe(false);
+  });
+
+  it("saves a typed sentence without erasing the no-underline it was typed into", () => {
+    const doc = open(makeUnderlineDocx());
+    const before = rPrs(save(doc));
+    const p = paraAt(doc, "说明没有");
+    p.inlines = retypedByPage(p.inlines, "说明没有", "打字");
+    expect(p.inlines[0]!.underline).toBe(false);
+    expect(rPrs(save(doc))).toEqual(before);
   });
 
   it("keeps the file's own \`w:rPr\` and the read snapshot through a keystroke", () => {

@@ -14,7 +14,9 @@ const NS_O = "urn:schemas-microsoft-com:office:office";
 const NS_W14 = "http://schemas.microsoft.com/office/word/2010/wordml";
 const CT_W = "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml";
 
-const pack = (document: string): Uint8Array =>
+const STYLES_DEFAULT = `<w:styles xmlns:w="${NS_W}"><w:style w:type="character" w:styleId="Hyperlink"><w:name w:val="Hyperlink"/></w:style></w:styles>`;
+
+const pack = (document: string, styles = STYLES_DEFAULT): Uint8Array =>
   zipSync(
     {
       "[Content_Types].xml": strToU8(
@@ -32,7 +34,7 @@ const pack = (document: string): Uint8Array =>
           `<w:document xmlns:w="${NS_W}" xmlns:r="${NS_R}" xmlns:mc="${NS_MC}" xmlns:wp="${NS_WP}" xmlns:a="${NS_A}" ` +
           `xmlns:wps="${NS_WPS}" xmlns:v="${NS_V}" xmlns:o="${NS_O}" xmlns:w14="${NS_W14}"><w:body>${document}</w:body></w:document>`,
       ),
-      "word/styles.xml": strToU8(XML_DECL + `<w:styles xmlns:w="${NS_W}"><w:style w:type="character" w:styleId="Hyperlink"><w:name w:val="Hyperlink"/></w:style></w:styles>`),
+      "word/styles.xml": strToU8(XML_DECL + styles),
     },
     { level: 6 },
   );
@@ -71,4 +73,33 @@ export function makeRunPropsDocx(): Uint8Array {
 <w:p><w:r><w:rPr><w:b/><w:lang w:val="en-US"/></w:rPr><w:t>两截同式</w:t></w:r><w:r><w:rPr><w:b/><w:kern w:val="28"/></w:rPr><w:t>各写各的</w:t></w:r></w:p>
 <w:p><w:hyperlink r:id="rId2"><w:r><w:rPr><w:rStyle w:val="Hyperlink"/><w:kern w:val="28"/></w:rPr><w:t>链接里的字</w:t></w:r></w:hyperlink></w:p>`;
   return pack(document);
+}
+
+/**
+ * The `w:u` shapes, split by who states them.
+ *
+ * What the files write. Over the 86 WPS documents' body parts, 1586 `w:u` elements sit there: 1256 on a run's own
+ * `w:rPr` (670 `none` and 200 `thick` inside table cells, 386 `single` in body paragraphs) and 330 on a paragraph
+ * mark (282 `none` in cells, 48 `single` in body). Of the 1256 run-level ones this reader turns 488 into runs with
+ * fields — **254 `<w:u w:val="none"/>`**, 194 `single`, 40 `thick`, none leaving `w:val` off — while the other 768
+ * are runs it keeps as the bytes they came in with (fields and content controls), and those never pass through a
+ * field at all (`.scratch/underline-counted.ts` walks both ways and reconciles them).
+ *
+ * Who could lend a line: `word/styles.xml` does state `w:u`, 35 times, every one of them inside a `w:style`'s own
+ * `w:rPr` — 31 character styles `single`, 4 `none` — while `w:rPrDefault` states it 0 times and the body parts hold
+ * 0 `w:hyperlink` elements. Cross the two and the audience of a cancellation is 0 today: all 254 `none` runs sit on
+ * a chain whose every rung says nothing about `w:u`, and the 8 runs that do borrow a line say nothing themselves
+ * (`.scratch/underline-audience.ts`). So this fixture's `LendU` is a shape **no file in hand has**: §17.7.2's rung
+ * that lends a line, built only so the run's sentence above has something it has to beat.
+ */
+export function makeUnderlineDocx(): Uint8Array {
+  const document = `<w:p><w:r><w:rPr><w:u w:val="none"/></w:rPr><w:t>说明没有</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:rStyle w:val="LendU"/><w:u w:val="none"/></w:rPr><w:t>这句话盖掉借来的线</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:rStyle w:val="LendU"/></w:rPr><w:t>链上借来的线</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:u w:val="single"/></w:rPr><w:t>自己点了线</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:u w:val="thick"/></w:rPr><w:t>粗线原样回去</w:t></w:r></w:p>`;
+  return pack(
+    document,
+    `<w:styles xmlns:w="${NS_W}"><w:style w:type="character" w:styleId="LendU"><w:name w:val="点了下划线的字符样式"/><w:rPr><w:u w:val="single"/></w:rPr></w:style></w:styles>`,
+  );
 }

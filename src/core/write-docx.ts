@@ -213,7 +213,7 @@ function runPropsInner(s: RunStyle): string {
   if (s.color) parts.push(`<w:color w:val="${XML_ESC(s.color.replace(/^#/, "").toUpperCase())}"/>`);
   if (s.sizePt) parts.push(`<w:sz w:val="${Math.round(s.sizePt * 2)}"/><w:szCs w:val="${Math.round(s.sizePt * 2)}"/>`);
   if (s.highlight) parts.push(`<w:highlight w:val="${XML_ESC(s.highlight)}"/>`);
-  if (s.underline) parts.push('<w:u w:val="single"/>');
+  if (s.underline !== undefined) parts.push(s.underline ? '<w:u w:val="single"/>' : '<w:u w:val="none"/>');
   if (s.vertAlign) parts.push(`<w:vertAlign w:val="${s.vertAlign}"/>`);
   return parts.join("");
 }
@@ -287,7 +287,15 @@ const RUN_PROPS: {
     tags: ["highlight"],
     spell: (r, prefix) => (r.highlight ? `<${prefix}:highlight w:val="${XML_ESC(r.highlight)}"/>` : ""),
   },
-  { key: "underline", tags: ["u"], spell: (r, prefix) => (r.underline ? `<${prefix}:u w:val="single"/>` : "") },
+  {
+    key: "underline",
+    tags: ["u"],
+    // The cancellation is written, not deleted: the 86 body parts hold 952 `<w:u w:val="none"/>`, 254 of them on
+    // runs whose chain states nothing about `w:u` at all, so a save that drops the element is inventing a
+    // silence the file never wrote — exactly the mistake `<w:b w:val="0"/>` above refuses to make.
+    spell: (r, prefix) =>
+      r.underline === undefined ? "" : r.underline ? `<${prefix}:u w:val="single"/>` : `<${prefix}:u w:val="none"/>`,
+  },
   { key: "vertAlign", tags: ["vertAlign"], spell: (r, prefix) => (r.vertAlign ? `<${prefix}:vertAlign w:val="${r.vertAlign}"/>` : "") },
 ];
 

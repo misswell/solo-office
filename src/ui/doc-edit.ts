@@ -46,6 +46,9 @@ function cssValue(property: "color" | "background", value: string): string {
 
 const HIGHLIGHT_BY_CSS = new Map<string, string>(HIGHLIGHT_NAMES.map((n) => [cssValue("background", highlightColor(n)), n]));
 
+/** The zero-width space the pending cancellation stands in for: a character no run may ever keep. */
+const ZWSP = "\u200b";
+
 function hexOf(css: string): string | undefined {
   const rgb = /^rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(css);
   if (!rgb) return undefined;
@@ -78,16 +81,17 @@ function styleOf(el: Element): RunStyle {
   if (deco.includes("line-through")) s.strike = true;
   if (inline.fontSize.endsWith("pt")) s.sizePt = Number.parseFloat(inline.fontSize);
   if (inline.color) s.color = hexOf(inline.color);
-  // The document's own highlight name, stamped by the renderer, beats any guess from the colour: only seven of
-  // §17.17.64's members survive a trip through CSS as something this page can look up again, and the
-  // cancellation survives it as `transparent`. An element with no stamp — markup the browser made for a pending
-  // format, or pasted — still goes through the colour.
-  const stated = el.getAttribute("data-hl");
-  if (stated) s.highlight = stated;
-  else {
-    const bg = inline.backgroundColor || inline.background;
-    if (bg) s.highlight = HIGHLIGHT_BY_CSS.get(cssValue("background", bg));
-  }
+  // Which of the two the page hands back is the fresher claim: the colour we can name out of the inline style is
+  // the one Blink wrote *this time*, while `data-hl` is an attribute it copies along when it splits a span. At a
+  // collapsed caret inside a highlighted run, 工具栏 changing the colour rewrites the style (`background-color:
+  // rgb(0, 255, 0)`) and leaves the copied name (`yellow`) behind — reading the stamp first made the change land
+  // as no change at all, in the model and in the saved file. So the colour wins when this page can name it, and
+  // the stamp is the fallback for the names CSS cannot carry back (§17.17.64 has 17 members, the ribbon offers 8,
+  // and `blue` round-trips through CSS only as the stamp).
+  const bg = inline.backgroundColor || inline.background;
+  const fromCss = bg ? HIGHLIGHT_BY_CSS.get(cssValue("background", bg)) : undefined;
+  const hl = fromCss || el.getAttribute("data-hl");
+  if (hl) s.highlight = hl;
   if (inline.verticalAlign === "super") s.vertAlign = "superscript";
   if (inline.verticalAlign === "sub") s.vertAlign = "subscript";
   return s;
@@ -403,6 +407,15 @@ export class DocEditor {
   private redoStack: { blocks: Block[]; comments: DocComment[]; caret: DocPath | null; page: PageGeometry }[] = [];
   private burst = 0;
   private composing = false;
+  /**
+   * 悬光标待用的那一次高亮。Blink 的待用格式在这条路上交不出「无」：折叠光标处 `execCommand("hiliteColor", false,
+   * "transparent")` 返回 `true` 却是空操作，随后打的字照旧坐在原有的/借来的底色里（第 2 问）。它带得动颜色，但那是
+   * 另一张嘴：新字被包进它自己的 span，我们举着的 span 盖不住它（第 7 问：待用的「无」之后改点「绿」，打出来是绿）。
+   * 两种机制混着点，谁赢看不出来。所以高亮的待用整族改由编辑器自己举一个 span，每点一次换一个，最后一次说话的那次算。
+   * span 里那个零宽空格是撑位置的——空的 span Blink 直接跨过去，字落在左边的文本节点里（第 6 问）。占位字符绝不能吃进
+   * 文档：每次回折模型前由 `settleHlPending` 摘掉。
+   */
+  private hlPending: HTMLElement | null = null;
   private panel: CommentPanel | null = null;
   /** 审阅窗格: the list of every change still waiting, docked beside the page. */
   private review: ReviewPanel | null = null;
@@ -738,6 +751,13 @@ export class DocEditor {
 
   /** Remembered because a ribbon or panel click moves the focus out of the page. */
   private trackSelection(): void {
+    // 待用的取消只是光标底下的一件事：光标走到它外面，它就没被用过，占位符不能留在页面里。
+    const pending = this.hlPending;
+    if (pending?.isConnected) {
+      const sel = document.getSelection();
+      const at = sel && sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
+      if (at && !pending.contains(at.startContainer)) this.settleHlPending();
+    }
     const ends = this.rangeEnds();
     if (!ends) return;
     const painted = this.paintedCells;
@@ -754,9 +774,57 @@ export class DocEditor {
     return !!cell && cell.prefix.join() === painted.prefix && painted.cells.has(`${cell.where.row},${cell.where.col}`);
   }
 
+  /**
+   * Stand the pending highlight up under the caret. Blink's own pending format is not usable here for the whole
+   * family: `hiliteColor` with `transparent` returns true and does nothing at a collapsed caret, and when it *does*
+   * carry a colour it wraps the new character in a span of its own — which beats whatever the caret was sitting in,
+   * so clicking 黄 then 无 types yellow, the earlier of the two clicks. Carrying the pending format ourselves in one
+   * span (and replacing it on every click) makes the last click the one that counts. The placeholder is what makes
+   * the span usable: Blink steps over an empty one and lands the character in the text node to the left.
+   */
+  private armHlPending(name: string): void {
+    this.settleHlPending();
+    const sel = document.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const at = sel.getRangeAt(0);
+    if (!at.collapsed || !this.page?.contains(at.startContainer)) return;
+    at.collapse(true);
+    const span = document.createElement("span");
+    span.setAttribute("data-hl", name);
+    span.setAttribute("style", `background:${highlightColor(name)};`);
+    const holder = document.createTextNode(ZWSP);
+    span.append(holder);
+    at.insertNode(span);
+    const caret = document.createRange();
+    caret.setStart(holder, ZWSP.length);
+    caret.setEnd(holder, ZWSP.length);
+    sel.removeAllRanges();
+    sel.addRange(caret);
+    this.hlPending = span;
+  }
+
+  /**
+   * The placeholder is not text: settle it before every fold back into the model and whenever the caret walks away.
+   * A span that still holds only it was never used and goes; one the characters landed in keeps them and loses the
+   * placeholder — the cancellation now lives in the model and in the stamp the renderer puts back, so this one pass
+   * is enough.
+   */
+  private settleHlPending(): void {
+    const span = this.hlPending;
+    this.hlPending = null;
+    if (!span?.isConnected) return;
+    if ((span.textContent ?? "") === ZWSP) {
+      span.remove();
+      return;
+    }
+    const holder = span.firstChild;
+    if (holder instanceof Text && holder.textContent?.startsWith(ZWSP)) holder.deleteData(0, ZWSP.length);
+  }
+
   /** Re-derives the model from the DOM, then repairs anything structural the browser changed. */
   private mutated(): void {
     if (!this.page) return;
+    this.settleHlPending();
     const before = shape(this.doc.blocks);
     const anchorsBefore = countAnchors(this.doc.blocks);
     const caret = this.caretPath();
@@ -1689,14 +1757,16 @@ export class DocEditor {
         underline: "underline",
         strike: "strikeThrough",
         color: "foreColor",
-        highlight: "hiliteColor",
       };
       const key = Object.keys(patch)[0];
       const value = patch[key as keyof StylePatch];
       if (key === "sizePt") return;
-      document.execCommand("styleWithCSS", false, "true");
-      if (key === "highlight") document.execCommand("hiliteColor", false, value === "" || value === undefined ? "transparent" : highlightColor(String(value)));
-      else document.execCommand(command[key]!, false, typeof value === "string" ? value : undefined);
+      // 高亮这一族的待用格式自己举（`armHlPending`），余下的仍交给 Blink。
+      if (key === "highlight") this.armHlPending(value ? String(value) : "none");
+      else {
+        document.execCommand("styleWithCSS", false, "true");
+        document.execCommand(command[key]!, false, typeof value === "string" ? value : undefined);
+      }
       this.hooks.changed();
       return;
     }

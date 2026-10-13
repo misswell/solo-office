@@ -14,6 +14,12 @@ import type { Inline } from "./docx.js";
  * run already showed before the edit is not a property the edit stated.
  */
 
+/** A mark (image, break, tab, anchor, carried structure) is a paragraph's content that is not text: it keeps a
+ *  paragraph from being empty, and it stands for one character — which is how a caret offset is counted too.
+ *  Document text never holds NUL, so `flatOf` can use one as the placeholder. */
+export const isMark = (inline: Inline): boolean =>
+  !!inline.image || !!inline.break || !!inline.tab || !!inline.anchor || !!inline.carry;
+
 /** A mark (image, break, tab, anchor, carried structure) stands for one character, which is how a caret offset is
  *  counted too. Document text never holds NUL, so `flatOf` can use one as the placeholder. */
 export const inlineLength = (inline: Inline): number => (inline.text !== "" ? inline.text.length : 1);

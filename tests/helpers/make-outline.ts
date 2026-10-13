@@ -22,11 +22,27 @@ const CT_STY = "application/vnd.openxmlformats-officedocument.wordprocessingml.s
  *
  * `Heading2` is the odd one out on purpose: Word spells its built-in heading styles exactly that way, so the
  * id-only branch in the renderer stays tested even though no file in this corpus lands on it.
+ *
+ * The `w:next` set is the same census applied to §17.7.2.24 (`.scratch/next-resolve.ts`): 668 of their 2,378
+ * styles state a next style, every one of those targets is a declared paragraph style and none is the style that
+ * states it, and 358 more take a next only from a `w:basedOn` ancestor. The three shapes that are not the headline
+ * case are here because they are what the corpus says a *reader* has to get wrong quietly:
+ *
+ * - `Normal` — the default paragraph style — states a next in 63 of the 86 files, and 16,783 of their 30,322
+ *   paragraphs name no style at all. A reader that lends the default style's next to those paragraphs turns body
+ *   text into another style on every second Enter (924 of them would land on a heading style).
+ * - `Borrow` states no next while its ancestor does: that is the 358.
+ * - `Dangling` names a style the part does not declare and `SelfNext` names itself; neither is in the corpus
+ *   (both count zero there), and neither is something a split could apply.
  */
 const STYLES = `<w:styles xmlns:w="${NS_W}">
 <w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri"/><w:sz w:val="22"/></w:rPr></w:rPrDefault></w:docDefaults>
-<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
-<w:style w:type="paragraph" w:styleId="T1"><w:name w:val="标题 1"/><w:basedOn w:val="Normal"/><w:pPr><w:outlineLvl w:val="0"/></w:pPr></w:style>
+<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:next w:val="Body1"/></w:style>
+<w:style w:type="paragraph" w:styleId="T1"><w:name w:val="标题 1"/><w:basedOn w:val="Normal"/><w:next w:val="Body1"/><w:pPr><w:outlineLvl w:val="0"/></w:pPr></w:style>
+<w:style w:type="paragraph" w:styleId="Body1"><w:name w:val="正文 1"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="120" w:after="120" w:line="300" w:lineRule="auto"/><w:jc w:val="both"/></w:pPr></w:style>
+<w:style w:type="paragraph" w:styleId="Borrow"><w:name w:val="借来的后续"/><w:basedOn w:val="T1"/></w:style>
+<w:style w:type="paragraph" w:styleId="Dangling"><w:name w:val="后续样式没声明"/><w:next w:val="NoSuchStyle"/></w:style>
+<w:style w:type="paragraph" w:styleId="SelfNext"><w:name w:val="后续是自己"/><w:next w:val="SelfNext"/></w:style>
 <w:style w:type="paragraph" w:styleId="T2"><w:name w:val="标题 2"/><w:basedOn w:val="T1"/><w:pPr><w:outlineLvl w:val="1"/></w:pPr></w:style>
 <w:style w:type="paragraph" w:styleId="Deep"><w:name w:val="借两级"/><w:basedOn w:val="T2"/></w:style>
 <w:style w:type="paragraph" w:styleId="Body"><w:name w:val="正文回到9"/><w:basedOn w:val="T1"/><w:pPr><w:outlineLvl w:val="9"/></w:pPr></w:style>

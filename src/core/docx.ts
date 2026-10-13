@@ -1,4 +1,5 @@
 import { OpcPackage, asArray, childSpans, children, decodeEntities, elementContent } from "./opc.js";
+import { isMark } from "./run-identity.js";
 import { dataUrl } from "./media.js";
 import { coversWholeSet, decideSetXml, decideSlots, recordedSlots, setChildren } from "./doc-table-revisions.js";
 import { cellCovering, columnStarts, deleteColumn, gridColumns, removeCell, repairMerges } from "./doc-table-ops.js";
@@ -1298,11 +1299,13 @@ export const stampNow = (): string => new Date().toISOString().replace(/\.\d{3}Z
 
 /**
  * One `w:style` as this model keeps it: the properties it states itself (`pPr`, `rPr`), the style whose
- * unstated properties it takes over (`basedOn`), and the name the UI shows.
+ * unstated properties it takes over (`basedOn`), the style a paragraph takes when this one is split by Enter
+ * (`next`), and the name the UI shows.
  */
 export interface StyleDef {
   name: string;
   basedOn?: string;
+  next?: string;
   rPr?: RunStyle;
   pPr?: Partial<ParaStyle>;
 }
@@ -1325,6 +1328,8 @@ export class WordDocument {
   private lentMemo = new Map<string | undefined, Partial<ParaStyle> | undefined>();
   /** The same memo for `runLent`, keyed by which kind of chain was walked as well as by the style. */
   private runLentMemo = new Map<string, Partial<RunStyle> | undefined>();
+  /** Resolved `w:next` per style id, the way `nextStyleOf` walks it. See §17.7.2.24. */
+  private nextMemo = new Map<string, string | undefined>();
   private numbering = new Map<number, NumberLevel[]>();
   private media = new Map<string, string>();
   private pkg?: OpcPackage;
@@ -1470,6 +1475,7 @@ export class WordDocument {
     this.docDefaultRun = {};
     this.lentMemo.clear();
     this.runLentMemo.clear();
+    this.nextMemo.clear();
     if (!pkg.parts.has("word/styles.xml")) return;
     const st = pkg.xml("word/styles.xml");
     const root = unwrap(st, "styles");
@@ -1486,6 +1492,7 @@ export class WordDocument {
       this.styles.set(id, {
         name: s.name?.["@_val"] ?? id,
         basedOn: s.basedOn?.["@_val"],
+        next: s.next?.["@_val"],
         rPr: s.rPr ? runStyle(s.rPr) : undefined,
         pPr: s.pPr ? paraStyle(s.pPr) : undefined,
       });
@@ -2045,6 +2052,87 @@ export class WordDocument {
   /** Referenced style definitions, for a writer that has to regenerate word/styles.xml. */
   styleDef(styleId: string): StyleDef | undefined {
     return this.styles.get(styleId);
+  }
+
+  /**
+   * What a paragraph that names this style borrows from it and its ancestors: the same ladder §17.7.2 builds for
+   * a paragraph read off the part, so a paragraph this editor builds draws and saves like one the file wrote.
+   */
+  paragraphStyleOf(styleId: string | undefined): Partial<ParaStyle> | undefined {
+    return this.paraLent(styleId);
+  }
+
+  /**
+   * §17.7.2.24 `w:next`: the style a paragraph takes when Enter splits the one that names `styleId`. The split
+   * keeps the paragraph's own direct properties and drops the ones the previous style was lending it, so the
+   * new paragraph reads as a paragraph whose `w:pPr` says only `w:pStyle`.
+   *
+   * Only a style the paragraph *names* answers the question — a paragraph that names none falls back on the
+   * default paragraph style for formatting (§17.7.2) but not for a next style. The 86 WPS-written documents say
+   * why (`.scratch/next-resolve.ts`): 668 of their 2,378 styles state `w:next`, a further 358 inherit it from a
+   * `w:basedOn` ancestor, and every one of the 668 targets is a declared paragraph style that is not the style
+   * stating it. Left alone, that reaches body text: 63 of the 86 have a `w:next` on their default paragraph
+   * style, 16,783 of their 30,322 paragraphs name no style, and 924 of those would land on a heading style —
+   * every second Enter turning ordinary prose into a heading. Nothing in the corpus behaves that way: of its
+   * 230 adjacent paragraph style changes, 0 match the preceding style's `w:next`, and of its 934 paragraphs that
+   * name a style, 0 name a default style's next. A heading's next, which is the case the feature is for, always
+   * travels as an explicit `w:pStyle`.
+   *
+   * A `w:next` that names a style the part does not declare, or the style itself, says nothing a split could
+   * apply, so it reads as no next at all.
+   */
+  nextStyleOf(styleId: string | undefined): string | undefined {
+    if (styleId === undefined) return undefined;
+    if (this.nextMemo.has(styleId)) return this.nextMemo.get(styleId);
+    const seen = new Set<string>();
+    let next: string | undefined;
+    for (let cur: string | undefined = styleId; cur !== undefined && !seen.has(cur); cur = this.styles.get(cur)?.basedOn) {
+      seen.add(cur);
+      const stated = this.styles.get(cur)?.next;
+      if (stated !== undefined && stated !== styleId && this.styles.has(stated)) {
+        next = stated;
+        break;
+      }
+    }
+    this.nextMemo.set(styleId, next);
+    return next;
+  }
+
+  /**
+   * The paragraph Enter leaves behind when `previous`'s style names a §17.7.2.24 next style, or nothing when it
+   * names none — the caller then copies the shape it had, which is the rule for a style that says no more.
+   *
+   * 后一段按**新样式的链**画，带上上一段自己写的直接格式（拆段不改直接格式），丢掉上一段样式链借给它的那些。
+   * 自己写的那一套这样认：这一段现在显示的、它**旧的**样式链并没有说的那些项。读入快照 `asRead` 当不了参照——
+   * 它存的是解析完样式链之后的那一套，文件自己写的 `w:ind w:left="720"` 与链借来的在里头是同一个值，对着它比
+   * 只剩「用户后来改过的」，回车就把上一段自己写的缩进、行距整个忘掉（`.scratch/next-dom.ts` 在真页面上量到的
+   * 正是这条）。剩下的口子只有一处：自己写的值恰好与旧链相同的那一项分不出来，回车后落回新样式的值。
+   *
+   * `asRead` 交的是**新链**那一份，于是写出侧对着它只把 `w:pStyle` 说出去——保存回来就是「这段只点名了一个样式」
+   * 的形状，而不是把上一个样式的段落属性抄成这一段自己的。
+   *
+   * 空段上回车结束列表是同一条规则：上一段没有内容（只有空白文字，占位的标记一个都没有），新段就不该再占一个编号。
+   */
+  nextSplit(previous: Paragraph): Paragraph | undefined {
+    const nextId = this.nextStyleOf(previous.styleId);
+    if (nextId === undefined) return undefined;
+    const lent: ParaStyle = { ...this.paragraphStyleOf(nextId) };
+    const own = ownParaStyle(this.paragraphStyleOf(previous.styleId), paraStyleOf(previous));
+    delete own.styleId;
+    const fields: ParaStyle = { ...lent, ...own };
+    // 「拆段不改直接格式」在这一条上有例外：`w:pageBreakBefore` 说的不是这一段的排版，是「这一段之前必须断一页」，
+    // 跟着走就是每按一次回车多一页。新段落按它自己的样式画。
+    delete fields.pageBreakBefore;
+    // 空段上回车结束列表，是同一条规则：这一段没有内容，它就不该再占一个编号。
+    if (previous.inlines.every((i) => i.text.trim() === "" && !isMark(i))) delete fields.numPr;
+    return {
+      kind: "paragraph",
+      ...fields,
+      styleId: nextId,
+      styleName: this.styleDef(nextId)?.name,
+      asRead: lent,
+      inlines: [],
+    };
   }
 
   /** The body-level section properties exactly as read — headers, footers and columns live here. */

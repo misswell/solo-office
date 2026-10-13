@@ -6,7 +6,7 @@ import type { CellWhere, TableEdit } from "../core/doc-table-ops.js";
 import { cellRangeFor, cellRect, cellsInRect, cellsInSweep, deleteColumnHere, deleteRowHere, gridColumns, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, splitHere, splitTableAt } from "../core/doc-table-ops.js";
 import { IMAGE_EXT_BY_MIME } from "../core/media.js";
 import { CARRY_CLASS, CARRY_STYLE, PAGE_BORDER_CLASS, RUN_CARRY_CLASS, highlightColor, renderWord } from "../core/render.js";
-import { flatOf, inlineLength, keepRunIdentity } from "../core/run-identity.js";
+import { flatOf, inlineLength, isMark, keepRunIdentity } from "../core/run-identity.js";
 import { CommentPanel } from "./doc-comments.js";
 import { ReviewPanel } from "./doc-review.js";
 import { OutlinePanel } from "./doc-outline.js";
@@ -253,9 +253,6 @@ const sameStyle = (a: Inline, b: Inline): boolean =>
 const cleanText = (text: string): string => text.replace(/\u00a0/g, " ");
 
 const charLength = (inlines: Inline[]): number => inlines.reduce((n, i) => n + inlineLength(i), 0);
-
-const isMark = (inline: Inline): boolean =>
-  !!inline.image || !!inline.break || !!inline.tab || !!inline.anchor || !!inline.carry;
 
 function merge(inlines: Inline[]): Inline[] {
   const out: Inline[] = [];
@@ -813,7 +810,7 @@ export class DocEditor {
         previous = undefined;
         continue;
       }
-      const paragraph: Paragraph = known?.kind === "paragraph" ? known : fresh(previous);
+      const paragraph: Paragraph = known?.kind === "paragraph" ? known : fresh(previous, this.doc);
       paragraph.inlines = this.inlinesOf(el, paragraph.inlines);
       readParagraphRevisions(el, paragraph);
       next.push(paragraph);
@@ -865,7 +862,7 @@ export class DocEditor {
             previous = undefined;
             continue;
           }
-          const paragraph: Paragraph = known?.kind === "paragraph" ? known : fresh(previous);
+          const paragraph: Paragraph = known?.kind === "paragraph" ? known : fresh(previous, this.doc);
           paragraph.inlines = this.inlinesOf(p, paragraph.inlines);
           readParagraphRevisions(p, paragraph);
           paragraphs.push(paragraph);
@@ -2645,9 +2642,18 @@ export class DocEditor {
   }
 }
 
-/** Paragraphs inherit the shape of the one before them — Word's rule for Enter mid-document. */
-function fresh(previous: Paragraph | undefined): Paragraph {
+/**
+ * Paragraphs inherit the shape of the one before them — Word's rule for Enter mid-document.
+ *
+ * Passing `doc` is what makes it an Enter: only a paragraph the page just split asks the previous paragraph's
+ * style for its §17.7.2.24 next style, and that switch is the model's own rule (`WordDocument.nextSplit`). A
+ * paragraph that comes back because a break's deletion is still waiting to be decided takes the shape it had, not
+ * a new style, so that caller leaves `doc` out.
+ */
+function fresh(previous: Paragraph | undefined, doc?: WordDocument): Paragraph {
   if (!previous) return { kind: "paragraph", inlines: [] };
+  const split = doc?.nextSplit(previous);
+  if (split) return split;
   const empty = previous.inlines.every((i) => i.text.trim() === "" && !isMark(i));
   return {
     kind: "paragraph",

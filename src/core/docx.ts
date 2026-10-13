@@ -2976,13 +2976,26 @@ export class WordDocument {
       childSpans(elementContent(raw))
         .filter((s) => s.tag === `${kind}Reference`)
         .map((s) => attrsOf(s.xml));
-    this.sectHas = { header: bound("header").length > 0, footer: bound("footer").length > 0 };
-    for (const kind of ["header", "footer"] as const) {
-      // The default reference wins; a section that binds only a first-page or an even one still has the
-      // part it holds.
+    // Which band the page shows is the section's own statement, not the order it wrote its references in
+    // (§17.10.3): the first-page band belongs to the opening page only when the section states `w:titlePg`, and
+    // an `even` band belongs to `w:evenAndOddHeaders` — which none of the 86 corpus files' `word/settings.xml`
+    // turns on, even though 29 of their 115 sections still cite an even reference. The templates show why the
+    // switch is the file's and not the renderer's: 14 sections cite default, even *and* first for both bands
+    // while stating no `w:titlePg`, which is a page where 首页不同 is available and off.
+    const firstPage = childSpans(elementContent(raw)).some((s) => s.tag === "titlePg");
+    const shown = (kind: "header" | "footer") => {
       const list = bound(kind);
-      const pick = list.find((a) => a["type"] === "default" && a["id"]) ?? list.find((a) => a["id"]);
-      const id = pick?.["id"];
+      const defaultBand = list.find((a) => a["type"] === "default" && a["id"]);
+      // A section that asks for a different first page but cites no first-page band still has the part it holds:
+      // blanking the page here would take away text the file wrote. What WPS shows for that shape is 未取证.
+      return (firstPage ? list.find((a) => a["type"] === "first" && a["id"]) : undefined) ?? defaultBand;
+    };
+    const picks: Record<"header" | "footer", Record<string, string> | undefined> = { header: shown("header"), footer: shown("footer") };
+    // Whether the section already cites the band this page shows — the question a save asks before adding a
+    // reference of its own. A band the section cites but the page does not show is not a band the model holds.
+    this.sectHas = { header: !!picks.header?.["id"], footer: !!picks.footer?.["id"] };
+    for (const kind of ["header", "footer"] as const) {
+      const id = picks[kind]?.["id"];
       if (!id) continue;
       const rel = rels.get(id);
       if (!rel) continue;

@@ -20,14 +20,18 @@ export const REFERENCE_ID_FIRST = '<w:headerReference r:id="rId5" w:type="defaul
 /** Word's own order, which none of the 116 references in the corpus uses. Both have to read. */
 export const REFERENCE_TYPE_FIRST = '<w:headerReference w:type="default" r:id="rId5"/>';
 
-/** A section that binds only a first-page header. There is still a part here, and it is this one. */
+/** A section that binds only a first-page header. Shown only when the section also states `w:titlePg`. */
 export const REFERENCE_FIRST_PAGE_ONLY = '<w:headerReference r:id="rId5" w:type="first"/>';
+
+/** A section that binds only an even-page header — a part held, and on one page never the one to show. */
+export const REFERENCE_EVEN_ONLY = '<w:headerReference r:id="rId5" w:type="even"/>';
 
 /**
  * A one-paragraph body whose section points at one header or footer part. The caller owns that part whole,
- * declaration included, so what a save hands back can be compared to it byte for byte.
+ * declaration included, so what a save hands back can be compared to it byte for byte. `titlePg` writes the
+ * section's 「首页不同」 switch, which is what decides whether a `w:type="first"` reference is the page's band.
  */
-function packHf(kind: "header" | "footer", part: string, reference: string): Uint8Array {
+function packHf(kind: "header" | "footer", part: string, reference: string, titlePg = false): Uint8Array {
   const name = `word/${kind}1.xml`;
   return zipSync(
     {
@@ -38,7 +42,7 @@ function packHf(kind: "header" | "footer", part: string, reference: string): Uin
       "_rels/.rels": strToU8(XML_DECL + `<Relationships xmlns="${NS_PKG}"><Relationship Id="rId1" Type="${NS_R}/officeDocument" Target="word/document.xml"/></Relationships>`),
       "word/document.xml": strToU8(
         XML_DECL +
-          `<w:document xmlns:w="${NS_W}" xmlns:r="${NS_R}"><w:body><w:p><w:r><w:t>正文</w:t></w:r></w:p><w:sectPr>${reference}<w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>`,
+          `<w:document xmlns:w="${NS_W}" xmlns:r="${NS_R}"><w:body><w:p><w:r><w:t>正文</w:t></w:r></w:p><w:sectPr>${reference}<w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/>${titlePg ? "<w:titlePg/>" : ""}</w:sectPr></w:body></w:document>`,
       ),
       "word/_rels/document.xml.rels": strToU8(
         XML_DECL + `<Relationships xmlns="${NS_PKG}"><Relationship Id="rId5" Type="${NS_R}/${kind}" Target="${kind}1.xml"/></Relationships>`,
@@ -49,8 +53,8 @@ function packHf(kind: "header" | "footer", part: string, reference: string): Uin
   );
 }
 
-export function makeHeaderFooterDocx(headerPart: string, reference: string = REFERENCE_ID_FIRST): Uint8Array {
-  return packHf("header", headerPart, reference);
+export function makeHeaderFooterDocx(headerPart: string, reference: string = REFERENCE_ID_FIRST, titlePg = false): Uint8Array {
+  return packHf("header", headerPart, reference, titlePg);
 }
 
 /** The same file with the part bound as the section's footer, which is where a page number usually lives. */
@@ -165,6 +169,61 @@ export function makeTwoSectionDocx(o: { firstRef?: string; lastRef?: string; fir
       ),
       "word/header1.xml": strToU8(FIRST_SECTION_HEADER),
       "word/header2.xml": strToU8(LAST_SECTION_HEADER),
+    },
+    { level: 6 },
+  );
+}
+
+/** A header of one plain paragraph, distinguishable by text alone. */
+const plainHeader = (t: string): string => `${XML_DECL}<w:hdr xmlns:w="${NS_W}" xmlns:r="${NS_R}"><w:p><w:r><w:t>${t}</w:t></w:r></w:p></w:hdr>`;
+
+export const BAND_DEFAULT_TEXT = "默认页眉";
+export const BAND_FIRST_TEXT = "首页页眉";
+export const BAND_EVEN_TEXT = "偶数页眉";
+
+/**
+ * A section that cites the whole first-page band set the way this machine's WPS cites it, with 「首页不同」
+ * either on or off — the fixture the question 「首页不同」 opened on which part is the page's is about.
+ *
+ * Observed over the 115 sections of the 86 files: 14 cite `w:type` first, default and even for both bands in
+ * that order (`h:first > f:first > h:default > f:default > h:even > f:even`, every one `r:id` before `w:type`)
+ * while stating no `w:titlePg` at all; 1 section cites a first-page footer with `w:titlePg` and no default; and
+ * `w:evenAndOddHeaders` appears in **none** of the files' `word/settings.xml`, which is why an even reference is
+ * here as a part held rather than a part shown. `w:titlePg` follows `w:pgMar` and `w:cols` because that is where
+ * the sections that state it put it. Only the header side of the interleaving is spelled out — the question is
+ * which header the page shows, and reading each kind on its own is what the model does.
+ *
+ * The part names, the relationship ids and the three texts are ours; the shapes are transcriptions.
+ */
+export function makeFirstPageHeaderDocx(o: { titlePg?: boolean; refs?: ("first" | "default" | "even")[] } = {}): Uint8Array {
+  const refs = o.refs ?? ["first", "default", "even"];
+  const target = (t: "first" | "default" | "even") => (t === "first" ? "header2.xml" : t === "even" ? "header3.xml" : "header1.xml");
+  const id = (t: "first" | "default" | "even") => (t === "first" ? "rId6" : t === "even" ? "rId7" : "rId5");
+  const reference = (t: "first" | "default" | "even") => `<w:headerReference r:id="${id(t)}" w:type="${t}"/>`;
+  const used = new Set(refs.map(target));
+  return zipSync(    {
+      "[Content_Types].xml": strToU8(
+        XML_DECL +
+          `<Types xmlns="${NS_CT}"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="${CT_W}"/>` +
+          [...used].map((n) => `<Override PartName="/word/${n}" ContentType="${CT_HDR}"/>`).join("") +
+          `</Types>`,
+      ),
+      "_rels/.rels": strToU8(XML_DECL + `<Relationships xmlns="${NS_PKG}"><Relationship Id="rId1" Type="${NS_R}/officeDocument" Target="word/document.xml"/></Relationships>`),
+      "word/document.xml": strToU8(
+        XML_DECL +
+          `<w:document xmlns:w="${NS_W}" xmlns:r="${NS_R}"><w:body><w:p><w:r><w:t>正文</w:t></w:r></w:p>` +
+          `<w:sectPr>${refs.map(reference).join("")}<w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/><w:cols w:space="425" w:num="1"/>${o.titlePg ? "<w:titlePg/>" : ""}</w:sectPr>` +
+          `</w:body></w:document>`,
+      ),
+      "word/_rels/document.xml.rels": strToU8(
+        XML_DECL +
+          `<Relationships xmlns="${NS_PKG}">` +
+          refs.map((t) => `<Relationship Id="${id(t)}" Type="${NS_R}/header" Target="${target(t)}"/>`).join("") +
+          `</Relationships>`,
+      ),
+      // Only the cited parts, and each declared once above: a part in the package with no `Override` is a file
+      // a strict reader refuses, and the point here is which cited part the page shows, not which sit unused.
+      ...Object.fromEntries(refs.map((t) => [`word/${target(t)}`, strToU8(plainHeader(t === "first" ? BAND_FIRST_TEXT : t === "even" ? BAND_EVEN_TEXT : BAND_DEFAULT_TEXT))])),
     },
     { level: 6 },
   );

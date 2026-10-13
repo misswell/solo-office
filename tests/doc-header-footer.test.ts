@@ -4,6 +4,9 @@ import { writeDocx } from "../src/core/write-docx.js";
 import { OpcPackage, text } from "../src/core/opc.js";
 import { renderWord } from "../src/core/render.js";
 import {
+  BAND_DEFAULT_TEXT,
+  BAND_EVEN_TEXT,
+  BAND_FIRST_TEXT,
   LAST_SECTION_HEADER,
   PAGE_FOOTER,
   PAGE_ONLY_FOOTER,
@@ -15,6 +18,7 @@ import {
   PAGE_BOX_TWO_PARA_RUN,
   makeBoxWithWordsFooterDocx,
   makeFooterDocx,
+  makeFirstPageHeaderDocx,
   makeLogoFooterDocx,
   makeHeaderFooterDocx,
   makeFullPageDistanceDocx,
@@ -22,6 +26,7 @@ import {
   makeStyledHeaderDocx,
   makeTwoSectionDocx,
   pageFieldRuns,
+  REFERENCE_EVEN_ONLY,
   REFERENCE_FIRST_PAGE_ONLY,
   REFERENCE_ID_FIRST,
   REFERENCE_TYPE_FIRST,
@@ -157,14 +162,74 @@ describe("docx header/footer parts travel as the file wrote them", () => {
    * file's choice. Matching them by position is what made every header in the local corpus invisible: the
    * search this replaced required `w:type` before `r:id`, where WPS writes `r:id` before `w:type` on all 59
    * header and 57 footer references. A real file therefore reported no header at all — nothing to display,
-   * nothing to edit, and no part for a save to splice back.
+   * nothing to edit, and no part for a save to splice back. The first-page reference is the same question with
+   * the switch on, so it travels here too.
    */
   it("finds the part whatever order the reference puts its attributes in", () => {
-    for (const ref of [REFERENCE_ID_FIRST, REFERENCE_TYPE_FIRST, REFERENCE_FIRST_PAGE_ONLY]) {
-      const doc = WordDocument.openBytes(makeHeaderFooterDocx(STYLED_HEADER, ref));
+    for (const [ref, titlePg] of [[REFERENCE_ID_FIRST, false], [REFERENCE_TYPE_FIRST, false], [REFERENCE_FIRST_PAGE_ONLY, true]] as [string, boolean][]) {
+      const doc = WordDocument.openBytes(makeHeaderFooterDocx(STYLED_HEADER, ref, titlePg));
       expect(doc.header?.id, ref).toBe("rId5");
       expect(doc.header?.paragraphs, ref).toEqual(["机密\t第一段", "第二段"]);
     }
+  });
+
+  /**
+   * 「首页不同」 is the section's own word for which of its bands the opening page wears (§17.10.3): a
+   * `w:type="first"` reference is the page's band when `w:titlePg` stands, and not otherwise. The local corpus
+   * is why this is a rule and not a guess — 14 of its 115 sections cite first, default and even for both bands
+   * with **no** `w:titlePg`, which is a letterhead where the switch is available and off, and picking whichever
+   * reference comes first would put the first-page part on every page of those files. `w:evenAndOddHeaders`
+   * appears in none of the 86 `word/settings.xml`, so an even reference is a part held, never a part shown on
+   * the one page this app draws.
+   */
+  it("wears the first-page band only when the section says the first page differs", () => {
+    const off = WordDocument.openBytes(makeFirstPageHeaderDocx());
+    expect(off.header?.paragraphs, "no titlePg: the default band").toEqual([BAND_DEFAULT_TEXT]);
+    expect(off.header?.part, "no titlePg: the default part").toBe("word/header1.xml");
+
+    const on = WordDocument.openBytes(makeFirstPageHeaderDocx({ titlePg: true }));
+    expect(on.header?.paragraphs, "titlePg: the first band").toEqual([BAND_FIRST_TEXT]);
+    expect(on.header?.part, "titlePg: the first part").toBe("word/header2.xml");
+
+    // Onto the page, not just into the model: the paper the user looks at wears one of the two, and the other
+    // says nothing on it.
+    expect(renderWord(off)).toContain(BAND_DEFAULT_TEXT);
+    expect(renderWord(off)).not.toContain(BAND_FIRST_TEXT);
+    expect(renderWord(on)).toContain(BAND_FIRST_TEXT);
+    expect(renderWord(on)).not.toContain(BAND_DEFAULT_TEXT);
+
+    // The even band is cited by 29 of the corpus's sections and displayed by none of them: a file with only an
+    // even reference has a part, and this page is not the one it belongs to.
+    const even = WordDocument.openBytes(makeHeaderFooterDocx(STYLED_HEADER, REFERENCE_EVEN_ONLY));
+    expect(even.header).toBeUndefined();
+  });
+
+  it("switches to the first-page band without inventing a reference or touching the part it did not show", () => {
+    // Showing a different band is a read decision, so the save owes the file its own set of three references
+    // and the untouched bytes of the two parts the page did not wear. Editing the one it did wear must still
+    // land in that part — the model holds `header2.xml`, and a save that spliced `header1.xml` would write the
+    // text onto pages this file says are not first.
+    const bytes = makeFirstPageHeaderDocx({ titlePg: true });
+    const doc = WordDocument.openBytes(bytes);
+    expect(doc.setHeaderTexts("header", ["首页改版"])).toBe(true);
+    const out = OpcPackage.from(writeDocx(doc));
+    const xml = text(out.bytes("word/document.xml")!);
+    expect((xml.match(/<w:headerReference/g) ?? []).length, "three references, none invented").toBe(3);
+    expect(xml).toContain('<w:headerReference r:id="rId6" w:type="first"/>');
+    expect(xml).toContain("<w:titlePg/>");
+    expect(text(out.bytes("word/header2.xml")!)).toContain("<w:t>首页改版</w:t>");
+    expect(text(out.bytes("word/header1.xml")!)).toContain(`<w:t>${BAND_DEFAULT_TEXT}</w:t>`);
+    expect(text(out.bytes("word/header3.xml")!)).toContain(`<w:t>${BAND_EVEN_TEXT}</w:t>`);
+    expect(WordDocument.openBytes(writeDocx(doc)).header?.paragraphs).toEqual(["首页改版"]);
+  });
+
+  it("keeps the part the section states for a switched-off first page, and shows the default it holds", () => {
+    // A section that asks for a different first page but cites no first-page band: the file still holds a
+    // default band, and blanking the page here would take away text the file wrote. What WPS puts on that page
+    // is 未取证 — this is the choice that keeps the file's own content on it.
+    const doc = WordDocument.openBytes(makeFirstPageHeaderDocx({ titlePg: true, refs: ["default", "even"] }));
+    expect(doc.header?.paragraphs).toEqual([BAND_DEFAULT_TEXT]);
+    expect(doc.header?.part).toBe("word/header1.xml");
   });
 
   it("reports no header when no section binds one, even with the part sitting in the package", () => {

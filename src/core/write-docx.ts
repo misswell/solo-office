@@ -209,7 +209,7 @@ function runPropsInner(s: RunStyle): string {
   if (rf) parts.push(rf);
   if (s.bold !== undefined) parts.push(s.bold ? "<w:b/>" : '<w:b w:val="0"/>');
   if (s.italic !== undefined) parts.push(s.italic ? "<w:i/>" : '<w:i w:val="0"/>');
-  if (s.strike) parts.push("<w:strike/>");
+  if (s.strike !== undefined) parts.push(s.strike ? "<w:strike/>" : '<w:strike w:val="0"/>');
   if (s.color) parts.push(`<w:color w:val="${XML_ESC(s.color.replace(/^#/, "").toUpperCase())}"/>`);
   if (s.sizePt) parts.push(`<w:sz w:val="${Math.round(s.sizePt * 2)}"/><w:szCs w:val="${Math.round(s.sizePt * 2)}"/>`);
   if (s.highlight) parts.push(`<w:highlight w:val="${XML_ESC(s.highlight)}"/>`);
@@ -270,7 +270,16 @@ const RUN_PROPS: {
     tags: ["i"],
     spell: (r, prefix) => (r.italic === undefined ? "" : r.italic ? `<${prefix}:i/>` : `<${prefix}:i w:val="0"/>`),
   },
-  { key: "strike", tags: ["strike"], spell: (r, prefix) => (r.strike ? `<${prefix}:strike/>` : "") },
+  {
+    key: "strike",
+    tags: ["strike"],
+    // Spelled, not deleted, on the off side: 2 runs in 2 of these files state `<w:strike w:val="0"/>` and carry
+    // text the reader resolves (`.scratch/onoff-where.ts`, `.scratch/onoff-audience.ts`), and dropping the element
+    // would replace the file's sentence with a silence no file wrote — the same rule `<w:b w:val="0"/>` and
+    // `<w:u w:val="none"/>` follow.
+    spell: (r, prefix) =>
+      r.strike === undefined ? "" : r.strike ? `<${prefix}:strike/>` : `<${prefix}:strike w:val="0"/>`,
+  },
   {
     key: "color",
     tags: ["color"],

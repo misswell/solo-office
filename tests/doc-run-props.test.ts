@@ -3,7 +3,8 @@ import type { Inline, Paragraph } from "../src/core/docx.js";
 import { WordDocument } from "../src/core/docx.js";
 import { writeDocx } from "../src/core/write-docx.js";
 import { childSpans, elementContent, OpcPackage, text } from "../src/core/opc.js";
-import { makeRunPropsDocx, makeUnderlineDocx } from "./helpers/make-run.js";
+import { makeOnOffDocx, makeRunPropsDocx, makeUnderlineDocx } from "./helpers/make-run.js";
+import { renderInline } from "../src/core/render.js";
 
 const part = (bytes: Uint8Array): string => text(OpcPackage.from(bytes).bytes("word/document.xml")!);
 const open = (bytes: Uint8Array): WordDocument => WordDocument.openBytes(bytes);
@@ -65,6 +66,9 @@ describe("docx run property fidelity", () => {
     expect(run.asRead).toEqual({
       bold: true, italic: false, underline: true, strike: true, sizePt: 12, color: "#808080",
       highlight: "yellow", font: "Times New Roman", fontEastAsia: "宋体",
+      // `w:vertAlign w:val="baseline"` is in this run's set, and the run saying it sits on the line is a thing it
+      // stated: the field holds the name, which is what stops the writer from answering the file with a silence.
+      vertAlign: "baseline",
     });
   });
 
@@ -260,5 +264,77 @@ describe("docx underline read as a statement", () => {
     const doc = open(makeUnderlineDocx());
     const out = rPrOf(retyped(doc, "说明没有", { ...runAt(doc, "说明没有"), underline: true }), "说明没有");
     expect(out).toBe('<w:rPr><w:u w:val="single"/></w:rPr>');
+  });
+});
+
+/**
+ * `w:strike` and `w:vertAlign`, counted three ways and reconciled (`.scratch/onoff-where.ts` cuts the bodies by
+ * whose property set each tag sits in, `.scratch/onoff-family.ts` asks the production model what it resolves, and
+ * `.scratch/onoff-roundtrip.ts` runs open→save over all 86 files). The bodies state a `w:strike` 56 times: 36 on a
+ * run's own set with no `w:val` (on, by the element's default), 18 on a paragraph mark, and **2 stating
+ * `<w:strike w:val="0"/>`** in 2 files — both on a run carrying text, and both the reader used to resolve to
+ * `strike = true`, a line drawn through text the file said to leave alone. After this round the round trip returns
+ * 56 as 56 with nothing moved, and those 2 resolve `false`. `w:vertAlign` appears 3860 times and **every one of
+ * them says `baseline`** — 2701 on a run's set, 1159 on a mark — of which this reader models 717 runs, 354 naming a
+ * character style, and 0 of those sitting on a chain that lends a superscript: representation kept, not pixels
+ * rescued, the same verdict `w:u` reached. `w:dstrike` states `0` twice and is not a field this model has, so it
+ * travels as bytes. `LendStrike`, `LendSup` and the two-line run are the shapes the corpus points at but does not
+ * carry — built to the patterns above so each sentence has the rung it must beat and the drawing has a case to
+ * compose. Nothing here claims a pixel the corpus has not shown.
+ */
+describe("docx on/off family read as a statement", () => {
+  it("reads a stated no-strike as a value the run gave, under either spelling", () => {
+    const doc = open(makeOnOffDocx());
+    expect(runAt(doc, "说了没划").strike).toBe(false);
+    expect(runAt(doc, "说了没划").asRead?.strike).toBe(false);
+    // §17.3.2.19's `ST_OnOff` takes the word as readily as the digit, the way `w:i` already did.
+    expect(runAt(doc, "盖掉借来的删除线").strike).toBe(false);
+  });
+
+  it("stops the ladder per property at the rung that stated one", () => {
+    const doc = open(makeOnOffDocx());
+    // The run's own `w:rPr` outranks the character style it names (§17.7.2), so the `false` beats the line the
+    // style lends, and the style that goes uncontradicted still lends it.
+    expect(runAt(doc, "链上借来的删除线").strike).toBe(true);
+    expect(runAt(doc, "两条线一起").strike).toBe(true);
+    // The same for the alignment: a stated `baseline` beats the superscript the style would lend, and it is a
+    // value the model holds rather than an absence — the page has to know the run spoke.
+    expect(runAt(doc, "回到基线").vertAlign).toBe("baseline");
+  });
+
+  it("hands back a stated cancellation exactly as it sat", () => {
+    const before = part(makeOnOffDocx());
+    const after = save(open(makeOnOffDocx()));
+    expect(rPrOf(after, "说了没划")).toBe('<w:rPr><w:strike w:val="0"/></w:rPr>');
+    expect(rPrOf(after, "盖掉借来的删除线")).toBe('<w:rPr><w:rStyle w:val="LendStrike"/><w:strike w:val="false"/></w:rPr>');
+    expect(rPrOf(after, "回到基线")).toBe(rPrOf(before, "回到基线"));
+  });
+
+  it("writes the cancellation when the page turns off a line the style lent", () => {
+    const doc = open(makeOnOffDocx());
+    const out = rPrOf(
+      retyped(doc, "链上借来的删除线", { ...runAt(doc, "链上借来的删除线"), strike: false }),
+      "链上借来的删除线",
+    );
+    // Spelled, not deleted: dropping the element would answer the file's sentence with a silence no file wrote.
+    expect(out).toBe('<w:rPr><w:rStyle w:val="LendStrike"/><w:strike w:val="0"/></w:rPr>');
+  });
+
+  it("draws two lines on one run instead of letting the later declaration replace the earlier", () => {
+    const both = runAt(open(makeOnOffDocx()), "两条线一起");
+    expect(renderInline(both)).toBe('<span style="text-decoration:line-through underline;">两条线一起</span>');
+    // A stated baseline is the run saying it sits on the line: it draws nothing, and it is not a superscript.
+    const base = renderInline(runAt(open(makeOnOffDocx()), "回到基线"));
+    expect(base).not.toContain("vertical-align");
+    expect(base).not.toContain("font-size");
+  });
+
+  it("carries both statements through every round trip, not just the first", () => {
+    const once = writeDocx(open(makeOnOffDocx()));
+    const twice = writeDocx(open(once));
+    expect(part(twice)).toBe(part(once));
+    const back = open(twice);
+    expect(runAt(back, "说了没划").strike).toBe(false);
+    expect(runAt(back, "回到基线").vertAlign).toBe("baseline");
   });
 });

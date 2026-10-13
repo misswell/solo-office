@@ -5,7 +5,7 @@ import { SEEN_BY_VIEW, inlineLength, keepRunIdentity } from "../src/core/run-ide
 import { writeDocx } from "../src/core/write-docx.js";
 import { OpcPackage, text } from "../src/core/opc.js";
 import { makeChainDocx } from "./helpers/make-paragraph.js";
-import { makeUnderlineDocx } from "./helpers/make-run.js";
+import { makeOnOffDocx, makeUnderlineDocx } from "./helpers/make-run.js";
 
 /**
  * #78 — the page is a rendering of the resolved run style, and the editor re-derives the model from it on every
@@ -48,13 +48,15 @@ const retyped = (inlines: Inline[], needle: string, add: string): Inline[] => {
 
 /**
  * The list the page hands back as it really is. `styleOf` only ever switches `italic`, `underline` and `strike`
- * to true — an `<i>`, a `<u>`, a `text-decoration` — so a property the file turned off has nothing on screen to
- * show it and comes back as nothing at all. `bold` is the one that can report its off side, through
- * `font-weight`. `viewOf` above lets a run keep a `false` it was handed, which is what the page cannot do.
+ * to true — an `<i>`, a `<u>`, a `text-decoration` — and `vertAlign` to `superscript` or `subscript` through a
+ * `sup`/`sub` tag or `vertical-align:super/sub`, so a property the file turned off has nothing on screen to show
+ * it and comes back as nothing at all. `bold` is the one that can report its off side, through `font-weight`.
+ * `viewOf` above lets a run keep a `false` it was handed, which is what the page cannot do.
  */
 function pageView(run: Inline, text = run.text): Inline {
   const out = viewOf(run, text);
   for (const key of ["italic", "underline", "strike"] as const) if (run[key] === false) delete out[key];
+  if (run.vertAlign === "baseline") delete out.vertAlign;
   return out;
 }
 
@@ -133,6 +135,34 @@ describe("a run rebuilt from the page keeps what the page cannot show", () => {
     const p = paraAt(doc, "说明没有");
     p.inlines = retypedByPage(p.inlines, "说明没有", "打字");
     expect(p.inlines[0]!.underline).toBe(false);
+    expect(rPrs(save(doc))).toEqual(before);
+  });
+
+  it("keeps a struck-off and a baseline run through the page's silence", () => {
+    const prev: Inline[] = [
+      { text: "没划", strike: false, asRead: { strike: false }, rPrSlots: [{ tag: "strike", xml: '<w:strike w:val="0"/>' } as PropSlot] },
+      { text: "基线", vertAlign: "baseline", asRead: { vertAlign: "baseline" }, rPrSlots: [{ tag: "vertAlign", xml: '<w:vertAlign w:val="baseline"/>' } as PropSlot] },
+    ];
+    // The screen shows both of them plain, and `styleOf` has no answer for a run that sits on the line.
+    const next = [pageView(prev[0]!, "没划打的字"), pageView(prev[1]!, "基线")];
+    keepRunIdentity(next, prev);
+    expect(next[0]!.strike).toBe(false);
+    expect(next[1]!.vertAlign).toBe("baseline");
+
+    // A sup the page does show is still the page's answer, the way `bold` was above.
+    const contradicted = [pageView({ ...prev[1]!, vertAlign: "superscript" }, "基线")];
+    keepRunIdentity(contradicted, [{ ...prev[1]! }]);
+    expect(contradicted[0]!.vertAlign).toBe("superscript");
+  });
+
+  it("saves a typed sentence without erasing the no-strike or the baseline it was typed into", () => {
+    const doc = open(makeOnOffDocx());
+    const before = rPrs(save(doc));
+    for (const needle of ["说了没划", "回到基线"]) {
+      const p = paraAt(doc, needle);
+      p.inlines = retypedByPage(p.inlines, needle, "打字");
+      expect(p.inlines[0]!.text).toContain("打字");
+    }
     expect(rPrs(save(doc))).toEqual(before);
   });
 

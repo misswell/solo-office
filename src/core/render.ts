@@ -60,14 +60,19 @@ export function renderInline(inline: Inline): string {
   let css = "";
   if (inline.bold) css += "font-weight:600;";
   if (inline.italic) css += "font-style:italic;";
-  if (inline.strike) css += "text-decoration:line-through;";
-  if (inline.underline) css += "text-decoration:underline;";
+  // One declaration for both lines: `text-decoration` is a shorthand, so writing it twice makes the later
+  // declaration replace the earlier one — measured in the browser the page runs in, `line-through` then
+  // `underline` computes to `underline` alone and a run that is both struck and underlined loses its strike
+  // (`.scratch/onoff-dom.ts`). Stated once, both lines draw and `styleOf` reads both back off one value.
+  const decorations = [inline.strike ? "line-through" : "", inline.underline ? "underline" : ""].filter((d) => d !== "");
+  if (decorations.length) css += `text-decoration:${decorations.join(" ")};`;
   if (inline.sizePt) css += `font-size:${inline.sizePt}pt;`;
   if (inline.color) css += `color:${inline.color};`;
   const family = fontStack(inline);
   if (family) css += `font-family:${esc(family)};`;
   if (inline.highlight) css += `background:${highlightColor(inline.highlight)};`;
-  if (inline.vertAlign) css += `vertical-align:${inline.vertAlign === "superscript" ? "super" : "sub"};font-size:.75em;`;
+  if (inline.vertAlign && inline.vertAlign !== "baseline")
+    css += `vertical-align:${inline.vertAlign === "superscript" ? "super" : "sub"};font-size:.75em;`;
   let html = inline.text === "" ? "" : `<span${css ? ` style="${css}"` : ""}>${esc(inline.text)}</span>`;
   if (html === "" && !css) html = esc(inline.text);
   // A link to a place in this document keeps its window to itself: `target="_blank"` on a `#name` href hands

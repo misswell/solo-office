@@ -103,3 +103,33 @@ export function makeUnderlineDocx(): Uint8Array {
     `<w:styles xmlns:w="${NS_W}"><w:style w:type="character" w:styleId="LendU"><w:name w:val="点了下划线的字符样式"/><w:rPr><w:u w:val="single"/></w:rPr></w:style></w:styles>`,
   );
 }
+
+/**
+ * The other two members of the on/off family, in the shapes the files write.
+ *
+ * `w:strike` is §17.3.2.19's `ST_OnOff` like `w:b`, so its cancellation is `0` or `false`. The bodies of the 86 WPS
+ * documents state a `w:strike` 56 times: 36 of them on a run's own set with no `w:val` — on, by the element's own
+ * default — 18 on a paragraph mark, and **2 state `<w:strike w:val="0"/>`** in 2 files (`.scratch/onoff-where.ts`
+ * cuts that by whose property set the tag sits in). Both cancellations are on a run carrying text, and both of them
+ * the reader used to resolve to `strike = true`, which is a line drawn through text the file said to leave alone
+ * (`.scratch/onoff-audience.ts`). `w:vertAlign` is §17.3.2.24's `ST_VerAlignRun`, whose cancellation is the enum
+ * name `baseline`: the bodies state it 3860 times and **every one of them says `baseline`** — 2701 on a run's set,
+ * 1159 on a mark — of which this reader models 717, 354 of those naming a character style, and 0 of them sitting on
+ * a chain that lends a superscript. So that half is a statement kept rather than pixels rescued. A run stating both
+ * a strike and an underline has 0 audience in these files, and is built here only so the drawing of two lines at
+ * once has a case.
+ */
+export function makeOnOffDocx(): Uint8Array {
+  const document = `<w:p><w:r><w:rPr><w:strike w:val="0"/></w:rPr><w:t>说了没划</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:rStyle w:val="LendStrike"/><w:strike w:val="false"/></w:rPr><w:t>盖掉借来的删除线</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:rStyle w:val="LendStrike"/></w:rPr><w:t>链上借来的删除线</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:rStyle w:val="LendSup"/><w:vertAlign w:val="baseline"/></w:rPr><w:t>回到基线</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:strike/><w:u w:val="single"/></w:rPr><w:t>两条线一起</w:t></w:r></w:p>`;
+  return pack(
+    document,
+    `<w:styles xmlns:w="${NS_W}">` +
+      `<w:style w:type="character" w:styleId="LendStrike"><w:name w:val="点了删除线的字符样式"/><w:rPr><w:strike/></w:rPr></w:style>` +
+      `<w:style w:type="character" w:styleId="LendSup"><w:name w:val="上标的字符样式"/><w:rPr><w:vertAlign w:val="superscript"/></w:rPr></w:style>` +
+      `</w:styles>`,
+  );
+}

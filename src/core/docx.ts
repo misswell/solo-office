@@ -45,7 +45,7 @@ export interface RunStyle {
    * Chinese draws in the Latin face is a run the file never described that way.
    */
   fontEastAsia?: string;
-  vertAlign?: "superscript" | "subscript";
+  vertAlign?: "baseline" | "superscript" | "subscript";
 }
 
 export interface Inline extends RunStyle {
@@ -4382,7 +4382,15 @@ function runStyle(rPr: any): RunStyle {
   // shape WPS writes. None of the 254 sits on a chain that lends a line today, so this is a representation fix,
   // not a pixel fix; what it buys is that the statement survives an edit that should not have changed it.
   if (rPr.u !== undefined) s.underline = rPr.u["@_val"] !== "none";
-  if (rPr.strike !== undefined) s.strike = true;
+  // The last two members of the same on/off family. `w:strike` is §17.3.2.19's `ST_OnOff`, so `0` and `false`
+  // cancel it just as they cancel `w:b` — reading the element as "struck, whatever it says" put a line through the
+  // 2 runs in these 86 body parts that state `<w:strike w:val="0"/>` (of the 56 `w:strike` they write, 36 say on
+  // with no `w:val`, 18 sit on a paragraph mark) and give the reader text to hang it on
+  // (`.scratch/onoff-where.ts`, `.scratch/onoff-audience.ts`). `w:vertAlign`'s cancellation is an enum name again
+  // (§17.3.2.24's `ST_VerAlignRun`: `baseline`), and the bodies state nothing else — all 3860 of them, 717 on runs
+  // this reader resolves, none sitting on a chain that lends a superscript — so that half is representation rather
+  // than pixels, the same verdict `w:u` got above.
+  if (rPr.strike !== undefined) s.strike = rPr.strike["@_val"] !== "0" && rPr.strike["@_val"] !== "false";
   if (rPr.sz) s.sizePt = Number(rPr.sz["@_val"]) / 2;
   const color = rPr.color?.["@_val"];
   if (color && color !== "auto") s.color = hex(color);
@@ -4397,7 +4405,7 @@ function runStyle(rPr: any): RunStyle {
     if (east) s.fontEastAsia = east;
   }
   const va = rPr.vertAlign?.["@_val"];
-  if (va === "superscript" || va === "subscript") s.vertAlign = va;
+  if (va === "superscript" || va === "subscript" || va === "baseline") s.vertAlign = va;
   return s;
 }
 

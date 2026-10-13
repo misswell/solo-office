@@ -109,9 +109,10 @@ export function keepRunIdentity(next: Inline[], prev: Inline[]): void {
       for (const key of Object.keys(from) as (keyof Inline)[]) {
         // The page can show a property that is *on*; it has nothing to show for one the file turned off. So a
         // rebuilt run that says nothing is not a contradiction of the origin's `false` — that statement lives
-        // only in `w:rPr` (`<w:u w:val="none"/>`, `<w:i w:val="0"/>`), and letting the silence stand would turn
-        // an explicit cancellation back into "the run never mentioned it", which the writer then deletes.
-        const cancelled = run[key] === undefined && from[key] === false;
+        // only in `w:rPr` (`<w:u w:val="none"/>`, `<w:i w:val="0"/>`, `<w:strike w:val="0"/>`, and for
+        // `w:vertAlign` the enum name `baseline`), and letting the silence stand would turn an explicit
+        // cancellation back into "the run never mentioned it", which the writer then deletes.
+        const cancelled = run[key] === undefined && (from[key] === false || from[key] === "baseline");
         if (!cancelled && (SEEN_BY_VIEW.includes(key) || run[key] !== undefined)) continue;
         if (ONCE_ONLY.includes(key) && given.has(from)) continue;
         (run as unknown as Record<string, unknown>)[key] = from[key];

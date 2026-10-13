@@ -35,6 +35,13 @@ const CT_NUM = "application/vnd.openxmlformats-officedocument.wordprocessingml.n
  * in all 42 that size is *smaller* than the paragraph's own text resolves to; the attribute set of those levels
  * is `w:ascii + w:hAnsi + w:hint` (`numId` 9 spells it the same way), and 9 more levels carry a `w:sz` with no
  * font at all — the shape of `numId` 10 (`.scratch/num-level-rpr.ts`).
+ *
+ * `numId` 11 is the level that names a *family* but no face: `w:rFonts w:hint="eastAsia"` and nothing else, which
+ * is how 358 of the 424 corpus paragraphs whose level states no font have it stated (`w:hint` on `eastAsia` for
+ * 282 of them, on a value outside §17.18.39 for 76 — `.scratch/mark-font.ts`). The face such a mark ends up
+ * wearing therefore comes from the paragraph's own `w:pPr/w:rPr/w:rFonts` (§17.3.1.4) or, when that names none,
+ * from the chain: of those 424, 172 name the face for their own script on the mark, 234 more get it from a rung
+ * like `MarkFaced` below, and 18 name nothing anywhere — those are the ones the page must leave alone.
  */
 const WINGDINGS_MARK = String.fromCharCode(0xf0a7);
 export const NUMBERING = `<w:numbering xmlns:w="${NS_W}">
@@ -73,6 +80,9 @@ export const NUMBERING = `<w:numbering xmlns:w="${NS_W}">
 <w:abstractNum w:abstractNumId="9">
 <w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/><w:rPr><w:sz w:val="18"/></w:rPr></w:lvl>
 </w:abstractNum>
+<w:abstractNum w:abstractNumId="10">
+<w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="chineseCounting"/><w:lvlText w:val="%1、"/><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:lvl>
+</w:abstractNum>
 <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
 <w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num>
 <w:num w:numId="3"><w:abstractNumId w:val="2"/></w:num>
@@ -83,6 +93,7 @@ export const NUMBERING = `<w:numbering xmlns:w="${NS_W}">
 <w:num w:numId="8"><w:abstractNumId w:val="7"/></w:num>
 <w:num w:numId="9"><w:abstractNumId w:val="8"/></w:num>
 <w:num w:numId="10"><w:abstractNumId w:val="9"/></w:num>
+<w:num w:numId="11"><w:abstractNumId w:val="10"/></w:num>
 </w:numbering>`;
 
 /**
@@ -100,14 +111,22 @@ export const NUMBERING = `<w:numbering xmlns:w="${NS_W}">
  * `w:sz` — and those 326 always pair it with a `w:szCs` (`<w:sz w:val="28"/><w:szCs w:val="28"/>` is the shape this
  * fixture copies, `.scratch/mark-size.ts`); a mark that states none takes its size from a rung like this one, which
  * is where 98 of the paragraphs no size-stating level covers get their number.
+ *
+ * `MarkFaced` is the same rung for the two faces: `w:rFonts` naming one for each script, the shape 234 of the
+ * 424 paragraphs whose level names no face reach through the chain (`.scratch/mark-font.ts`). `numberingStyles`
+ * takes the `w:rPrDefault` children as an argument because one test needs a document where *nothing* names a face
+ * — the 18 paragraphs that must go on wearing whatever the page wears.
  */
-const STYLES = `<w:styles xmlns:w="${NS_W}">
-<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri"/><w:sz w:val="22"/></w:rPr></w:rPrDefault></w:docDefaults>
+export const numberingStyles = (docDefaultRun = `<w:rFonts w:ascii="Calibri"/>`): string => `<w:styles xmlns:w="${NS_W}">
+<w:docDefaults><w:rPrDefault><w:rPr>${docDefaultRun}<w:sz w:val="22"/></w:rPr></w:rPrDefault></w:docDefaults>
 <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
 <w:style w:type="paragraph" w:styleId="Numbered"><w:name w:val="编号来自样式"/><w:basedOn w:val="Normal"/><w:pPr><w:numPr><w:ilvl w:val="1"/><w:numId w:val="1"/></w:numPr></w:pPr></w:style>
 <w:style w:type="paragraph" w:styleId="Unnumbered"><w:name w:val="样式里取消编号"/><w:basedOn w:val="Numbered"/><w:pPr><w:numPr><w:ilvl w:val="1"/></w:numPr></w:pPr></w:style>
 <w:style w:type="paragraph" w:styleId="MarkSized"><w:name w:val="段落标记自己写了字号"/><w:basedOn w:val="Normal"/><w:rPr><w:sz w:val="32"/><w:szCs w:val="32"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="MarkFaced"><w:name w:val="段落标记从样式借脸"/><w:basedOn w:val="Normal"/><w:rPr><w:rFonts w:ascii="Arial" w:eastAsia="宋体" w:hAnsi="Arial"/></w:rPr></w:style>
 </w:styles>`;
+
+const STYLES = numberingStyles();
 
 /** One paragraph: `pPr` is the caller's own `w:pPr` children, written the way the files write them. */
 export interface NumberedPara {
@@ -116,12 +135,16 @@ export interface NumberedPara {
 }
 
 /**
- * A document of the given paragraphs over `NUMBERING` (or a caller's own numbering part), for the tests about
- * which symbol a numbered paragraph draws. The list membership itself is the caller's `w:numPr`, so a test that
- * wants the corpus's cancellation shape writes `<w:numPr><w:numId w:val="0"/></w:numPr>` and one that wants the
- * borrowed kind names a style instead.
+ * A document of the given paragraphs over `NUMBERING` (or a caller's own numbering part) and `numberingStyles()`
+ * (or a caller's own styles part, when the test is about what the ladder states). The list membership itself is
+ * the caller's `w:numPr`, so a test that wants the corpus's cancellation shape writes
+ * `<w:numPr><w:numId w:val="0"/></w:numPr>` and one that wants the borrowed kind names a style instead.
  */
-export function makeNumberingDocx(paras: readonly NumberedPara[], numbering: string = NUMBERING): Uint8Array {
+export function makeNumberingDocx(
+  paras: readonly NumberedPara[],
+  numbering: string = NUMBERING,
+  styles: string = STYLES,
+): Uint8Array {
   const document =
     paras
       .map((e) => `<w:p>${e.pPr ? `<w:pPr>${e.pPr}</w:pPr>` : ""}<w:r><w:t>${e.text}</w:t></w:r></w:p>`)
@@ -140,7 +163,7 @@ export function makeNumberingDocx(paras: readonly NumberedPara[], numbering: str
           `<Relationships xmlns="${NS_PKG}"><Relationship Id="rId1" Type="${NS_R}/styles" Target="styles.xml"/><Relationship Id="rId2" Type="${NS_R}/numbering" Target="numbering.xml"/></Relationships>`,
       ),
       "word/document.xml": strToU8(XML_DECL + `<w:document xmlns:w="${NS_W}" xmlns:r="${NS_R}"><w:body>${document}</w:body></w:document>`),
-      "word/styles.xml": strToU8(XML_DECL + STYLES),
+      "word/styles.xml": strToU8(XML_DECL + styles),
       "word/numbering.xml": strToU8(XML_DECL + numbering),
     },
     { level: 6 },

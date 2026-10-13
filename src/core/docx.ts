@@ -412,6 +412,20 @@ export interface Paragraph {
    */
   markSizePt?: number;
   /**
+   * The two faces this paragraph's own mark resolves to — `w:pPr/w:rPr/w:rFonts@w:ascii` and `@w:eastAsia`
+   * (§17.3.1.4), each falling back on its own to what the style chain and `w:rPrDefault` lend, the way
+   * `readRunStyle` reads one attribute at a time (§17.7.2 stops per property). They exist for the same thing
+   * `markSizePt` does: the numbering symbol is a character run of its own (§17.3.1.12), and where the *level*
+   * names no font this is what the file left standing. Over the 86 WPS-written documents, 424 listed paragraphs sit
+   * on a level that names none: 172 get the face for their own script from this mark, 234 more from the chain, 18
+   * from nothing at all (`.scratch/mark-font.ts`). The two faces are a stack, not a choice — the browser dispatches
+   * by script, so `三、` takes the East Asian one and `1.` the Latin one, exactly as the paragraph's body text does.
+   * Nothing writes them: the mark's properties travel as `pPrSlots` text, so a save spells the file's bytes.
+   */
+  markFont?: string;
+  /** The `@w:eastAsia` half of the pair above — the face this mark's Chinese characters take. */
+  markFontEastAsia?: string;
+  /**
    * The attributes written on this paragraph's own opening tag, as the part spelled them — `w14:paraId`,
    * `w14:textId`, `w:rsidR`, `w:rsidP`. The model has no field for any of them and a save writes this text
    * back onto the tag, the way `TableCell.tcPrXml` writes a property set it cannot explain. They are kept as
@@ -1672,6 +1686,11 @@ export class WordDocument {
     // 298 from this mark, 98 from the paragraph's style chain, 0 from nothing at all. 331 of the 396 differ from
     // the page stylesheet's 12pt, so a mark that ignores this chain draws at a size no file asked for.
     const markSz = num(pPr.rPr?.sz?.["@_val"]);
+    // Faces the same way, one attribute at a time: a mark that names only `w:eastAsia` must not hand back an
+    // undefined Latin face that erases the chain's, and an empty `w:ascii=""` states nothing (§17.7.2).
+    const markRFonts = asArray(pPr.rPr?.rFonts)[0];
+    const markAscii = markRFonts?.["@_ascii"] || undefined;
+    const markEast = markRFonts?.["@_eastAsia"] || undefined;
     const para: Paragraph = {
       kind: "paragraph",
       styleId,
@@ -1690,6 +1709,8 @@ export class WordDocument {
       numPr: numPrOf(pPr.numPr) ?? lent?.numPr,
       outlineLevel: outlineOf(pPr.outlineLvl) ?? lent?.outlineLevel,
       markSizePt: markSz === undefined ? lentRuns.sizePt : markSz / 2,
+      markFont: markAscii ?? lentRuns.font,
+      markFontEastAsia: markEast ?? lentRuns.fontEastAsia,
       inlines: [],
     };
     // The paragraph's own tag can carry an identity this model has no field for — `w14:paraId`, a revision
@@ -1719,9 +1740,9 @@ export class WordDocument {
       outlineLevel: para.outlineLevel,
     };
     // The paragraph's own mark can be revised: `w:pPr/w:rPr` holds the break that ends this paragraph,
-    // signed the same way a run is. Its character properties are read for one thing only — `markSizePt` above,
-    // the size the mark resolves to — and the break's signature is what the rest of this loop is for: losing
-    // it would leave a merge nobody can refuse.
+    // signed the same way a run is. Its character properties are read for two things — the size and the two faces
+    // the numbered paragraph's symbol falls back on (`markSizePt`, `markFont`, `markFontEastAsia`) — and the break's
+    // signature is what the rest of this loop is for: losing it would leave a merge nobody can refuse.
     for (const c of children(pPr.rPr ?? {})) {
       if (isRevision(c.name)) {
         para.markRev = revisionOf(c.name, c.node);
@@ -3044,20 +3065,23 @@ export class WordDocument {
   }
 
   /**
-   * The `w:eastAsia` faces the runs of this document draw their Chinese with, first-use order, deduplicated —
-   * borrowed ones included, because the page has to declare the family a run reaches through the ladder.
+   * The `w:eastAsia` faces this document draws its Chinese with, first-use order, deduplicated — the runs' and the
+   * numbered marks' alike, because the page has to declare every family something on it reaches through the ladder.
    * `render.ts` turns these into `@font-face` rules; a face nobody names on the page costs nothing to declare.
    */
   eastAsiaFaces(): string[] {
     const out: string[] = [];
     const seen = new Set<string>();
+    const add = (face: string | undefined): void => {
+      if (face === undefined || seen.has(face)) return;
+      seen.add(face);
+      out.push(face);
+    };
     this.eachParagraph((p) => {
-      for (const run of p.inlines) {
-        const face = run.fontEastAsia;
-        if (face === undefined || seen.has(face)) continue;
-        seen.add(face);
-        out.push(face);
-      }
+      // The mark's own resolved face rides along: a numbered paragraph's symbol builds its stack from it, and a
+      // family with no rule behind it is a family the browser skips.
+      add(p.markFontEastAsia);
+      for (const run of p.inlines) add(run.fontEastAsia);
     });
     return out;
   }

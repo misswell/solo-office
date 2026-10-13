@@ -3,7 +3,7 @@ import { syncParaSlots, WordDocument, type Paragraph } from "../src/core/docx.js
 import { renderWord } from "../src/core/render.js";
 import { writeDocx } from "../src/core/write-docx.js";
 import { OpcPackage, text } from "../src/core/opc.js";
-import { makeNumberingDocx, numPr } from "./helpers/make-numbering.js";
+import { NUMBERING, makeNumberingDocx, numPr, numberingStyles } from "./helpers/make-numbering.js";
 
 /**
  * What a numbered paragraph draws. Three obligations, each measured over the 86 WPS-written documents before
@@ -240,7 +240,10 @@ describe("docx 编号：符号按 w:lvlText 画、w:numId 0 不画、列表可�
 
   it("exposes the numbering part as the model reads it", () => {
     const doc = open(makeNumberingDocx([{ pPr: numPr(2, 0), text: "台账" }]));
-    expect(doc.numberingTable().map((n) => n.numId)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(doc.numberingTable().map((n) => n.numId)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    // numId 11 is the level that states a `w:hint` and no face: a family is not a font, so `font` stays unset
+    // and the mark's own chain is what the page wears (§17.18.39 lists three hint values, none of them a name).
+    expect(doc.levelOf(11, 0)).toMatchObject({ numFmt: "chineseCounting", lvlText: "%1、", font: undefined });
     expect(doc.numberingTable().find((n) => n.numId === 3)?.levels[1]).toMatchObject({
       numFmt: "lowerLetter",
       lvlText: "%2)",
@@ -267,11 +270,12 @@ describe("列表符号的字体：私用区那颗码点按级自己声明的 w:r
     expect(markOf(doc, "方块")).toBe(`<span class="bullet" style="font-family:Wingdings;font-size:11pt">${MARK}</span>`);
   });
 
-  it("级没写 rFonts：符号不添字体——页面不能画文件没说过的东西", () => {
+  it("级没写 rFonts：符号穿这一段解析出的脸，不穿页面样式表那张", () => {
     const doc = open(makeNumberingDocx([{ pPr: numPr(8, 0), text: "方块" }]));
     expect(doc.levelOf(8, 0)?.font).toBeUndefined();
-    // 字体是「没写就不画」，磅数不是：那一段在文件里本来就有个解析得出的数。
-    expect(markOf(doc, "方块")).toBe(`<span class="bullet" style="font-size:11pt">${MARK}</span>`);
+    // 级没说，就按 §17.3.1.4 往下走：这一段 docDefaults 点了 Calibri，那颗符号就穿它——
+    // 页面样式表的 Times New Roman 是 App 的默认，不是这个件说的。
+    expect(markOf(doc, "方块")).toBe(`<span class="bullet" style="font-family:&quot;Calibri&quot;;font-size:11pt">${MARK}</span>`);
   });
 
   it("只有符号穿这颗字体的脸，正文那串字照旧", () => {
@@ -302,7 +306,7 @@ describe("列表符号的字号：级上写的 w:sz 只落在那颗符号上", (
 
   it("那颗符号比正文小：文件说小一号，页面就画小一号", () => {
     const doc = open(makeNumberingDocx([{ pPr: numPr(10, 0), text: "点数" }]));
-    expect(markOf(doc, "点数")).toBe(`<span class="bullet" style="font-size:9pt">1.</span>`);
+    expect(markOf(doc, "点数")).toBe(`<span class="bullet" style="font-family:&quot;Calibri&quot;;font-size:9pt">1.</span>`);
   });
 
   it("字体与字号同在一颗符号上，顺序照 rPr 里写的两样", () => {
@@ -341,19 +345,19 @@ describe("那颗符号的字号回退：级没写就用段落标记自己解析�
   it("w:pPr/w:rPr/w:sz 进了模型：级没说，那颗符号用段落的 14 磅", () => {
     const doc = open(makeNumberingDocx([{ pPr: numPr(8, 0) + markSz(28), text: "方块" }]));
     expect(doc.paragraphs()[0].markSizePt).toBe(14);
-    expect(markOf(doc, "方块")).toBe(`<span class="bullet" style="font-size:14pt">${MARK}</span>`);
+    expect(markOf(doc, "方块")).toBe(`<span class="bullet" style="font-family:&quot;Calibri&quot;;font-size:14pt">${MARK}</span>`);
   });
 
   it("标记没写字号：往上一跳取样式链，不取 docDefaults", () => {
     const doc = open(makeNumberingDocx([{ pPr: `<w:pStyle w:val="MarkSized"/>${numPr(8, 0)}`, text: "方块" }]));
     expect(doc.paragraphs()[0].markSizePt).toBe(16);
-    expect(markOf(doc, "方块")).toBe(`<span class="bullet" style="font-size:16pt">${MARK}</span>`);
+    expect(markOf(doc, "方块")).toBe(`<span class="bullet" style="font-family:&quot;Calibri&quot;;font-size:16pt">${MARK}</span>`);
   });
 
   it("两个都没写：落到 docDefaults 那 11 磅——页面样式表的 12 磅不是文件说的数", () => {
     const doc = open(makeNumberingDocx([{ pPr: numPr(8, 0), text: "方块" }]));
     expect(doc.paragraphs()[0].markSizePt).toBe(11);
-    expect(markOf(doc, "方块")).toBe(`<span class="bullet" style="font-size:11pt">${MARK}</span>`);
+    expect(markOf(doc, "方块")).toBe(`<span class="bullet" style="font-family:&quot;Calibri&quot;;font-size:11pt">${MARK}</span>`);
   });
 
   it("级上写的赢段落标记写的：numId 9 的 8 磅盖掉标记那 11 磅", () => {
@@ -379,5 +383,85 @@ describe("那颗符号的字号回退：级没写就用段落标记自己解析�
     expect((regenerated.match(/<w:sz\b/g) ?? []).length).toBe((part(src).match(/<w:sz\b/g) ?? []).length);
     expect(numberingOf(writeDocx(doc))).toBe(numberingOf(src));
     expect(paraXml(regenerated, "方块")).not.toContain("14pt");
+  });
+});
+
+describe("那颗符号的脸回退：级没点脸就用段落标记自己解析出的那两张", () => {
+  /** The corpus's own spelling of a mark that names its faces: both attributes plus the `w:hint` WPS adds. */
+  const markFaces = (attrs: string): string => `<w:rPr><w:rFonts ${attrs}/></w:rPr>`;
+  /** The East Asian half of the stack the mark wears: the invented family, quoted as the run's stack spells it. */
+  const EA_STACK = `font-family:&quot;solo-ea-黑体&quot;`;
+
+  it("w:pPr/w:rPr/w:rFonts 进了模型：一、 穿标记点的那两张，东亚那张在前", () => {
+    // numId 11 是语料里那 282 段的形状：级只写 `w:hint="eastAsia"`，一张脸都没点。
+    const doc = open(makeNumberingDocx([{ pPr: numPr(11, 0) + markFaces(`w:ascii="Arial" w:eastAsia="黑体" w:hint="eastAsia"`), text: "方块" }]));
+    const p = doc.paragraphs()[0];
+    expect(doc.levelOf(11, 0)?.font).toBeUndefined();
+    expect([p.markFont, p.markFontEastAsia]).toEqual(["Arial", "黑体"]);
+    expect(markOf(doc, "方块")).toBe(
+      `<span class="bullet" style="font-family:&quot;solo-ea-黑体&quot;,&quot;Arial&quot;;font-size:11pt">一、</span>`,
+    );
+    expect(doc.eastAsiaFaces()).toContain("黑体");
+  });
+
+  it("两张分别取：标记只点 eastAsia，拉丁那一路仍从链上借——不是把借来的擦掉", () => {
+    const doc = open(makeNumberingDocx([{ pPr: numPr(11, 0) + markFaces(`w:eastAsia="黑体"`), text: "方块" }]));
+    const p = doc.paragraphs()[0];
+    // docDefaults 点了 Calibri，标记没点拉丁那一路，所以两样各归各（§17.7.2 每条属性各自止步）。
+    expect([p.markFont, p.markFontEastAsia]).toEqual(["Calibri", "黑体"]);
+    expect(markOf(doc, "方块")).toContain(`font-family:&quot;solo-ea-黑体&quot;,&quot;Calibri&quot;;`);
+  });
+
+  it("标记一个字都没点：往上一跳取样式链那两张", () => {
+    const doc = open(makeNumberingDocx([{ pPr: `<w:pStyle w:val="MarkFaced"/>${numPr(11, 0)}`, text: "方块" }]));
+    const p = doc.paragraphs()[0];
+    expect([p.markFont, p.markFontEastAsia]).toEqual(["Arial", "宋体"]);
+    expect(markOf(doc, "方块")).toContain(`font-family:&quot;solo-ea-宋体&quot;,&quot;Arial&quot;;`);
+  });
+
+  it(`空值不算点了脸：w:ascii="" 让位给链上的 Calibri`, () => {
+    const doc = open(makeNumberingDocx([{ pPr: numPr(11, 0) + markFaces(`w:ascii="" w:eastAsia="黑体"`), text: "方块" }]));
+    expect([doc.paragraphs()[0].markFont, doc.paragraphs()[0].markFontEastAsia]).toEqual(["Calibri", "黑体"]);
+  });
+
+  it("级上点了脸的赢：numId 9 的 Wingdings 盖过标记那两张", () => {
+    const doc = open(makeNumberingDocx([{ pPr: numPr(9, 0) + markFaces(`w:ascii="Arial" w:eastAsia="黑体"`), text: "方块" }]));
+    expect(doc.levelOf(9, 0)?.font).toBe("Wingdings");
+    expect(markOf(doc, "方块")).toContain("font-family:Wingdings;");
+    expect(markOf(doc, "方块")).not.toContain(EA_STACK);
+  });
+
+  it("三层都没点：不写 font-family——页面不能造文件里没有的脸", () => {
+    const doc = open(makeNumberingDocx([{ pPr: numPr(11, 0), text: "方块" }], NUMBERING, numberingStyles("")));
+    const p = doc.paragraphs()[0];
+    expect([p.markFont, p.markFontEastAsia]).toEqual([undefined, undefined]);
+    expect(markOf(doc, "方块")).toBe(`<span class="bullet" style="font-size:11pt">一、</span>`);
+  });
+
+  it("脸只穿那颗符号：这一段自己的字照它 run 解析出的 Calibri，不跟着换黑体", () => {
+    const doc = open(makeNumberingDocx([{ pPr: numPr(11, 0) + markFaces(`w:ascii="Arial" w:eastAsia="黑体"`), text: "方块" }]));
+    const para = drawnPara(doc, "方块");
+    expect((para.match(/黑体/g) ?? []).length).toBe(1);
+    expect(/<span class="bullet"[^>]*黑体/.test(para)).toBe(true);
+    expect(para).toContain(`<span style="font-size:11pt;font-family:&quot;Calibri&quot;;">方块</span>`);
+  });
+
+  it("标记点的脸正文没用过也要有规则：@font-face 与那颗符号的栈都指向它", () => {
+    const doc = open(makeNumberingDocx([{ pPr: numPr(11, 0) + markFaces(`w:eastAsia="黑体"`), text: "方块" }]));
+    const html = renderWord(doc);
+    expect((html.match(/solo-ea-黑体/g) ?? []).length).toBe(2); // 规则里的族名 + 那颗符号的栈
+    expect(html).toContain(`@font-face{font-family:"solo-ea-黑体";src:local("黑体");`);
+  });
+
+  it("画它不写它：w:pPr 里的 w:rFonts 按原件带回，numbering.xml 逐字节照旧", () => {
+    const src = makeNumberingDocx([{ pPr: numPr(11, 0) + markFaces(`w:ascii="Arial" w:eastAsia="黑体"`), text: "方块" }]);
+    const doc = open(src);
+    const regenerated = saved(doc);
+    expect(pPrOf(regenerated, "方块")).toContain(`<w:rFonts w:ascii="Arial" w:eastAsia="黑体"/>`);
+    expect(regenerated).not.toContain("solo-ea");
+    expect(numberingOf(writeDocx(doc))).toBe(numberingOf(src));
+    // 没写 rFonts 的段落，重拼也不给它添一个。
+    const bare = open(makeNumberingDocx([{ pPr: numPr(11, 0), text: "干净" }]));
+    expect(pPrOf(saved(bare), "干净")).not.toContain("<w:rFonts");
   });
 });

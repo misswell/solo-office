@@ -41,11 +41,12 @@ export function eastAsiaFaceRules(faces: string[]): string {
 }
 
 /** The stack a run draws with: the east-asian family first (it only answers for East Asian codepoints), the
- *  Latin one after it. Quoted, because a face name is a string, not an identifier. */
-function fontStack(inline: Inline): string {
+ *  Latin one after it. Quoted, because a face name is a string, not an identifier. A numbered paragraph's mark
+ *  builds the same stack from its own resolved faces, so the symbol and the text beside it wear one pair. */
+function fontStack(run: Pick<Inline, "font" | "fontEastAsia">): string {
   const parts: string[] = [];
-  if (inline.fontEastAsia) parts.push(`"${faceKey(inline.fontEastAsia)}"`);
-  const latin = inline.font?.replace(/[;\\]/g, "").trim();
+  if (run.fontEastAsia) parts.push(`"${faceKey(run.fontEastAsia)}"`);
+  const latin = run.font?.replace(/[;\\]/g, "").trim();
   if (latin) parts.push(`"${latin}"`);
   return parts.join(",");
 }
@@ -280,11 +281,16 @@ function renderParagraph(p: Paragraph, doc: WordDocument, counters: Map<string, 
     // Font and size are both the mark's own character properties (§17.3.1.12: the symbol is a run of its own),
     // and both travel as a declaration on the mark's span only — never on the paragraph, which the editor reads
     // back through `inlinesOf`; that skips `.bullet`, so neither number can come back as body formatting.
-    // The size is the level's when the level states one. When it doesn't, the mark's own resolved size is what
-    // the file left standing (§17.3.1.4), and without it the span would inherit the page stylesheet's 12pt.
+    // Both fall back the same way: the level's own statement wins, and where the level is silent it is the
+    // paragraph's mark chain (§17.3.1.4) — not the page stylesheet, whose 12pt and Times/Songti pair are the
+    // App's own default and no document asked for them.
     const markPt = level?.sizePt ?? p.markSizePt;
     const markStyle: string[] = [];
     if (level?.font) markStyle.push(`font-family:${esc(level.font)}`);
+    else {
+      const markFaces = fontStack({ font: p.markFont, fontEastAsia: p.markFontEastAsia });
+      if (markFaces) markStyle.push(`font-family:${esc(markFaces)}`);
+    }
     if (markPt) markStyle.push(`font-size:${markPt}pt`);
     prefix = `<span class="bullet"${markStyle.length ? ` style="${markStyle.join(";")}"` : ""}>${mark}</span>`;
     style.push(`padding-left:${8 + ilvl * 24}px`);

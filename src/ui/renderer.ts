@@ -237,6 +237,22 @@ const SIZES = [9, 10, 11, 12, 14, 18, 24, 36];
 const DOC_SIZES = [10, 10.5, 12, 14, 16, 18, 24, 36];
 const DECK_SIZES = [12, 14, 16, 18, 20, 24, 28, 32, 40, 44];
 
+/**
+ * 突出显示's palette. The names are what `w:highlight w:val=` can hold (§17.17.64 has 17 members); these eight are
+ * what this ribbon can paint. Measured over the 86 WPS documents, only `yellow` and `none` ever reach a run with
+ * text in them, so the palette gap has no audience today and is left alone (`.scratch/ribbon-echo-measure.ts`).
+ */
+const DOC_HIGHLIGHTS: [string, string][] = [
+  ["none", "高亮：无"],
+  ["yellow", "黄"],
+  ["green", "绿"],
+  ["cyan", "青"],
+  ["magenta", "品红"],
+  ["red", "红"],
+  ["darkYellow", "深黄"],
+  ["lightGray", "浅灰"],
+];
+
 const ctl: Record<string, HTMLElement> = {};
 
 function buildRibbon(kind: "xlsx" | "docx" | "pptx"): void {
@@ -436,12 +452,12 @@ function buildDocRibbon(): void {
     font,
     "highlight",
     "突出显示",
-    [["none", "高亮：无"], ["yellow", "黄"], ["green", "绿"], ["cyan", "青"], ["magenta", "品红"], ["red", "红"], ["darkYellow", "深黄"], ["lightGray", "浅灰"]],
+    DOC_HIGHLIGHTS,
+    // No reset: the box is the caret's sentence, not a one-shot command. `syncDocRibbon` reads the run the
+    // caret sits in, so what it shows after a pick is what the document now says there.
     (v) => {
       editor?.applyStyle({ highlight: v });
       syncDocRibbon();
-      const pick = ctl.highlight as HTMLSelectElement | undefined;
-      if (pick) pick.value = "";
     },
   );
 
@@ -539,7 +555,14 @@ function syncDocRibbon(): void {
   mark("bullet", state?.list === "bullet");
   mark("number", state?.list === "number");
   const size = ctl.size as HTMLSelectElement | undefined;
-  if (size && state?.sizePt) size.value = String(DOC_SIZES.includes(state.sizePt) ? state.sizePt : DOC_SIZES[4]);
+  if (size) {
+    const pt = state?.sizePt;
+    echoChoice(size, pt === undefined ? undefined : String(pt), DOC_SIZES.map(String), DOC_SIZES.filter((n) => n < (pt ?? 0)).length);
+  }
+  const hl = ctl.highlight as HTMLSelectElement | undefined;
+  // Three sentences the file could have written — 没提过底色 / 提了「没有」 / 提了某个颜色名 — three readings of
+  // the box. Leaving it blank is the first, and only the `none` option spells the second.
+  if (hl) echoChoice(hl, state?.highlight, DOC_HIGHLIGHTS.map(([v]) => v), DOC_HIGHLIGHTS.length);
   mark("track", editor?.trackingChanges ?? false);
   mark("revPane", editor?.reviewPaneOpen ?? false);
   mark("navPane", editor?.outlinePaneOpen ?? false);
@@ -549,6 +572,31 @@ function syncDocRibbon(): void {
   const redoBtn = ctl.redo as HTMLButtonElement | undefined;
   if (undoBtn) undoBtn.disabled = !editor?.canUndo;
   if (redoBtn) redoBtn.disabled = !editor?.canRedo;
+}
+
+/**
+ * A chooser states the sentence the caret's run says, not the closest thing it happens to list.
+ *
+ * `undefined` deselects, which is how 「没提过」 reads; `value` among `presets` selects that option; a value the
+ * control does not list gets one option of its own at `insertAt`, taken back out on the next sync. Showing the
+ * nearest preset instead would put a property in the ribbon that is not in the file — measured over the 86 WPS
+ * documents, 61 of them hold runs whose size is none of the eight presets, so a 21pt caret used to be answered
+ * with 16 on every stop (`.scratch/ribbon-echo-measure.ts`).
+ */
+function echoChoice(s: HTMLSelectElement, value: string | undefined, presets: string[], insertAt: number): void {
+  for (const o of [...s.options]) if (o.dataset.caret === "1") o.remove();
+  if (value === undefined) {
+    s.selectedIndex = -1;
+    return;
+  }
+  if (!presets.includes(value)) {
+    const o = document.createElement("option");
+    o.value = value;
+    o.textContent = value;
+    o.dataset.caret = "1";
+    s.insertBefore(o, s.options[insertAt] ?? null);
+  }
+  s.value = value;
 }
 
 /** Deck operations; text styles act on the selection being typed into. */
@@ -1283,6 +1331,8 @@ function mountDoc(app: Extract<Opened, { kind: "docx" }>): void {
       title.textContent = app.name + " ●";
       syncDocRibbon();
     },
+    // 选区移动不是编辑，走不到 `changed`：光标从粗字挪到不粗的字上，ribbon 得跟着改口。
+    moved: () => syncDocRibbon(),
   });
   // The ribbon reads the editor, so it is built after one exists.
   buildRibbon("docx");

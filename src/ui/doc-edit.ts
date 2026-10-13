@@ -464,7 +464,7 @@ export class DocEditor {
   constructor(
     private readonly host: HTMLElement,
     private readonly doc: WordDocument,
-    private readonly hooks: { changed(): void },
+    private readonly hooks: { changed(): void; moved?(): void },
   ) {
     for (const id of anchorIdsIn(this.doc.blocks)) this.bodyAnchored.add(id);
     this.revSeq = this.doc.maxRevisionId();
@@ -766,6 +766,10 @@ export class DocEditor {
     }
     const ends = this.rangeEnds();
     if (!ends) return;
+    // The ribbon reads the caret, so it is told whenever the caret moves inside the page — selecting is not an
+    // edit and does not go through `changed()`, and a ribbon that only refreshes after an edit keeps showing
+    // the state of the last click rather than of the run the reader is pointing at.
+    this.hooks.moved?.();
     const painted = this.paintedCells;
     // 命令点亮的那一组格子还没被用户动过：页面里的那一条选区不能把命令算出的矩形缩回一个格。
     if (painted && this.picked(painted, ends.start) && this.picked(painted, ends.end)) return;
@@ -1734,8 +1738,15 @@ export class DocEditor {
     return block?.kind === "paragraph" ? block : undefined;
   }
 
-  /** What the caret's run and paragraph currently look like, so the toolbar can show its state. */
-  markState(): { bold: boolean; italic: boolean; underline: boolean; strike: boolean; sizePt?: number; align?: string; list?: "bullet" | "number" } {
+  /**
+   * What the caret's run and paragraph currently look like, so the toolbar can show its state.
+   *
+   * `highlight` keeps the three states #88 separated, because they are three different sentences the file
+   * could have written: `undefined` is 「没提过」, `"none"` is a run that *says* it has no background, and a
+   * colour name is a background. A control that shows 「没提过」 the same way as 「说了没有」 answers the reader
+   * with a silence where the document spoke.
+   */
+  markState(): { bold: boolean; italic: boolean; underline: boolean; strike: boolean; sizePt?: number; highlight?: string; align?: string; list?: "bullet" | "number" } {
     const sel = document.getSelection();
     let el: Element | null = null;
     if (sel?.rangeCount) {
@@ -1762,6 +1773,7 @@ export class DocEditor {
       underline: carried.underline ?? false,
       strike: carried.strike ?? false,
       sizePt: carried.sizePt,
+      highlight: carried.highlight,
       align: paragraph?.align,
       list,
     };

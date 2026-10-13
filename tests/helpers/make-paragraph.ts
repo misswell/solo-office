@@ -63,3 +63,55 @@ export function makeParaPropsDocx(): Uint8Array {
 <w:p><w:pPr><w:framePr w:wrap="around" w:vAnchor="text" w:hAnchor="text" w:x="108" w:y="1"/><w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr></w:pPr><w:r><w:t>带框与分节</w:t></w:r></w:p>`;
   return pack(document, STYLES);
 }
+
+/**
+ * Paragraphs whose `w:ind` states one shape each, plus a style that can lend one. The spellings are measured,
+ * not invented (`.scratch/ind-census.ts`, `ind-census3.ts`, `ind-order.ts` over the 86 documents WPS itself
+ * wrote, which hold 29,889 `w:ind` elements):
+ *
+ * - 16,235 elements state `w:firstLine` together with `w:firstLineChars`, and both are `0` in 17,856 of the
+ *   pairs' occurrences — "no first-line indent" is written out loud, not left unwritten.
+ * - 5,097 state a positive `w:firstLine` with no character form at all; 1,147 state both positively (their
+ *   ratio is always a font size: 180/210/240/264/300/320/440 twips per character); 236 state only
+ *   `w:firstLineChars`; **88 state a positive `w:firstLine` next to `w:firstLineChars="0"`**, and 4 the other
+ *   way round. A file never states a positive first line and a positive hanging in the same element (0 of
+ *   29,889), and a positive `w:leftChars`, `w:rightChars` or `w:hangingChars` never appears without its twips
+ *   value in the same element (0 of the 29,207 in the documents' own bodies), which is why only the first line
+ *   needs a second, character-counted field.
+ * - 107 elements state a negative `w:right` — all of them `-107` — so the right indent is not a non-negative
+ *   number here.
+ * - The attributes come out in the order left, leftChars, right, rightChars, firstLine, firstLineChars, with
+ *   `w:hanging` last (`left,leftChars,right,rightChars,firstLine,firstLineChars` 123 times, `left,hanging` 118).
+ *
+ * Not observed: `w:start`/`w:end` (the bidi pair) in any of them, and a negative `w:firstLine` (0).
+ */
+export function makeIndentDocx(
+  entries: readonly { readonly ind?: string; readonly pStyle?: string; readonly text: string }[],
+  lentPPr = "",
+): Uint8Array {
+  const document =
+    entries
+      .map((e) => {
+        const kids = [e.pStyle ? `<w:pStyle w:val="${e.pStyle}"/>` : "", e.ind ? `<w:ind ${e.ind}/>` : ""].join("");
+        return `<w:p>${kids ? `<w:pPr>${kids}</w:pPr>` : ""}<w:r><w:t>${e.text}</w:t></w:r></w:p>`;
+      })
+      .join("\n") + `<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800"/></w:sectPr>`;
+  const styles = lentPPr
+    ? STYLES.replace("</w:styles>", `<w:style w:type="paragraph" w:styleId="Lent"><w:name w:val="借来的"/><w:pPr>${lentPPr}</w:pPr></w:style></w:styles>`)
+    : STYLES;
+  return pack(document, styles);
+}
+
+/**
+ * A paragraph whose current set states no first-line indent while its `w:pPrChange` records one, in the shape
+ * §17.13.5.19 gives it: the record is the last child of `w:pPr` and holds a whole set of its own.
+ */
+export function makeIndentRevisionDocx(): Uint8Array {
+  const document =
+    `<w:p><w:pPr><w:ind w:firstLine="0" w:firstLineChars="0"/>` +
+    `<w:pPrChange w:id="12" w:author="顾峰" w:date="2026-03-01T08:00:00Z">` +
+    `<w:pPr><w:ind w:firstLine="480" w:firstLineChars="200"/></w:pPr></w:pPrChange></w:pPr>` +
+    `<w:r><w:t>缩进被改过</w:t></w:r></w:p>` +
+    `<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800"/></w:sectPr>`;
+  return pack(document, STYLES);
+}

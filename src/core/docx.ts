@@ -161,6 +161,24 @@ export interface ParaStyle {
   styleId?: string;
   align?: string;
   indentLeft?: number;
+  /**
+   * The rest of what `w:ind` can state about the first line and the right edge. `indentRight` and
+   * `indentHanging` are twips like `indentLeft` (`w:right`, `w:hanging`); `indentFirstLineChars` is hundredths
+   * of a character, which is how WPS writes 首行缩进 2 字符 (`w:firstLineChars="200"`).
+   *
+   * The first line has two spellings, and a file that states both is not contradicting itself: over the 86
+   * WPS-written documents the 1,147 `w:ind` elements carrying a positive pair work out to a per-character
+   * width of 180/210/240/264/300/320/440 twips, which are font sizes (9pt, 五号 10.5pt, 12pt, 16pt, 22pt).
+   * So they say the same indent twice — except in 88 elements that state a positive `w:firstLine` next to
+   * `w:firstLineChars="0"` (83 of them inside a `word/document.xml`, and 70 of those read `w:firstLine="642"`),
+   * which is WPS spelling an absolute 磅 value it was given in the dialog. A rule that let the character form
+   * win — which is what §17.3.1.14 says — would remove 88 indents WPS itself drew to fix 4 in the opposite
+   * shape, so the resolved value is the twips one when it is stated non-zero and the character count otherwise.
+   */
+  indentRight?: number;
+  indentFirstLine?: number;
+  indentFirstLineChars?: number;
+  indentHanging?: number;
   spacingBefore?: number;
   spacingAfter?: number;
   lineSpacing?: number;
@@ -176,8 +194,8 @@ export interface ParagraphFormatRevision {
   date?: string;
   prev: ParaStyle;
   /**
-   * That set as the record wrote it, child by child. `ParaStyle` is the eight properties the model can name,
-   * and a paragraph's `w:pPr` holds far more than eight: a refusal rebuilt from those fields put the eight
+   * That set as the record wrote it, child by child. `ParaStyle` is the properties the model can name,
+   * and a paragraph's `w:pPr` holds far more than those: a refusal rebuilt from the fields put the named ones
    * back and took the record's own `w:shd`, `w:tabs` and `w:snapToGrid` down with them — the same set the
    * reviewer was being asked to decide.
    */
@@ -339,6 +357,11 @@ export interface Paragraph {
   align?: string;
   numPr?: { numId: number; ilvl: number };
   indentLeft?: number;
+  /** The same four the `w:ind` element can state, resolved through the paragraph's style. See `ParaStyle`. */
+  indentRight?: number;
+  indentFirstLine?: number;
+  indentFirstLineChars?: number;
+  indentHanging?: number;
   spacingBefore?: number;
   spacingAfter?: number;
   lineSpacing?: number;
@@ -1399,7 +1422,7 @@ export class WordDocument {
         name: s.name?.["@_val"] ?? id,
         basedOn: s.basedOn?.["@_val"],
         rPr,
-        pPr: s.pPr ? { align: s.pPr.jc?.["@_val"], indentLeft: num(s.pPr.ind?.["@_left"]) } : undefined,
+        pPr: s.pPr ? { align: s.pPr.jc?.["@_val"], ...indOf(s.pPr.ind) } : undefined,
       });
     }
   }
@@ -1438,12 +1461,18 @@ export class WordDocument {
   private paragraph(p: any, rels: Map<string, Rel2>, span?: string): Paragraph {
     const pPr = p.pPr ?? {};
     const styleId = pPr.pStyle?.["@_val"];
+    const lent = styleId ? this.styles.get(styleId)?.pPr : undefined;
+    const ind = indOf(pPr.ind);
     const para: Paragraph = {
       kind: "paragraph",
       styleId,
       styleName: styleId ? this.styles.get(styleId)?.name : undefined,
-      align: pPr.jc?.["@_val"] ?? this.styles.get(styleId)?.pPr?.align,
-      indentLeft: num(pPr.ind?.["@_left"]) ?? this.styles.get(styleId)?.pPr?.indentLeft,
+      align: pPr.jc?.["@_val"] ?? lent?.align,
+      indentLeft: ind.indentLeft ?? lent?.indentLeft,
+      indentRight: ind.indentRight ?? lent?.indentRight,
+      indentFirstLine: ind.indentFirstLine ?? lent?.indentFirstLine,
+      indentFirstLineChars: ind.indentFirstLineChars ?? lent?.indentFirstLineChars,
+      indentHanging: ind.indentHanging ?? lent?.indentHanging,
       spacingBefore: num(pPr.spacing?.["@_before"]),
       spacingAfter: num(pPr.spacing?.["@_after"]),
       lineSpacing: num(pPr.spacing?.["@_line"]),
@@ -1471,6 +1500,10 @@ export class WordDocument {
       styleId: para.styleId,
       align: para.align,
       indentLeft: para.indentLeft,
+      indentRight: para.indentRight,
+      indentFirstLine: para.indentFirstLine,
+      indentFirstLineChars: para.indentFirstLineChars,
+      indentHanging: para.indentHanging,
       spacingBefore: para.spacingBefore,
       spacingAfter: para.spacingAfter,
       lineSpacing: para.lineSpacing,
@@ -2619,8 +2652,8 @@ export class WordDocument {
     Object.assign(p, prev);
     p.styleName = p.styleId ? this.styles.get(p.styleId)?.name : undefined;
     if (fmt.prevSlots?.length) {
-      // The record wrote more than the eight fields can name, so the paragraph takes its set as written;
-      // syncing the slots from fields would re-spell the eight and delete the rest.
+      // The record wrote more than the model has a field for, so the paragraph takes its set as written;
+      // syncing the slots from fields would re-spell the named ones and delete the rest.
       p.pPrSlots = fmt.prevSlots;
       p.asRead = { ...prev };
     } else {
@@ -2630,7 +2663,13 @@ export class WordDocument {
     }
     const inherited = p.styleId ? this.styles.get(p.styleId)?.pPr : undefined;
     p.align = p.align ?? inherited?.align;
+    // Every `w:ind` attribute resolves on its own, the way the paragraph's first read did it: a record that
+    // left the indent out hands the style's indent back, and one that said `w:firstLine="0"` keeps that zero.
     p.indentLeft = p.indentLeft ?? inherited?.indentLeft;
+    p.indentRight = p.indentRight ?? inherited?.indentRight;
+    p.indentFirstLine = p.indentFirstLine ?? inherited?.indentFirstLine;
+    p.indentFirstLineChars = p.indentFirstLineChars ?? inherited?.indentFirstLineChars;
+    p.indentHanging = p.indentHanging ?? inherited?.indentHanging;
   }
 
   /** Tracked formatting changes on runs (`w:rPrChange`) still waiting for a decision, one entry per `w:id`. */
@@ -3175,6 +3214,31 @@ function restoreStyle(run: Inline, fmt: FormatRevision): Inline {
 }
 
 /**
+ * What a `w:ind` states, as fields. Only the spellings the files really use on their own are read: over the
+ * 29,207 `w:ind` elements in the `word/document.xml` of the 86 WPS-written documents, a positive
+ * `w:firstLineChars` appears with no `w:firstLine` beside it 232 times, while a positive `w:leftChars`,
+ * `w:rightChars` or `w:hangingChars` never does — there the character form always arrives alongside its twips
+ * value, so only the first line needs a field of its own counted in characters.
+ *
+ * Attributes the element does not state stay out of the result rather than coming back as `undefined`: a
+ * `w:pPrChange` has to record which properties it wrote, and a paragraph has to tell "the file said zero" from
+ * "the file said nothing", since the second is what lets its style's indent through.
+ */
+function indOf(ind: any): Partial<ParaStyle> {
+  const out: Record<string, number> = {};
+  const take = (field: keyof ParaStyle, attr: string): void => {
+    const v = num(ind?.[`@_${attr}`]);
+    if (v !== undefined) out[field] = v;
+  };
+  take("indentLeft", "left");
+  take("indentRight", "right");
+  take("indentFirstLine", "firstLine");
+  take("indentFirstLineChars", "firstLineChars");
+  take("indentHanging", "hanging");
+  return out as Partial<ParaStyle>;
+}
+
+/**
  * What a `w:pPr` says on its own, with nothing taken from the paragraph's style. A `w:pPrChange`
  * records the properties as they were written, while the model resolves a paragraph's alignment and
  * indent through its style, so the two have to be read by different rules.
@@ -3185,8 +3249,7 @@ function paraStyle(pPr: any): ParaStyle {
   if (styleId !== undefined) s.styleId = String(styleId);
   const align = pPr.jc?.["@_val"];
   if (align !== undefined) s.align = String(align);
-  const indent = num(pPr.ind?.["@_left"]);
-  if (indent !== undefined) s.indentLeft = indent;
+  Object.assign(s, indOf(pPr.ind));
   const before = num(pPr.spacing?.["@_before"]);
   if (before !== undefined) s.spacingBefore = before;
   const after = num(pPr.spacing?.["@_after"]);
@@ -3200,7 +3263,10 @@ function paraStyle(pPr: any): ParaStyle {
 }
 
 /** Every paragraph property a `w:pPrChange` carries, so a refusal can clear the ones the record dropped. */
-export const PARA_STYLE_KEYS: (keyof ParaStyle)[] = ["styleId", "align", "indentLeft", "spacingBefore", "spacingAfter", "lineSpacing", "pageBreakBefore", "numPr"];
+export const PARA_STYLE_KEYS: (keyof ParaStyle)[] = [
+  "styleId", "align", "indentLeft", "indentRight", "indentFirstLine", "indentFirstLineChars", "indentHanging",
+  "spacingBefore", "spacingAfter", "lineSpacing", "pageBreakBefore", "numPr",
+];
 
 /** The paragraph's own properties, without its text or the revision records hanging off it. */
 export function paraStyleOf(p: Paragraph): ParaStyle {
@@ -3495,11 +3561,14 @@ const pprRank = (tag: string): number => {
  * Putting a paragraph's `w:pPr` slots in line with the four properties the model spells for itself, so a
  * toolbar click on alignment or a list button lands *and* the properties the model cannot explain stay.
  * This is the same split `applyCellProps` makes for a cell's `w:tcPr`: the set stays the file's, only the
- * named child moves. `w:spacing` and `w:ind` are deliberately left alone — the fields spell one attribute of
- * each, and rewriting the element would take `w:firstLine`, `w:hanging` and `w:lineRule` down with it.
+ * named child moves.
  *
  * A prefix is copied from the set rather than assumed: `w` is only an alias for the words namespace where the
  * part binds it, and a child written with a different prefix than its neighbours would read as another element.
+ *
+ * `w:spacing` and `w:ind` are not among the properties this moves, so their bytes stay as the file wrote them —
+ * which is also why they must not be re-spelled here: each states more attributes than the model has fields
+ * for, and rewriting one from the fields would take `w:firstLine`, `w:hanging` and `w:lineRule` down with it.
  */
 export function syncParaSlots(p: Paragraph): void {
   const slots = p.pPrSlots;

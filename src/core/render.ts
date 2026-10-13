@@ -152,10 +152,32 @@ function wordRuns(inlines: Inline[], state: CommentState): string {
   return out.join("");
 }
 
+/**
+ * The paragraph's first-line indent as one CSS value, from whichever of the two spellings the file put its
+ * weight behind: the twips value when it states a non-zero one, otherwise the character count (WPS writes 首行
+ * 缩进 2 字符 as `w:firstLineChars="200"`), and a `w:hanging` pulls the other way. Both are stated in 1,147 of
+ * the corpus's elements and their ratio is always a font size, so choosing the twips value there draws what
+ * WPS drew; the 88 that state a positive `w:firstLine` next to `w:firstLineChars="0"` are the reason the
+ * character form does not simply win, as §17.3.1.14 has it.
+ *
+ * A `w:firstLineChars` with no twips counterpart — 236 elements — is drawn in `em`, which makes it follow this
+ * page's own font size rather than the document's. 未取证 how wide WPS makes it, since the size WPS measures
+ * the character against is the paragraph mark's, and the model does not carry that as a number.
+ */
+const firstLineIndent = (p: Paragraph): string => {
+  const twips = p.indentFirstLine ?? (p.indentHanging === undefined ? undefined : -p.indentHanging);
+  if (twips) return `${twipsToPx(twips)}px`;
+  const chars = p.indentFirstLineChars ?? 0;
+  return chars > 0 ? `${(chars / 100).toFixed(2)}em` : "";
+};
+
 function renderParagraph(p: Paragraph, doc: WordDocument, counters: Map<string, number>, state: CommentState): string {
   const style: string[] = [];
   if (p.align && ALIGN[p.align]) style.push(`text-align:${ALIGN[p.align]}`);
   if (p.indentLeft) style.push(`margin-left:${twipsToPx(p.indentLeft)}px`);
+  if (p.indentRight) style.push(`margin-right:${twipsToPx(p.indentRight)}px`);
+  const first = firstLineIndent(p);
+  if (first) style.push(`text-indent:${first}`);
   if (p.spacingBefore !== undefined) style.push(`margin-top:${twipsToPx(p.spacingBefore)}px`);
   if (p.spacingAfter !== undefined) style.push(`margin-bottom:${twipsToPx(p.spacingAfter)}px`);
   if (p.lineSpacing) style.push(`line-height:${(p.lineSpacing / 240).toFixed(2)}`);

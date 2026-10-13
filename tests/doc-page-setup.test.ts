@@ -3,12 +3,14 @@ import { WordDocument, cmToTwips, twipsToCm, twipsToPx } from "../src/core/docx.
 import { writeDocx } from "../src/core/write-docx.js";
 import { OpcPackage, text } from "../src/core/opc.js";
 import { renderWord } from "../src/core/render.js";
-import { BARE_SECTION, WPS_LANDSCAPE_SECTION, WPS_NEAR_A4_SECTION, WPS_SECTION, WPS_SECTION_NO_DISTANCES, makePageSetupDocx } from "./helpers/make-page-setup.js";
+import { BARE_SECTION, WPS_LANDSCAPE_SECTION, WPS_NEAR_A4_SECTION, WPS_SECTION, WPS_SECTION_NO_DISTANCES, WPS_SECTION_UNREAD_CHILDREN, makePageSetupDocx } from "./helpers/make-page-setup.js";
 import { makeFullPageDistanceDocx, makeTwoSectionDocx } from "./helpers/make-header-footer.js";
 
 const bodyXml = (bytes: Uint8Array): string => text(OpcPackage.from(bytes).bytes("word/document.xml")!);
 /** One element's own opening tag, so a test can name the bytes a change wrote rather than a re-read value. */
 const tagOf = (xml: string, name: string): string => new RegExp(`<w:${name}[^>]*/?>`).exec(xml)?.[0] ?? "";
+/** A whole element, opening tag through closing tag: what a section re-splice has to bring back, not just start. */
+const spanOf = (xml: string, name: string): string => new RegExp(`<w:${name}\\b[^>]*/>|<w:${name}\\b[^>]*>[\\s\\S]*?<\\/w:${name}>`).exec(xml)?.[0] ?? "";
 /** The page box's own `style`, which is where the geometry a user typed has to show up. */
 const page = (html: string): string => /<div class="page" style="([^"]*)"/.exec(html)?.[1] ?? "";
 
@@ -75,6 +77,34 @@ describe("docx 页面设置：纸张大小/页边距/距离/装订线/方向", (
     const xml = bodyXml(writeDocx(doc));
     expect(tagOf(xml, "pgSz")).toBe('<w:pgSz w:w="16838" w:h="11906" w:orient="landscape" w:code="9"/>');
     expect(tagOf(xml, "pgMar")).toBe('<w:pgMar w:left="1000" w:right="1440" w:top="2000" w:bottom="1440" w:header="720"/>');
+  });
+
+  it("carries every child it never reads through the one save that rebuilds the section", () => {
+    // 「页面设置」 is the only edit that re-spells `w:sectPr` bytes: typing does not, because there the section
+    // travels as the file's own bytes untouched. So this is where an unread child can die — `applyPageSetup`
+    // walks the children and patches only `w:pgSz` and `w:pgMar`, and everything else in §17.3's list has to
+    // come back whole and in place. The shape is the corpus's: over the 86 files this machine's WPS wrote, those
+    // two elements plus `w:pgBorders` (24 sections), `w:cols`/`w:docGrid` (all 115), `w:pgNumType` (3) and
+    // `w:titlePg` (3) are the only children real files state, and every one came back byte-identical.
+    const doc = WordDocument.openBytes(makePageSetupDocx(WPS_SECTION_UNREAD_CHILDREN));
+    doc.setPageSetup({ topTwips: 1000, rightTwips: 1200, bottomTwips: 1000, leftTwips: 1300, landscape: false });
+    const xml = bodyXml(writeDocx(doc));
+    expect(spanOf(xml, "sectPr")).toBe(
+      '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1000" w:right="1200" w:bottom="1000" w:left="1300" w:header="851" w:footer="992" w:gutter="0"/><w:pgBorders><w:top w:val="none" w:sz="0" w:space="0"/><w:left w:val="none" w:sz="0" w:space="0"/><w:bottom w:val="none" w:sz="0" w:space="0"/><w:right w:val="none" w:sz="0" w:space="0"/></w:pgBorders><w:pgNumType w:start="1"/><w:cols w:space="425" w:num="1"/><w:titlePg/><w:docGrid w:type="lines" w:linePitch="312" w:charSpace="0"/></w:sectPr>',
+    );
+
+    // Twice, because the second walk reads what the first one wrote: a section that survives one dialog and is
+    // rebuilt by the next is the shape a real editing session reaches, and a child kept by luck rather than by
+    // the walk would go here.
+    const again = WordDocument.openBytes(writeDocx(doc));
+    again.setPageSetup({ topTwips: 1440, rightTwips: 1440, bottomTwips: 1440, leftTwips: 1440, landscape: true });
+    const xml2 = bodyXml(writeDocx(again));
+    expect(spanOf(xml2, "sectPr")).toBe(
+      '<w:sectPr><w:pgSz w:w="16838" w:h="11906" w:orient="landscape"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="851" w:footer="992" w:gutter="0"/><w:pgBorders><w:top w:val="none" w:sz="0" w:space="0"/><w:left w:val="none" w:sz="0" w:space="0"/><w:bottom w:val="none" w:sz="0" w:space="0"/><w:right w:val="none" w:sz="0" w:space="0"/></w:pgBorders><w:pgNumType w:start="1"/><w:cols w:space="425" w:num="1"/><w:titlePg/><w:docGrid w:type="lines" w:linePitch="312" w:charSpace="0"/></w:sectPr>',
+    );
+    // And the twice-written bytes still say what the file said: a carried child is kept whole, not kept as
+    // padding, and this model reads it back exactly as far as it knows how.
+    expect(WordDocument.openBytes(writeDocx(again)).sections[0]!.pageBorders!.sides.top!.val).toBe("none");
   });
 
   it("adds a page box and margins to a section that had neither, at their place in the sequence", () => {

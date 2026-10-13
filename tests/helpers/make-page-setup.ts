@@ -88,3 +88,24 @@ export const WPS_PAGE_BORDER_SECTION =
  */
 export const WPS_CLEARED_BORDER_SECTION =
   '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1800" w:header="851" w:footer="992" w:gutter="283"/><w:pgBorders><w:top w:val="none" w:sz="0" w:space="0"/><w:left w:val="none" w:sz="0" w:space="0"/><w:bottom w:val="none" w:sz="0" w:space="0"/><w:right w:val="none" w:sz="0" w:space="0"/></w:pgBorders><w:cols w:space="425"/><w:docGrid w:type="lines" w:linePitch="312"/></w:sectPr>';
+
+/**
+ * One section carrying every `w:sectPr` child this model has no field for that WPS' own files actually write.
+ * Observed over the 115 sections in the 86 files this machine's WPS wrote: nine tag names account for **all** of
+ * their children — `w:pgSz`, `w:pgMar`, `w:pgBorders`, `w:pgNumType`, `w:cols`, `w:titlePg`, `w:docGrid`,
+ * `w:headerReference`, `w:footerReference` — while `w:paperSrc`, `w:lnNumType`, `w:formProt`, `w:vAlign`,
+ * `w:textDirection`, `w:bidi`, `w:footnotePr`, `w:endnotePr` and `w:printerSettings` appear in none. `w:pgNumType`
+ * (3 sections) is self-closing and states only `w:start`; `w:titlePg` (3) is self-closing with no attribute at all;
+ * every one of the 115 `w:cols` states both `w:space` and `w:num`, and every `w:docGrid` states `w:linePitch` and
+ * `w:charSpace` with `w:type` on 111 of them. The order is measured too, not borrowed from §17.3: the four
+ * sections carrying the page-number and first-page elements spell `pgSz > pgMar > pgNumType > cols > titlePg >
+ * docGrid`.
+ *
+ * Not observed: no single real file carries a border set *and* a `w:pgNumType` — the four above have no
+ * `w:pgBorders` — so this fixture is the union of shapes the corpus shows separately, which is what a survival
+ * test needs and not a claim that WPS writes them together. And no value was read anywhere: a probe over these
+ * files reports tag names, attribute names, counts and hashes. The numbers and the `none` stroke below are this
+ * fixture's own choice from what §17.3 admits.
+ */
+export const WPS_SECTION_UNREAD_CHILDREN =
+  '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800" w:header="851" w:footer="992" w:gutter="0"/><w:pgBorders><w:top w:val="none" w:sz="0" w:space="0"/><w:left w:val="none" w:sz="0" w:space="0"/><w:bottom w:val="none" w:sz="0" w:space="0"/><w:right w:val="none" w:sz="0" w:space="0"/></w:pgBorders><w:pgNumType w:start="1"/><w:cols w:space="425" w:num="1"/><w:titlePg/><w:docGrid w:type="lines" w:linePitch="312" w:charSpace="0"/></w:sectPr>';

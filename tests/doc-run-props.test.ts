@@ -56,13 +56,15 @@ describe("docx run property fidelity", () => {
     expect(run.rPrSlots?.find((s) => s.tag === "color")?.xml).toContain('w:themeColor="text1"');
     expect(run.rPrSlots?.find((s) => s.tag === "rFonts")?.xml).toContain('w:eastAsia="宋体"');
     expect(run.rPrSlots?.find((s) => s.tag === "textFill")?.xml).toContain('w14:val="C00000"');
-    // The fields still read what they always read, so the page draws the same run.
+    // The fields the page draws still read what they read before, plus the second face of this element.
     expect(run.bold).toBe(true);
     expect(run.sizePt).toBe(12);
     expect(run.color).toBe("#808080");
+    expect(run.font).toBe("Times New Roman");
+    expect(run.fontEastAsia).toBe("宋体");
     expect(run.asRead).toEqual({
       bold: true, italic: false, underline: true, strike: true, sizePt: 12, color: "#808080",
-      highlight: "yellow", font: "Times New Roman",
+      highlight: "yellow", font: "Times New Roman", fontEastAsia: "宋体",
     });
   });
 
@@ -97,6 +99,18 @@ describe("docx run property fidelity", () => {
     expect(fonts).toContain('w:cs="Times New Roman"');
     expect(fonts).toContain('w:hint="eastAsia"');
     expect(fonts).not.toContain('w:ascii="Times New Roman"');
+  });
+
+  it("re-spells the east-asian face on the run that moved it and leaves the Latin one where it sat", () => {
+    // The other half of the same rule: the two faces live on one element, so each moves only with its field.
+    const doc = open(makeRunPropsDocx());
+    const out = rPrOf(retyped(doc, "整段自述", { ...runAt(doc, "整段自述"), fontEastAsia: "仿宋" }), "整段自述");
+    const fonts = /<w:rFonts[^>]*>/.exec(out)?.[0] ?? "";
+    expect(fonts).toContain('w:eastAsia="仿宋"');
+    expect(fonts.match(/w:eastAsia=/g)).toHaveLength(1);
+    expect(fonts).toContain('w:ascii="Times New Roman"');
+    expect(fonts).toContain('w:cs="Times New Roman"');
+    expect(fonts).toContain('w:hint="eastAsia"');
   });
 
   it("moves the complex-script size with the Latin one, and only when the size moved", () => {

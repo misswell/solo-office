@@ -208,10 +208,9 @@ function readParagraphRevisions(el: Element, p: Paragraph): void {
   }
 }
 
-const CARRIED: (keyof Inline)[] = [
-  "bold", "italic", "underline", "strike", "sizePt", "color", "highlight", "font", "vertAlign",
-  "hyperlink", "linkAttrs", "break", "brXml", "tab",
-];
+/** The run fields an edit carries from the run it splits or joins. Derived from `RUN_STYLE_KEYS` so a new
+ *  property cannot be read, drawn and saved while a split quietly drops it. */
+const CARRIED: (keyof Inline)[] = [...RUN_STYLE_KEYS, "hyperlink", "linkAttrs", "break", "brXml", "tab"];
 
 /** Two runs join only if they share their revision, or an edit would rewrite someone's tracked change. */
 const sameRevision = (a?: Revision, b?: Revision): boolean =>
@@ -2019,7 +2018,7 @@ export class DocEditor {
     const mine = before.revFormat?.author === this.authorName ? before.revFormat : undefined;
     if (mine) return mine;
     this.revSeq += 1;
-    // The record says what the run's whole property set was, not only the nine fields the model can name, so a
+    // The record says what the run's whole property set was, not only the fields the model can name, so a
     // later refusal puts back the `w:kern` and the `w:lang` the toolbar never touched. Where the run carried no
     // `w:rPr` of its own, what it showed came down the style ladder, and §17.13.5.19 records none of that: the
     // record says nothing, and a refusal puts the run back to borrowing.

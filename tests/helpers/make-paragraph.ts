@@ -209,7 +209,9 @@ export interface ChainStyle {
  *   paragraph style (1,956 alignments, 613 固定值 heights, 478 of each gap). All 86 files declare a default
  *   paragraph style, and 47 of them state a line height there.
  * - `w:docDefaults/w:pPrDefault` states no paragraph property in any of the 86, which is why the fixture's
- *   `w:docDefaults` carries only the run font and size the files carry.
+ *   `w:docDefaults` carries only the run font and size the files carry. The font it carries is the shape 67 of
+ *   the 86 write there — one element naming both faces, and naming a different one for `w:eastAsia`
+ *   (`.scratch/run-font-eastasia.ts`); the other 19 write no `w:rFonts` at that level at all.
  *
  * The style ids are readable rather than the `a1`/`af0` WPS writes, since a test about which style in the chain
  * a value came from has to name them; every attribute spelling is the files' own.
@@ -217,9 +219,11 @@ export interface ChainStyle {
 export function makeChainDocx(
   styles: readonly ChainStyle[],
   paras: readonly { readonly pStyle?: string; readonly pPr?: string; readonly text: string; readonly rPr?: string; readonly rStyle?: string }[],
+  /** The floor's `w:rPr` children. The default is the shape 67 of the 86 files write there. */
+  defaults = '<w:rFonts w:ascii="Calibri" w:eastAsia="宋体"/><w:sz w:val="22"/>',
 ): Uint8Array {
   const sx = `<w:styles xmlns:w="${NS_W}">
-<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri"/><w:sz w:val="22"/></w:rPr></w:rPrDefault></w:docDefaults>
+<w:docDefaults><w:rPrDefault><w:rPr>${defaults}</w:rPr></w:rPrDefault></w:docDefaults>
 ${styles
   .map((s) => {
     const attrs = [`w:type="${s.type ?? "paragraph"}"`, s.isDefault ? 'w:default="1"' : "", `w:styleId="${s.id}"`]

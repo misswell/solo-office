@@ -6,6 +6,50 @@ import type { Presentation, Shape, SlideParagraph } from "./pptx.js";
 const esc = (s: string): string =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
+/**
+ * §17.3.2.26 splits a run's text by script: `w:ascii` draws the Latin, `w:eastAsia` the Chinese, Japanese and
+ * Korean. A plain CSS font stack falls through per glyph by *coverage*, which is a different rule — a Latin face
+ * that happens to hold Han glyphs would swallow the Chinese (178 of the corpus's 1,783 Chinese runs whose faces
+ * differ name a Chinese family for `w:ascii` too: `.scratch/run-font-eastasia.ts`). So the east-asian face travels
+ * as a family scoped to the East Asian ranges by `unicode-range`, and the browser's own matching dispatches by
+ * script the way the element says. `src: local()` only resolves against a face the machine has installed; a file
+ * naming one it does not falls through to the Latin face, which is exactly what this page drew before the field
+ * existed, so an absent font never makes the page worse than it was.
+ */
+const EAST_RANGES = "U+2E80-9FFF,U+F900-FAFF,U+FE10-FE1F,U+FF00-FFEF,U+20000-2FA1F";
+/**
+ * A face name as it may appear inside CSS. The name comes from the file, and `<` is legal in an XML attribute
+ * value, so `w:eastAsia="evil</style><img>"` is a real thing a document can say: the string delimiters go and
+ * `</` is written `<\/`, which CSS reads as `/` and the HTML tokenizer does not read as a closing tag. Both ends
+ * of a face use this one spelling — the rule's family and the run's stack — so they always name the same thing.
+ */
+const cssName = (face: string): string => face.replace(/["\\\n\r]/g, "").replace(/<\//g, "<\\/").trim();
+/** The family this page invents for one East Asian face. */
+const faceKey = (face: string): string => `solo-ea-${cssName(face)}`;
+
+/** The `@font-face` rules holding these faces to the East Asian ranges. Empty for an empty list. */
+export function eastAsiaFaceRules(faces: string[]): string {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const face of faces) {
+    const key = faceKey(face);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(`@font-face{font-family:"${key}";src:local("${cssName(face)}");unicode-range:${EAST_RANGES};}`);
+  }
+  return out.join("");
+}
+
+/** The stack a run draws with: the east-asian family first (it only answers for East Asian codepoints), the
+ *  Latin one after it. Quoted, because a face name is a string, not an identifier. */
+function fontStack(inline: Inline): string {
+  const parts: string[] = [];
+  if (inline.fontEastAsia) parts.push(`"${faceKey(inline.fontEastAsia)}"`);
+  const latin = inline.font?.replace(/[;\\]/g, "").trim();
+  if (latin) parts.push(`"${latin}"`);
+  return parts.join(",");
+}
+
 export function renderInline(inline: Inline): string {
   if (inline.image) {
     return `<img src="${inline.image.src}" width="${Math.round(inline.image.width)}" height="${Math.round(inline.image.height)}" alt="${esc(inline.image.name)}">`;
@@ -19,7 +63,8 @@ export function renderInline(inline: Inline): string {
   if (inline.underline) css += "text-decoration:underline;";
   if (inline.sizePt) css += `font-size:${inline.sizePt}pt;`;
   if (inline.color) css += `color:${inline.color};`;
-  if (inline.font) css += `font-family:${esc(inline.font.replace(/[;\\]/g, ""))};`;
+  const family = fontStack(inline);
+  if (family) css += `font-family:${esc(family)};`;
   if (inline.highlight) css += `background:${highlightColor(inline.highlight)};`;
   if (inline.vertAlign) css += `vertical-align:${inline.vertAlign === "superscript" ? "super" : "sub"};font-size:.75em;`;
   let html = inline.text === "" ? "" : `<span${css ? ` style="${css}"` : ""}>${esc(inline.text)}</span>`;
@@ -612,9 +657,13 @@ export function renderWord(doc: WordDocument): string {
     return `<div class="hf hf-${which}${which === "footer" ? " hf-bottom" : ""}" data-hf="${which}" style="${style};padding-left:var(--pad-l);padding-right:var(--pad-r)${spacing}" title="${tip}">${paras}${bar}</div>`;
   };
   const borders = renderPageBorders(sec);
+  // An `@font-face` is a rule, not a declaration, so the east-asian families travel in a stylesheet next to the
+  // page rather than in a `style` attribute. It sits beside `.page` for the same reason the borders below do not
+  // lead it: the editor counts blocks among `.page`'s children.
+  const faceRules = eastAsiaFaceRules(doc.eastAsiaFaces());
   // The border elements come last, inside the paper box: the editor addresses a block by its position among
   // `.page`'s children, and a leading decoration would move every one of those positions by a step.
-  return `${hf("header")}<div class="page" style="${style}${borders ? ";position:relative" : ""}">${renderBlocks(doc.blocks, doc, new Map(), {
+  return `${faceRules ? `<style>${faceRules}</style>` : ""}${hf("header")}<div class="page" style="${style}${borders ? ";position:relative" : ""}">${renderBlocks(doc.blocks, doc, new Map(), {
     open: new Set(),
     numbers: new Map(doc.comments.map((c, i) => [c.id, i + 1])),
     done: new Set(doc.comments.filter((c) => c.resolved === true).map((c) => c.id)),

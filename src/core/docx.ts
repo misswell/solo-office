@@ -32,7 +32,18 @@ export interface RunStyle {
   sizePt?: number;
   color?: string;
   highlight?: string;
+  /**
+   * The Latin face, `w:rFonts@w:ascii`. Word dispatches a run's text by script: ASCII letters take `w:ascii`,
+   * East Asian ones `w:eastAsia` (the field below), high-ANSI `w:hAnsi`. §17.3.2.26.
+   */
   font?: string;
+  /**
+   * `w:rFonts@w:eastAsia` — the face this document chose for its Chinese. It is a second face on the same
+   * element, not a fallback for the first: 45,054 of the corpus's 61,702 modelled runs write both attributes
+   * with the same name, and 1,250 write two different ones (`.scratch/run-font-eastasia.ts`). A run whose
+   * Chinese draws in the Latin face is a run the file never described that way.
+   */
+  fontEastAsia?: string;
   vertAlign?: "superscript" | "subscript";
 }
 
@@ -82,7 +93,7 @@ export interface Inline extends RunStyle {
   revFormat?: FormatRevision;
   /**
    * The run's own `w:rPr`, child by child, in the words the file wrote — every child but its `w:rPrChange`,
-   * which `revFormat` spells. A run is rebuilt from its fields otherwise, and nine fields cannot hold the
+   * which `revFormat` spells. A run is rebuilt from its fields otherwise, and the field list cannot hold the
    * kerning, complex-script face, language, shading, ligatures or text fill a Chinese document spells.
    */
   rPrSlots?: PropSlot[];
@@ -143,9 +154,9 @@ export interface FormatRevision {
    *  here is one that was *not* set, not one to leave alone. */
   prev: RunStyle;
   /**
-   * That set as the file wrote it, child by child, when the run carried one. `prev` can only hold the nine
+   * That set as the file wrote it, child by child, when the run carried one. `prev` can only hold the ten
    * properties the model has a field for; a save that rewrote the record from those fields took the record's
-   * own `w:kern`, `w:lang` and `w:eastAsia` down with them, and a reviewer deciding the change later would be
+   * own `w:kern`, `w:lang` and `w:cs` down with them, and a reviewer deciding the change later would be
    * refusing a formatting change no document ever made.
    */
   prevSlots?: PropSlot[];
@@ -1815,7 +1826,7 @@ export class WordDocument {
     const fromChar = typeof named === "string" ? this.runLent(named, false) : undefined;
     const style: RunStyle = { ...fromPara, ...fromChar, ...own };
     // The run's own `w:rPr` travels as text, the same way the paragraph's does: read off the parsed tree the
-    // answer is "which properties does the model have a field for", and nine fields is not what a Chinese
+    // answer is "which properties does the model have a field for", and that list is not what a Chinese
     // document writes. An empty `w:rPr` counts as written: the set the file chose is the one that goes back.
     const props = elementOf(childSpans(elementContent(span ?? "")), "rPr");
     const carried = props ? runSlotsOf(childSpans(elementContent(props))) : undefined;
@@ -2894,6 +2905,25 @@ export class WordDocument {
     return out;
   }
 
+  /**
+   * The `w:eastAsia` faces the runs of this document draw their Chinese with, first-use order, deduplicated —
+   * borrowed ones included, because the page has to declare the family a run reaches through the ladder.
+   * `render.ts` turns these into `@font-face` rules; a face nobody names on the page costs nothing to declare.
+   */
+  eastAsiaFaces(): string[] {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    this.eachParagraph((p) => {
+      for (const run of p.inlines) {
+        const face = run.fontEastAsia;
+        if (face === undefined || seen.has(face)) continue;
+        seen.add(face);
+        out.push(face);
+      }
+    });
+    return out;
+  }
+
   // --------------------------------------------------------------- comments
 
   /** Where a save writes the comment list: package path plus the root declarations to keep. */
@@ -3370,17 +3400,18 @@ const entryType = (rev: Revision): "insert" | "delete" | "move-from" | "move-to"
   rev.move === "from" ? "move-from" : rev.move === "to" ? "move-to" : rev.kind === "ins" ? "insert" : "delete";
 
 /** Every run property this model carries, so a rejected formatting change can clear the ones the record dropped. */
-export const RUN_STYLE_KEYS: (keyof RunStyle)[] = ["bold", "italic", "underline", "strike", "sizePt", "color", "highlight", "font", "vertAlign"];
+export const RUN_STYLE_KEYS: (keyof RunStyle)[] = ["bold", "italic", "underline", "strike", "sizePt", "color", "highlight", "font", "fontEastAsia", "vertAlign"];
 
 /**
- * The run properties a style may lend a run. `font` is held back on purpose: the model's one face comes from
- * `w:rFonts@w:ascii` (see `runStyle`), and 350 of the 1,320 style-side `w:rFonts` name a different face for
- * `w:eastAsia` than for `w:ascii` (`.scratch/run-font-shape.ts`) — the Chinese text is drawn with the east-asian
- * face and the Latin with the ascii one. Handing a run the ascii face as its only face would put Chinese
- * headings in a Latin face the file never chose for them, which is a bigger untruth than the missing face is.
- * 93 more state only `w:eastAsia`, which this model cannot read at all.
+ * The run properties a style may lend a run — all of them, both faces included. `font` was held back while the
+ * model had only the one face from `w:rFonts@w:ascii`: 350 of the corpus's style-side `w:rFonts` elements name a
+ * different face for `w:eastAsia` (`.scratch/run-font-shape.ts`), and handing a run the Latin one as its only
+ * face would draw its Chinese in a face the file never chose for it. With `fontEastAsia` read as the second face,
+ * the pair says what the element says: 2,928 of 61,702 modelled runs end up with two different faces from the
+ * ladder, and the page dispatches them by script (`render.ts`). The 93 style-side elements that state only
+ * `w:eastAsia` now reach their runs too.
  */
-export const LENT_RUN_KEYS: (keyof RunStyle)[] = RUN_STYLE_KEYS.filter((k) => k !== "font");
+export const LENT_RUN_KEYS: (keyof RunStyle)[] = RUN_STYLE_KEYS;
 
 /** A run's formatting on its own — the properties, without the text, anchors or revision records hanging off it. */
 export function runStyleOf(run: Inline): RunStyle {
@@ -3399,7 +3430,7 @@ function restoreStyle(run: Inline, fmt: FormatRevision): Inline {
   for (const key of RUN_STYLE_KEYS) delete out[key];
   Object.assign(out, fmt.prev);
   // And the children no field can spell come back with them, because the record wrote them too: a refusal
-  // puts the run's whole property set away, not an approximation of it built from nine fields.
+  // puts the run's whole property set away, not an approximation of it built from the field list.
   if (fmt.prevSlots) {
     out.rPrSlots = fmt.prevSlots;
     out.asRead = fmt.prev;
@@ -3870,7 +3901,7 @@ function paraSlotsOf(spans: { tag: string; xml: string }[]): PropSlot[] {
 /**
  * The `w:rPr` children that travel as text: everything except the record of a formatting change, which
  * `revFormat` spells so a decision can drop it. `w:rStyle`, `w:lang`, `w:kern`, `w:bCs`, `w:spacing`, `w:shd`
- * and `w:eastAsianLayout` are all in the set and all outside the model's nine fields.
+ * and `w:eastAsianLayout` are all in the set and all outside the model's ten fields.
  */
 function runSlotsOf(spans: { tag: string; xml: string }[]): PropSlot[] {
   return spans.filter((s) => s.tag !== "rPrChange").map((s) => ({ tag: s.tag, xml: s.xml }));
@@ -4164,7 +4195,15 @@ function runStyle(rPr: any): RunStyle {
   const color = rPr.color?.["@_val"];
   if (color && color !== "auto") s.color = hex(color);
   if (rPr.highlight?.["@_val"]) s.highlight = rPr.highlight["@_val"];
-  if (rPr.rFonts) s.font = rPr.rFonts["@_ascii"];
+  if (rPr.rFonts) {
+    // One element, several faces, and a document may state any subset of them. Each attribute is read on its
+    // own: `w:ascii="宋体"` alone must not hand back an `undefined` that erases the chain's Chinese face, since
+    // §17.7.2 stops per property at the first level that stated one.
+    const ascii = rPr.rFonts["@_ascii"];
+    if (ascii) s.font = ascii;
+    const east = rPr.rFonts["@_eastAsia"];
+    if (east) s.fontEastAsia = east;
+  }
   const va = rPr.vertAlign?.["@_val"];
   if (va === "superscript" || va === "subscript") s.vertAlign = va;
   return s;

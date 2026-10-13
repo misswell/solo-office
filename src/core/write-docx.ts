@@ -195,10 +195,18 @@ function paraStyleTags(s: ParaStyle): string {
   return parts.join("");
 }
 
+/** `w:rFonts` from the faces the model holds. A face it does not hold is not spelled. */
+function rFontsTag(s: RunStyle, prefix = "w"): string {
+  const latin = s.font ? ` ${prefix}:ascii="${XML_ESC(s.font)}" ${prefix}:hAnsi="${XML_ESC(s.font)}"` : "";
+  const east = s.fontEastAsia ? ` ${prefix}:eastAsia="${XML_ESC(s.fontEastAsia)}"` : "";
+  return latin || east ? `<${prefix}:rFonts${latin}${east}/>` : "";
+}
+
 /** `CT_RPr` children likewise: rFonts, b, i, strike, color, sz, szCs, highlight, u, vertAlign. */
 function runPropsInner(s: RunStyle): string {
   const parts: string[] = [];
-  if (s.font) parts.push(`<w:rFonts w:ascii="${XML_ESC(s.font)}" w:hAnsi="${XML_ESC(s.font)}"/>`);
+  const rf = rFontsTag(s);
+  if (rf) parts.push(rf);
   if (s.bold !== undefined) parts.push(s.bold ? "<w:b/>" : '<w:b w:val="0"/>');
   if (s.italic !== undefined) parts.push(s.italic ? "<w:i/>" : '<w:i w:val="0"/>');
   if (s.strike) parts.push("<w:strike/>");
@@ -230,17 +238,27 @@ const rprRank = (tag: string): number => {
 /**
  * The `w:rPr` children the model has a field for, and how that field writes them. `w:sz` and `w:szCs` are one
  * field's two children: the size button writes both, so a size change moves the complex-script size with the
- * Latin one rather than leaving the run at two sizes. Everything not in this list has no field and keeps the
- * text the file wrote for it — `w:rStyle`, `w:kern`, `w:lang`, `w:bCs`, `w:spacing`, `w:shd`, `w:eastAsianLayout`.
+ * Latin one rather than leaving the run at two sizes. `w:rFonts` is the reverse — one element, two fields — so it
+ * lists both faces under `keys` and re-spells whichever moved. Everything not in this list has no field and keeps
+ * the text the file wrote for it — `w:rStyle`, `w:kern`, `w:lang`, `w:bCs`, `w:spacing`, `w:shd`, `w:eastAsianLayout`.
  */
-const RUN_PROPS: { key: keyof RunStyle; tags: string[]; spell: (r: RunStyle, prefix: string, source: string) => string }[] = [
+const RUN_PROPS: {
+  key: keyof RunStyle;
+  /** The fields that may move this element. One entry's several faces, or one field's several tags. */
+  keys?: (keyof RunStyle)[];
+  tags: string[];
+  spell: (r: Inline, prefix: string, source: string) => string;
+}[] = [
   {
     key: "font",
+    keys: ["font", "fontEastAsia"],
     tags: ["rFonts"],
     spell: (r, prefix, source) =>
-      !r.font ? "" : source
-        ? putLatinFonts(source, prefix, r.font)
-        : `<${prefix}:rFonts w:ascii="${XML_ESC(r.font)}" w:hAnsi="${XML_ESC(r.font)}"/>`,
+      !r.font && !r.fontEastAsia
+        ? ""
+        : source
+          ? putRunFonts(source, prefix, r)
+          : rFontsTag(r, prefix),
   },
   {
     key: "bold",
@@ -274,18 +292,26 @@ const RUN_PROPS: { key: keyof RunStyle; tags: string[]; spell: (r: RunStyle, pre
 ];
 
 /**
- * `w:rFonts` with the Latin faces put onto the element as it was written. Picking a font owns `w:ascii` and
- * `w:hAnsi`; `w:eastAsia` and `w:cs` name the faces on the same element that no field holds, and a font change
- * is not their owner either.
+ * `w:rFonts` with the faces the model moved put onto the element as it was written. Only the attributes whose
+ * field actually changed are replaced: `w:cs`, `w:hint` and the theme attributes have no field and travel as the
+ * file spelled them, and a Latin face that has not moved keeps its own bytes even when the east-asian one does.
+ * A moved field that now holds nothing takes its attribute with it — that is what refusing a font change means.
  */
-function putLatinFonts(xml: string, prefix: string, font: string): string {
+function putRunFonts(xml: string, prefix: string, r: Inline): string {
   const gt = xml.indexOf(">");
   if (gt < 0) return xml;
   const head = xml.slice(0, gt);
   const selfClosed = head.endsWith("/");
-  const open = (selfClosed ? head.slice(0, -1) : head).replace(/\s[\w.-]+:(?:ascii|hAnsi)="[^"]*"/g, "");
-  const pair = ` ${prefix}:ascii="${XML_ESC(font)}" ${prefix}:hAnsi="${XML_ESC(font)}"`;
-  return `${open}${pair}${selfClosed ? "/>" : ">"}` + (selfClosed ? "" : xml.slice(gt + 1));
+  const latinMoved = !samePropValue(r.asRead?.font, r.font);
+  const eastMoved = !samePropValue(r.asRead?.fontEastAsia, r.fontEastAsia);
+  const strip = (s: string, names: string): string => s.replace(new RegExp(`\\s[\\w.-]+:(?:${names})="[^"]*"`, "g"), "");
+  let open = (selfClosed ? head.slice(0, -1) : head).trimEnd();
+  if (latinMoved) open = strip(open, "ascii|hAnsi");
+  if (eastMoved) open = strip(open, "eastAsia");
+  const face = (name: string, val: string | undefined): string => (val ? ` ${prefix}:${name}="${XML_ESC(val)}"` : "");
+  const latin = latinMoved ? face("ascii", r.font) + face("hAnsi", r.font) : "";
+  const east = eastMoved ? face("eastAsia", r.fontEastAsia) : "";
+  return `${open}${latin}${east}${selfClosed ? "/>" : ">"}` + (selfClosed ? "" : xml.slice(gt + 1));
 }
 
 /**
@@ -303,8 +329,8 @@ function carriedRunProps(r: Inline): string {
   const inserts: PropSlot[] = [];
   for (const prop of RUN_PROPS) {
     // A field that has not moved off its read snapshot keeps the source text, so an attribute the model has no
-    // field for — `w:kern`, `w:themeColor`, `w:eastAsia` — survives a save that never touched it.
-    if (samePropValue(r.asRead?.[prop.key], r[prop.key])) continue;
+    // field for — `w:kern`, `w:themeColor`, `w:cs` — survives a save that never touched it.
+    if ((prop.keys ?? [prop.key]).every((k) => samePropValue(r.asRead?.[k], r[k]))) continue;
     const own = slots.filter((s) => prop.tags.includes(s.tag));
     const xml = prop.spell(r, prefix, own[0]?.xml ?? "");
     for (const s of own) drops.add(s);

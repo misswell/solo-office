@@ -193,19 +193,27 @@ describe("docx 样式链解析：w:basedOn 整链、默认段落样式兜底、�
     expect(p.align).toBe("center");
   });
 
-  it("lends only the properties the model reads off a style", () => {
-    // `w:numPr` in a style is a real gap — 58 paragraph styles state it and 49 paragraphs take their numbering
-    // that way — and it is a feature of its own, not part of this read. `w:pageBreakBefore` travels with it.
+  it("lends `w:numPr` as the element states it, and no page break", () => {
+    // Numbering is part of the read now: 58 paragraph styles state `w:pPr/w:numPr` and 48 paragraphs take their
+    // list that way (`.scratch/style-numpr-census.ts`, `.scratch/num-lent-shapes.ts`). It travels as one property,
+    // because where `w:ind` can be filled attribute by attribute this element either says the list or it does not
+    // — and `w:numId` absent reads as 0, which is §17.3.4.25's cancellation, the shape of 11 of those 48.
+    // `w:pageBreakBefore` is still not part of it: a style's break before is nothing a paragraph here asks for.
     const doc = open(
       makeChainDocx(
-        [{ id: "Normal", isDefault: true, pPr: '<w:pageBreakBefore/><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr><w:jc w:val="center"/>' }],
-        [{ text: "编号和分页符不借" }],
+        [
+          { id: "Normal", isDefault: true, pPr: '<w:pageBreakBefore/><w:jc w:val="center"/>' },
+          { id: "Listed", basedOn: "Normal", pPr: '<w:numPr><w:ilvl w:val="2"/><w:numId w:val="7"/></w:numPr>' },
+          { id: "HalfNum", basedOn: "Normal", pPr: '<w:numPr><w:ilvl w:val="1"/></w:numPr>' },
+        ],
+        [{ pStyle: "Listed", text: "编号从样式来" }, { pStyle: "HalfNum", text: "样式只写 w:ilvl" }],
       ),
     );
-    const p = byText(doc, "编号和分页符不借");
+    const p = byText(doc, "编号从样式来");
+    expect(p.numPr).toEqual({ numId: 7, ilvl: 2 });
     expect(p.align).toBe("center");
     expect(p.pageBreakBefore).toBe(false);
-    expect(p.numPr).toBeUndefined();
+    expect(byText(doc, "样式只写 w:ilvl").numPr).toEqual({ numId: 0, ilvl: 1 });
   });
 
   it("does not let a default character style stand in for the default paragraph style", () => {
@@ -250,15 +258,25 @@ describe("docx 样式链解析：w:basedOn 整链、默认段落样式兜底、�
   });
 
   it("leaves an inherited alignment out of a set the paragraph wrote for itself", () => {
-    // 46,258 of the corpus's paragraphs carry their own `w:pPr`; a chain-lent alignment must not slip into the
-    // carried set beside the shading and the outline level that only travel as the file's own bytes.
+    // 46,258 of the corpus's paragraphs carry their own `w:pPr`; a chain-lent property must not slip into the
+    // carried set beside the shading and the outline level that only travel as the file's own bytes. The
+    // numbering is the sharpest case: it draws on the page, and the paragraph never asked for it.
     const doc = open(
       makeChainDocx(
-        [{ id: "Normal", isDefault: true, pPr: '<w:jc w:val="center"/><w:ind w:firstLine="480"/>' }],
+        [
+          {
+            id: "Normal",
+            isDefault: true,
+            pPr: '<w:jc w:val="center"/><w:ind w:firstLine="480"/><w:numPr><w:ilvl w:val="0"/><w:numId w:val="3"/></w:numPr>',
+          },
+        ],
         [{ pPr: '<w:shd w:val="clear" w:color="auto" w:fill="FFF2CC"/><w:outlineLvl w:val="1"/>', text: "自己写了底纹" }],
       ),
     );
-    expect(byText(doc, "自己写了底纹").align).toBe("center");
+    const p = byText(doc, "自己写了底纹");
+    expect(p.align).toBe("center");
+    expect(p.numPr).toEqual({ numId: 3, ilvl: 0 });
+    expect(drawn(doc, "自己写了底纹", "padding-left")).toBe("8px");
     expect(pPrXml(save(doc), "自己写了底纹")).toBe(
       '<w:pPr><w:shd w:val="clear" w:color="auto" w:fill="FFF2CC"/><w:outlineLvl w:val="1"/></w:pPr>',
     );

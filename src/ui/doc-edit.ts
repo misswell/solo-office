@@ -1647,7 +1647,9 @@ export class DocEditor {
     }
     const path = this.caretPath()?.path;
     const paragraph = path ? this.paragraphAt(path) : undefined;
-    const list = paragraph?.numPr ? listKind(this.doc, paragraph.numPr.numId) : undefined;
+    // A paragraph whose numbering the file cancelled with `w:numId w:val="0"` is not in a list, and one that
+    // only borrows the list from its style is — the button follows what the page draws.
+    const list = paragraph?.numPr && paragraph.numPr.numId !== 0 ? listKind(this.doc, paragraph.numPr.numId) : undefined;
     return {
       bold: carried.bold ?? false,
       italic: carried.italic ?? false,
@@ -1736,8 +1738,17 @@ export class DocEditor {
     const wasSlots = paragraph.pPrSlots;
     if (patch.align !== undefined) paragraph.align = patch.align || undefined;
     if (patch.list !== undefined) {
-      const numId = listNumId(this.doc, patch.list);
-      paragraph.numPr = patch.list === "none" || numId === undefined ? undefined : { numId, ilvl: paragraph.numPr?.ilvl ?? 0 };
+      if (patch.list === "none") {
+        // 取消编号是文件自己写的形状：语料里 517 段带着 `w:numPr` 而 `w:numId w:val="0"`。清空字段在这里不够，
+        // 因为编号现在会从样式链上借来（48 段就是这么进列表的）——只有写下那个 0 才盖得住样式的那一条。
+        // 本来就不在列表里的段落什么都不写。
+        if (paragraph.numPr && paragraph.numPr.numId !== 0) paragraph.numPr = { numId: 0, ilvl: paragraph.numPr.ilvl };
+      } else {
+        const numId = listNumId(this.doc, patch.list);
+        // The toolbar only offers a shape the document can name, so a file with no such definition is left alone
+        // rather than having its numbering cleared.
+        if (numId !== undefined) paragraph.numPr = { numId, ilvl: paragraph.numPr?.ilvl ?? 0 };
+      }
     }
     // The paragraph's `w:pPr` travels as text, so the child these two buttons own moves with them.
     syncParaSlots(paragraph);
@@ -2856,7 +2867,7 @@ function markersOf(blocks: Block[]): number {
   let n = 0;
   for (const b of blocks) {
     if (b.kind === "table") b.rows.forEach((row) => row.forEach((c) => (n += markersOf(c.paragraphs))));
-    else if (b.kind === "paragraph" && b.numPr) n += 1;
+    else if (b.kind === "paragraph" && b.numPr && b.numPr.numId !== 0) n += 1;
   }
   return n;
 }

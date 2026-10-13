@@ -1,4 +1,4 @@
-import type { Block, Carried, CarriedInline, Inline, PageBorder, Paragraph, RowInfo, Section, Table, TableBorder, WordDocument } from "./docx.js";
+import type { Block, Carried, CarriedInline, Inline, NumberLevel, PageBorder, Paragraph, RowInfo, Section, Table, TableBorder, WordDocument } from "./docx.js";
 import { DEFAULT_SECTION, PAGE_BORDER_SIDES, twipsToPx } from "./docx.js";
 import type { CommentAnchor } from "./comments.js";
 import type { Presentation, Shape, SlideParagraph } from "./pptx.js";
@@ -206,18 +206,18 @@ function renderParagraph(p: Paragraph, doc: WordDocument, counters: Map<string, 
   const heading = /^Heading([1-9])$/i.exec(p.styleId ?? "");
   const tag = heading ? `h${heading[1]}` : "div";
   let prefix = "";
-  if (p.numPr) {
-    const level = doc.levelOf(p.numPr.numId, p.numPr.ilvl);
+  // `w:numId w:val="0"` is the file saying this paragraph is not numbered (§17.3.4.25) while still carrying a
+  // `w:numPr`: 517 of the corpus's 981 paragraphs that have the element are that cancellation, 86 of them signed
+  // `w:ilvl="-1"` (`.scratch/num-from-style.ts`). Drawing a bullet for one adds a list member the file refused.
+  if (p.numPr && p.numPr.numId !== 0) {
+    const { numId, ilvl } = p.numPr;
+    const level = doc.levelOf(numId, ilvl);
     // Each numId is its own list, so a bullet list does not consume the numbers of a numbered one.
-    const key = `${p.numPr.numId}:${p.numPr.ilvl}`;
+    const key = `${numId}:${ilvl}`;
     const seen = counters.get(key) ?? (level?.start ?? 1) - 1;
     counters.set(key, seen + 1);
-    const n = seen + 1;
-    prefix =
-      !level || level.numFmt === "bullet"
-        ? `<span class="bullet">${esc(level?.lvlText?.replace(/%\d/g, "") || "•")}</span>`
-        : `<span class="bullet">${ordinal(n, level.numFmt)}</span>`;
-    style.push(`padding-left:${8 + p.numPr.ilvl * 24}px`);
+    prefix = `<span class="bullet">${esc(numberText(doc, counters, numId, ilvl, seen + 1, level))}</span>`;
+    style.push(`padding-left:${8 + ilvl * 24}px`);
   }
   const body = wordRuns(p.inlines, state) || "&nbsp;";
   // A paragraph-level revision rides on the paragraph element itself: the break that ends it is not
@@ -239,21 +239,87 @@ function renderParagraph(p: Paragraph, doc: WordDocument, counters: Map<string, 
   return `<${tag} class="${classes}"${carried}${shown ? ` title="${esc(shown)}"` : ""}${style.length ? ` style="${style.join(";")}"` : ""}>${prefix}${body}</${tag}>`;
 }
 
+/**
+ * What the symbol in front of a numbered paragraph is made of. The file states it as `w:lvlText`, a template
+ * whose `%N` is the number of level N of the same list (§17.3.1.65), so the digits and the punctuation between
+ * them both come from the part rather than from this renderer: over the 86 WPS-written documents all 617
+ * `w:lvl` elements state a `w:lvlText` of their own, and what follows the placeholder is 、 for 91 of the 92
+ * `chineseCounting` levels, ")" for 72 of the 75 `lowerLetter` ones, and only 84 of the 205 `decimal` ones —
+ * the "." this file used to append was wrong for more than half of them (`.scratch/numfmt-census.ts`).
+ * Replay of the same model through the old and the new renderer puts the page consequence in one number: of the
+ * 501 paragraphs that draw a symbol, 380 draw a different one now (213 whose `chineseCounting` level had been
+ * drawn as digits, 167 whose punctuation the template decides) and 121 draw exactly what they drew before
+ * (`.scratch/num-draw-impact.ts`).
+ *
+ * A `%N` that names another level reads the counter that list is on; one nothing has drawn yet shows that
+ * level's `w:start`. A level with no `w:lvlText` at all falls back to the bare number in its own format, and a
+ * `w:numId` the part cannot resolve keeps the dot it has always drawn — no paragraph in the corpus is in that
+ * shape, so nothing here is measured, only not lost.
+ */
+function numberText(doc: WordDocument, counters: Map<string, number>, numId: number, ilvl: number, n: number, level: NumberLevel | undefined): string {
+  if (!level) return "•";
+  const text = level.lvlText;
+  if (!text) return ordinal(n, level.numFmt);
+  return text.replace(/%(\d)/g, (_all, d: string) => {
+    const other = Number(d) - 1;
+    if (other === ilvl) return ordinal(n, level.numFmt);
+    const below = doc.levelOf(numId, other);
+    return ordinal(counters.get(`${numId}:${other}`) ?? below?.start ?? 1, below?.numFmt ?? level.numFmt);
+  });
+}
+
+/**
+ * A number in the shape one `w:numFmt` asks for (§17.18.4), as the number alone: the punctuation around it is
+ * the template's, not this function's. Of the values the corpus's numbering definitions use, `decimal`,
+ * `lowerLetter`, `upperLetter`, `lowerRoman`, `upperRoman` and `none` were already here; `chineseCounting`
+ * (92 levels, drawn by 213 paragraphs) and `decimalEnclosedCircleChinese` (1 level) fell through to the decimal
+ * digits, which is neither the number nor the mark the file asked for. The 中文小写 counting — 一…九、十、十一、
+ * 二十、二十一…九十九 — and the circled digits are the enumerations themselves; a number past the range they
+ * spell, or a value the corpus never writes, keeps the decimal digits.
+ *
+ * The two letter forms were one code point short of their own first item: `96 + ((n - 1) % 26)` puts U+0060
+ * ("`") on n = 1 and 64 ("@") on the first uppercase item, so every one of the corpus's 75 `lowerLetter` levels
+ * drew its items one letter early. A letter sequence is also a bijective base-26 count — a, b, …, z, aa — not a
+ * modulo, which restarted at a on the 27th item.
+ */
 function ordinal(n: number, fmt: string): string {
   switch (fmt) {
     case "lowerLetter":
-      return String.fromCharCode(96 + ((n - 1) % 26)) + ".";
+      return letters(n, 97);
     case "upperLetter":
-      return String.fromCharCode(64 + ((n - 1) % 26)) + ".";
+      return letters(n, 65);
     case "lowerRoman":
-      return toRoman(n).toLowerCase() + ".";
+      return toRoman(n).toLowerCase();
     case "upperRoman":
-      return toRoman(n) + ".";
+      return toRoman(n);
+    case "chineseCounting":
+      return chineseCount(n);
+    case "decimalEnclosedCircleChinese":
+      return n >= 1 && n <= 20 ? String.fromCodePoint(0x2460 + n - 1) : String(n);
     case "none":
       return "";
     default:
-      return n + ".";
+      return String(n);
   }
+}
+
+/** A letter sequence: a, b, …, z, aa, ab, with `base` the code point of the first letter. */
+function letters(n: number, base: number): string {
+  if (!Number.isInteger(n) || n < 1) return String(n);
+  let out = "";
+  for (let k = n; k > 0; k = Math.floor((k - 1) / 26)) out = String.fromCharCode(base + ((k - 1) % 26)) + out;
+  return out;
+}
+
+const CN_DIGITS = "零一二三四五六七八九";
+
+/** 中文小写: the counting words for 1..99, and the decimal digits past them. */
+function chineseCount(n: number): string {
+  if (!Number.isInteger(n) || n < 0 || n > 99) return String(n);
+  if (n < 10) return CN_DIGITS[n];
+  if (n === 10) return "十";
+  const tens = Math.floor(n / 10);
+  return `${tens === 1 ? "" : CN_DIGITS[tens]}十${n % 10 === 0 ? "" : CN_DIGITS[n % 10]}`;
 }
 
 function toRoman(n: number): string {

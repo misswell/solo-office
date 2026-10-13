@@ -1450,7 +1450,7 @@ export class WordDocument {
         name: s.name?.["@_val"] ?? id,
         basedOn: s.basedOn?.["@_val"],
         rPr,
-        pPr: s.pPr ? { align: s.pPr.jc?.["@_val"], ...indOf(s.pPr.ind), ...spacingOf(s.pPr.spacing) } : undefined,
+        pPr: s.pPr ? paraStyle(s.pPr) : undefined,
       });
       if (this.defaultParaStyleId === undefined && s["@_type"] === "paragraph" && s["@_default"] === "1") this.defaultParaStyleId = id;
     }
@@ -1551,6 +1551,7 @@ export class WordDocument {
       lineSpacing: sp.lineSpacing ?? lent?.lineSpacing,
       lineSpacingRule: sp.lineSpacingRule ?? lent?.lineSpacingRule,
       pageBreakBefore: pPr.pageBreakBefore !== undefined,
+      numPr: numPrOf(pPr.numPr) ?? lent?.numPr,
       inlines: [],
     };
     // The paragraph's own tag can carry an identity this model has no field for — `w14:paraId`, a revision
@@ -1563,13 +1564,6 @@ export class WordDocument {
     const pprXml = elementOf(childSpans(elementContent(span ?? "")), "pPr");
     const carried = paraSlotsOf(childSpans(elementContent(pprXml)));
     if (carried.length) para.pPrSlots = carried;
-    const numPr = pPr.numPr;
-    if (numPr) {
-      para.numPr = {
-        numId: Number(numPr.numId?.["@_val"] ?? 0),
-        ilvl: Number(numPr.ilvl?.["@_val"] ?? 0),
-      };
-    }
     para.asRead = {
       styleId: para.styleId,
       align: para.align,
@@ -2751,6 +2745,9 @@ export class WordDocument {
     p.spacingAfter = p.spacingAfter ?? inherited?.spacingAfter;
     p.lineSpacing = p.lineSpacing ?? inherited?.lineSpacing;
     p.lineSpacingRule = p.lineSpacingRule ?? inherited?.lineSpacingRule;
+    // Numbering comes back as one property, the way it was read: a record that leaves `w:numPr` out hands the
+    // paragraph back the list its style names, and one that wrote `w:numId w:val="0"` keeps that cancellation.
+    p.numPr = p.numPr ?? inherited?.numPr;
   }
 
   /** Tracked formatting changes on runs (`w:rPrChange`) still waiting for a decision, one entry per `w:id`. */
@@ -3362,6 +3359,23 @@ function indOf(ind: any): Partial<ParaStyle> {
 }
 
 /**
+ * The numbering a `w:pPr` states, taken as one property: `w:numPr` is not a set of attributes a paragraph can
+ * merge piece by piece the way it merges `w:ind`, so the first style in the chain that writes it settles the
+ * paragraph's list, and the styles below it get no say.
+ *
+ * `w:numId` absent reads as 0, which is what the files here mean by it. Of the 981 paragraphs that write their
+ * own `w:numPr`, 517 write `w:numId w:val="0"` — the value that cancels numbering (§17.3.4.25) — and not one of
+ * them leaves `w:numId` out. On the style side, 11 of the 48 paragraphs that borrow the property borrow a `w:numPr`
+ * that writes only `w:ilvl` (2 of the 58 style-side `w:numPr` elements, in 6 of the 86 files); read as 0 they
+ * leave those paragraphs unnumbered, which is what the page showed before this was read at all
+ * (`.scratch/num-lent-shapes.ts`, `.scratch/style-numpr-census.ts`).
+ */
+function numPrOf(numPr: any): { numId: number; ilvl: number } | undefined {
+  if (!numPr) return undefined;
+  return { numId: Number(numPr.numId?.["@_val"] ?? 0), ilvl: Number(numPr.ilvl?.["@_val"] ?? 0) };
+}
+
+/**
  * What a `w:pPr` says on its own, with nothing taken from the paragraph's style. A `w:pPrChange`
  * records the properties as they were written, while the model resolves a paragraph's alignment and
  * indent through its style, so the two have to be read by different rules.
@@ -3374,8 +3388,8 @@ function paraStyle(pPr: any): ParaStyle {
   if (align !== undefined) s.align = String(align);
   Object.assign(s, indOf(pPr.ind), spacingOf(pPr.spacing));
   if (pPr.pageBreakBefore !== undefined) s.pageBreakBefore = true;
-  const numPr = pPr.numPr;
-  if (numPr) s.numPr = { numId: Number(numPr.numId?.["@_val"] ?? 0), ilvl: Number(numPr.ilvl?.["@_val"] ?? 0) };
+  const numPr = numPrOf(pPr.numPr);
+  if (numPr) s.numPr = numPr;
   return s;
 }
 
@@ -3386,14 +3400,16 @@ export const PARA_STYLE_KEYS: (keyof ParaStyle)[] = [
 ];
 
 /**
- * The properties a paragraph may take from its styles, in the order `paraLent` fills them. `w:pageBreakBefore`
- * and `w:numPr` are deliberately not among them: this model reads neither off a style, and `w:numPr` is what
- * the 49 paragraphs whose numbering comes only from their style would need before that changed
- * (`.scratch/basedon-chain.ts`).
+ * The properties a paragraph may take from its styles, in the order `paraLent` fills them. The style's own
+ * `w:pPr` slice states more than this (`paraStyle` reads it whole); what is not listed here is not lent.
+ *
+ * `w:pageBreakBefore` is deliberately out: no paragraph in the 86 WPS-written documents asks a style for a
+ * page break it does not state itself (`.scratch/basedon-chain.ts` counts the `w:pPr` children the styles do
+ * write, and `w:pageBreakBefore` is not among the ones a paragraph borrows).
  */
 const LENT_PARA_KEYS: (keyof ParaStyle)[] = [
   "align", "indentLeft", "indentRight", "indentFirstLine", "indentFirstLineChars", "indentHanging",
-  "spacingBefore", "spacingAfter", "lineSpacing", "lineSpacingRule",
+  "spacingBefore", "spacingAfter", "lineSpacing", "lineSpacingRule", "numPr",
 ];
 
 /** Every paragraph property the model holds for it, from its own `w:pPr` and from its styles. */

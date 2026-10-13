@@ -154,6 +154,10 @@ function paragraphProps(p: Paragraph): string {
   });
   if (ind) parts.push(ind);
   if (has("align")) parts.push(`<w:jc w:val="${XML_ESC(p.align ?? "")}"/>`);
+  // `CT_PPr` ranks `w:outlineLvl` below `w:jc` and above `w:rPr`. A paragraph with no slots — one this editor
+  // built by splitting another — has only the fields to say what it is, so a heading that does not get its level
+  // spelled here comes back off the page as body text.
+  if (has("outlineLevel")) parts.push(`<w:outlineLvl w:val="${p.outlineLevel!}"/>`);
   // The paragraph mark's own revision, then the properties record: `CT_PPr` puts `w:rPr` after the
   // base properties and `w:pPrChange` last, and a validator that reads them out of order rejects the part.
   const mark = p.markRev;
@@ -187,6 +191,7 @@ function paraStyleTags(s: ParaStyle): string {
   const ind = indTag(s);
   if (ind) parts.push(ind);
   if (s.align) parts.push(`<w:jc w:val="${XML_ESC(s.align)}"/>`);
+  if (s.outlineLevel !== undefined) parts.push(`<w:outlineLvl w:val="${s.outlineLevel}"/>`);
   return parts.join("");
 }
 

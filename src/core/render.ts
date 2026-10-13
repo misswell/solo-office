@@ -1,5 +1,5 @@
 import type { Block, Carried, CarriedInline, Inline, NumberLevel, PageBorder, Paragraph, RowInfo, Section, Table, TableBorder, WordDocument } from "./docx.js";
-import { DEFAULT_SECTION, PAGE_BORDER_SIDES, twipsToPx } from "./docx.js";
+import { DEFAULT_SECTION, PAGE_BORDER_SIDES, headingLevel, twipsToPx } from "./docx.js";
 import type { CommentAnchor } from "./comments.js";
 import type { Presentation, Shape, SlideParagraph } from "./pptx.js";
 
@@ -203,8 +203,20 @@ function renderParagraph(p: Paragraph, doc: WordDocument, counters: Map<string, 
   const lh = lineHeight(p);
   if (lh) style.push(`line-height:${lh}`);
   if (p.pageBreakBefore) style.push("page-break-before:always");
-  const heading = /^Heading([1-9])$/i.exec(p.styleId ?? "");
-  const tag = heading ? `h${heading[1]}` : "div";
+  // The heading a paragraph is drawn as. `data-outline` is the outline level the model resolves — its own or
+  // the one its style chain states (§17.3.2.26) — and the 大纲 pane counts those marks in the order the page
+  // writes them, which is why the attribute carries the resolved number rather than a guessed one: 846 of the
+  // 86 WPS-written documents' 46,417 paragraphs have a level, 785 of them a heading one (0 × 30, 1 × 368,
+  // 2 × 367, 3 × 20, `.scratch/outline-census.ts`).
+  const outline = headingLevel(p);
+  // The tag follows that level, but only down to 4: the page's stylesheet sizes h1…h4, which is where every
+  // paragraph here lands, while a browser draws h5 and below *smaller* than body text — turning a deep level
+  // into a heading would draw the file's heading under the paragraph it introduces. A `w:pStyle` name still
+  // counts on its own, because a Word file can name `Heading2` and state no level; 0 of the corpus's 433
+  // level-stating styleIds match that pattern, so on these files the branch below never fires alone.
+  const named = /^Heading([1-9])$/i.exec(p.styleId ?? "");
+  const drawn = outline ?? (named ? Number(named[1]) : undefined);
+  const tag = drawn !== undefined && drawn <= 4 ? `h${drawn}` : "div";
   let prefix = "";
   // `w:numId w:val="0"` is the file saying this paragraph is not numbered (§17.3.4.25) while still carrying a
   // `w:numPr`: 517 of the corpus's 981 paragraphs that have the element are that cancellation, 86 of them signed
@@ -236,7 +248,7 @@ function renderParagraph(p: Paragraph, doc: WordDocument, counters: Map<string, 
         ` data-para-prev="${encodeURIComponent(JSON.stringify(fmt.prev))}"`
       : "");
   const shown = mark ? `${mark.author}${mark.date ? ` · ${mark.date.slice(0, 10)}` : ""} ${mark.move ? (mark.move === "from" ? "移出段落标记" : "移入段落标记") : mark.kind === "del" ? "删除段落标记" : "插入段落标记"}` : fmt ? `${fmt.author}${fmt.date ? ` · ${fmt.date.slice(0, 10)}` : ""} 修改段落格式` : "";
-  return `<${tag} class="${classes}"${carried}${shown ? ` title="${esc(shown)}"` : ""}${style.length ? ` style="${style.join(";")}"` : ""}>${prefix}${body}</${tag}>`;
+  return `<${tag} class="${classes}"${outline === undefined ? "" : ` data-outline="${outline}"`}${carried}${shown ? ` title="${esc(shown)}"` : ""}${style.length ? ` style="${style.join(";")}"` : ""}>${prefix}${body}</${tag}>`;
 }
 
 /**

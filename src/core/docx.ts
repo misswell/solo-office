@@ -190,6 +190,13 @@ export interface ParaStyle {
   lineSpacingRule?: LineSpacingRule;
   pageBreakBefore?: boolean;
   numPr?: { numId: number; ilvl: number };
+  /**
+   * `w:outlineLvl` (§17.3.2.26) as the file signed it: 0 is the first heading level through 8 the ninth, and
+   * **9 is body text**, which is why the raw number is kept rather than folded into "a level or none" —
+   * 56 of the corpus's 264 self-stating paragraphs write that 9 (`.scratch/outline-census.ts`), and a 9 on the
+   * paragraph is a level its style would otherwise lend being taken back.
+   */
+  outlineLevel?: number;
 }
 
 /** `w:spacing@w:lineRule` (§17.3.1.27) — and the only three literals the 86 WPS-written documents ever state. */
@@ -378,6 +385,11 @@ export interface Paragraph {
   lineSpacingRule?: LineSpacingRule;
   pageBreakBefore?: boolean;
   /**
+   * `w:outlineLvl`, this paragraph's own or the one its style chain states; see `ParaStyle` for what the number
+   * means and `headingLevel` for the heading the page draws from it.
+   */
+  outlineLevel?: number;
+  /**
    * The attributes written on this paragraph's own opening tag, as the part spelled them — `w14:paraId`,
    * `w14:textId`, `w:rsidR`, `w:rsidP`. The model has no field for any of them and a save writes this text
    * back onto the tag, the way `TableCell.tcPrXml` writes a property set it cannot explain. They are kept as
@@ -388,7 +400,7 @@ export interface Paragraph {
   /**
    * This paragraph's own `w:pPr`, child by child, as the part wrote it. The fields above are what the page
    * draws; a save takes the *set* from here, so a property the model has no field for — `w:keepNext`,
-   * `w:outlineLvl`, `w:widowControl`, `w:tabs`, `w:pBdr`, the paragraph mark's own fonts, bold, size and
+   * `w:widowControl`, `w:tabs`, `w:pBdr`, the paragraph mark's own fonts, bold, size and
    * colour — comes back the way it went in instead of being quietly stripped by a document that regenerates.
    * A `w:pPrChange` is not a slot: the record is the `revFormat` field, and a save spells it last as before.
    * A paragraph the editor made has no slots and is spelled from the fields.
@@ -1552,6 +1564,7 @@ export class WordDocument {
       lineSpacingRule: sp.lineSpacingRule ?? lent?.lineSpacingRule,
       pageBreakBefore: pPr.pageBreakBefore !== undefined,
       numPr: numPrOf(pPr.numPr) ?? lent?.numPr,
+      outlineLevel: outlineOf(pPr.outlineLvl) ?? lent?.outlineLevel,
       inlines: [],
     };
     // The paragraph's own tag can carry an identity this model has no field for — `w14:paraId`, a revision
@@ -1578,6 +1591,7 @@ export class WordDocument {
       lineSpacingRule: para.lineSpacingRule,
       pageBreakBefore: para.pageBreakBefore || undefined,
       numPr: para.numPr,
+      outlineLevel: para.outlineLevel,
     };
     // The paragraph's own mark can be revised: `w:pPr/w:rPr` holds the break that ends this paragraph,
     // signed the same way a run is. Nothing here reads the mark's character properties — the break is
@@ -2748,6 +2762,10 @@ export class WordDocument {
     // Numbering comes back as one property, the way it was read: a record that leaves `w:numPr` out hands the
     // paragraph back the list its style names, and one that wrote `w:numId w:val="0"` keeps that cancellation.
     p.numPr = p.numPr ?? inherited?.numPr;
+    // Same for the outline level: a record that leaves `w:outlineLvl` out returns the paragraph to the level its
+    // style lends, and one that wrote `w:val="9"` keeps that — 9 is body text (§17.3.2.26), so the paragraph has
+    // taken back a level the chain was lending it.
+    p.outlineLevel = p.outlineLevel ?? inherited?.outlineLevel;
   }
 
   /** Tracked formatting changes on runs (`w:rPrChange`) still waiting for a decision, one entry per `w:id`. */
@@ -2786,6 +2804,26 @@ export class WordDocument {
       }
     };
     walk(this.blocks);
+  }
+
+  /**
+   * The document's headings in reading order: `level` is `headingLevel`, so 1 is the first heading level down
+   * to 9, and body text is not in the list at all. Order is the same walk `renderBlocks` takes — a table's
+   * cells come in row order, nested tables inside them — which is why a pane can address a row by counting
+   * `[data-outline]` elements in the page instead of learning where the paragraph sits in the model.
+   *
+   * A heading the model carries as source bytes rather than paragraphs has no level to report and is not here;
+   * the page shows its text, and the pane lists what the model can point at.
+   */
+  outline(): { level: number; text: string }[] {
+    const out: { level: number; text: string }[] = [];
+    this.eachParagraph((p) => {
+      const level = headingLevel(p);
+      if (level === undefined) return;
+      const text = p.inlines.map((i) => i.text).join("").trim();
+      out.push({ level, text });
+    });
+    return out;
   }
 
   // --------------------------------------------------------------- comments
@@ -3376,6 +3414,27 @@ function numPrOf(numPr: any): { numId: number; ilvl: number } | undefined {
 }
 
 /**
+ * The outline level a `w:outlineLvl` states (§17.3.2.26), as the file signed it: 0…8 are heading levels one to
+ * nine and 9 is body text. Of the 86 WPS-written documents' 46,417 paragraphs, 264 state one themselves
+ * (0 × 6, 1 × 160, 2 × 42, 9 × 56) and 582 more take it from their style chain, while 433 paragraph styles state
+ * one (`.scratch/outline-census.ts`). A value outside 0…9 is read as no statement: the files here never write one.
+ */
+function outlineOf(outlineLvl: any): number | undefined {
+  if (outlineLvl === undefined) return undefined;
+  const n = Number(outlineLvl["@_val"]);
+  return Number.isInteger(n) && n >= 0 && n <= 9 ? n : undefined;
+}
+
+/**
+ * The heading a paragraph is drawn as: 1 for `w:outlineLvl w:val="0"` up to 9 for 8, and nothing for 9 — the
+ * value that puts the paragraph back to body text, whether it states that itself or borrows it.
+ */
+export function headingLevel(p: Paragraph): number | undefined {
+  const level = p.outlineLevel;
+  return level !== undefined && level <= 8 ? level + 1 : undefined;
+}
+
+/**
  * What a `w:pPr` says on its own, with nothing taken from the paragraph's style. A `w:pPrChange`
  * records the properties as they were written, while the model resolves a paragraph's alignment and
  * indent through its style, so the two have to be read by different rules.
@@ -3390,13 +3449,15 @@ function paraStyle(pPr: any): ParaStyle {
   if (pPr.pageBreakBefore !== undefined) s.pageBreakBefore = true;
   const numPr = numPrOf(pPr.numPr);
   if (numPr) s.numPr = numPr;
+  const outline = outlineOf(pPr.outlineLvl);
+  if (outline !== undefined) s.outlineLevel = outline;
   return s;
 }
 
 /** Every paragraph property a `w:pPrChange` carries, so a refusal can clear the ones the record dropped. */
 export const PARA_STYLE_KEYS: (keyof ParaStyle)[] = [
   "styleId", "align", "indentLeft", "indentRight", "indentFirstLine", "indentFirstLineChars", "indentHanging",
-  "spacingBefore", "spacingAfter", "lineSpacing", "lineSpacingRule", "pageBreakBefore", "numPr",
+  "spacingBefore", "spacingAfter", "lineSpacing", "lineSpacingRule", "pageBreakBefore", "numPr", "outlineLevel",
 ];
 
 /**
@@ -3409,7 +3470,7 @@ export const PARA_STYLE_KEYS: (keyof ParaStyle)[] = [
  */
 const LENT_PARA_KEYS: (keyof ParaStyle)[] = [
   "align", "indentLeft", "indentRight", "indentFirstLine", "indentFirstLineChars", "indentHanging",
-  "spacingBefore", "spacingAfter", "lineSpacing", "lineSpacingRule", "numPr",
+  "spacingBefore", "spacingAfter", "lineSpacing", "lineSpacingRule", "numPr", "outlineLevel",
 ];
 
 /** Every paragraph property the model holds for it, from its own `w:pPr` and from its styles. */

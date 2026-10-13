@@ -300,6 +300,30 @@ function smoke(): void {
         const hfText = document.querySelector("#view .hf-header")?.textContent;
         const docInsert = { tableRows, tableCols, breaks, docPics, hfText };
 
+        // 导航窗格: the page leaves one [data-outline] mark per paragraph whose outline level resolves, and the
+        // pane lists a row for each in the same order, so the two counts are the invariant the pane is built on.
+        const olMarks = document.querySelectorAll("#view .page [data-outline]").length;
+        rb("导航窗格")?.click();
+        await wait(200);
+        const olRows = document.querySelectorAll("#view .solo-ol-item").length;
+        const olLevel = [...document.querySelectorAll("#view .solo-ol-item")].map((r) => r.querySelector(".solo-ol-lv")?.textContent);
+        const rows = [...document.querySelectorAll("#view .solo-ol-item")];
+        rows[rows.length - 1]?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await wait(200);
+        const docOutline = {
+          olMarks,
+          olRows,
+          paneOpen: !!document.querySelector("#view .solo-ol-panel:not([hidden])"),
+          hit: document.querySelectorAll("#view .page .solo-rev-hit[data-outline]").length,
+          active: document.querySelectorAll("#view .solo-ol-item.solo-ol-active").length,
+          hitLevel: document.querySelector("#view .page .solo-rev-hit[data-outline]")?.getAttribute("data-outline"),
+          lastRowLevel: olLevel[olLevel.length - 1],
+          levels: [...new Set(olLevel)].length,
+        };
+        rb("导航窗格")?.click();
+        await wait(150);
+        docOutline.paneClosed = !document.querySelector("#view .solo-ol-panel:not([hidden])");
+
         fire("solo:new", { kind: "pptx" });
         await wait(150);
         const pptPart = { slides: document.querySelectorAll("#view .thumb").length, stage: !!document.querySelector("#view .stage"), title: document.getElementById("title")?.textContent };
@@ -564,7 +588,7 @@ function smoke(): void {
         const recovered = { cells: document.querySelectorAll(".sheet-wrap td").length, title: document.getElementById("title")?.textContent };
         // The run ends on a modified document, so quitting goes through the unsaved prompt.
         // A PDF the export asked for shows up in saveAsWrites, next to the pptx/xlsx saves.
-        return { docPart, docInsert, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
+        return { docPart, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
       })()`;
       void last?.webContents
         .executeJavaScript(probe)

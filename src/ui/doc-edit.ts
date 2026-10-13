@@ -8,6 +8,7 @@ import { IMAGE_EXT_BY_MIME } from "../core/media.js";
 import { CARRY_CLASS, CARRY_STYLE, PAGE_BORDER_CLASS, RUN_CARRY_CLASS, highlightColor, renderWord } from "../core/render.js";
 import { CommentPanel } from "./doc-comments.js";
 import { ReviewPanel } from "./doc-review.js";
+import { OutlinePanel } from "./doc-outline.js";
 import { openPageSetup as showPageSetupDialog } from "./doc-page-setup.js";
 
 /**
@@ -401,6 +402,8 @@ export class DocEditor {
   private panel: CommentPanel | null = null;
   /** 审阅窗格: the list of every change still waiting, docked beside the page. */
   private review: ReviewPanel | null = null;
+  /** 导航窗格: the headings the document's outline levels name, docked on the left. */
+  private outline: OutlinePanel | null = null;
   /**
    * Comment ids the body anchored at or after the last render. Only these may be pruned when
    * their markers go away: a comment anchored in a header or footer has no body anchor to find.
@@ -445,6 +448,7 @@ export class DocEditor {
     injectRevisionStyles();
     this.panel = new CommentPanel(this.host, this);
     this.review = new ReviewPanel(this.host, this);
+    this.outline = new OutlinePanel(this.host, this);
     document.addEventListener("selectionchange", () => this.trackSelection());
     this.render();
   }
@@ -454,6 +458,7 @@ export class DocEditor {
     this.page = this.host.querySelector<HTMLElement>(".page");
     this.panel?.mount();
     this.review?.mount();
+    this.outline?.mount();
     if (!this.page) return;
     this.page.contentEditable = "true";
     this.page.spellcheck = false;
@@ -1936,6 +1941,56 @@ export class DocEditor {
     return this.review?.isOpen() ?? false;
   }
 
+  /** What the 导航窗格 lists: the headings the document's outline levels name, in reading order. */
+  outlineEntries(): { level: number; text: string }[] {
+    return this.doc.outline();
+  }
+
+  /**
+   * The page's heading marks in document order, index for index with `outlineEntries()`: `renderBlocks` writes
+   * one `[data-outline]` per paragraph that resolves to a level and walks the model the same way `outline()`
+   * does, table cells included. So a row number is an address in the page, and the pane needs no scheme of its
+   * own for finding the paragraph it names.
+   */
+  outlineMarks(): HTMLElement[] {
+    return [...(this.page?.querySelectorAll<HTMLElement>("[data-outline]") ?? [])];
+  }
+
+  /**
+   * 定位到第 N 个标题: lights the heading and brings it into view, the way clicking a row in WPS' 导航窗格 jumps
+   * to the section it names. The caret goes to the end of the heading, which is where the reader means to
+   * continue from.
+   */
+  revealOutline(index: number): boolean {
+    if (!this.page) return false;
+    const mark = this.outlineMarks()[index];
+    if (!mark) return false;
+    // One place at a time is lit: the page already uses this class for the change the review pane last named.
+    for (const stale of this.page.querySelectorAll<HTMLElement>(".solo-rev-hit")) stale.classList.remove("solo-rev-hit");
+    mark.classList.add("solo-rev-hit");
+    const sel = document.getSelection();
+    if (sel) {
+      const range = document.createRange();
+      range.selectNodeContents(mark);
+      range.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+    mark.scrollIntoView({ block: "center" });
+    this.page.focus({ preventScroll: true });
+    this.outline?.revealFromPage(index);
+    return true;
+  }
+
+  /** Ribbon toggle for 导航窗格; with no argument it flips whatever the reader is looking at. */
+  showOutlinePane(show = !(this.outline?.isOpen() ?? false)): void {
+    this.outline?.setOpen(show);
+  }
+
+  get outlinePaneOpen(): boolean {
+    return this.outline?.isOpen() ?? false;
+  }
+
   get revisionShown(): RevisionView {
     return this.revisionView;
   }
@@ -2610,6 +2665,10 @@ function fresh(previous: Paragraph | undefined): Paragraph {
     spacingAfter: previous.spacingAfter,
     lineSpacing: previous.lineSpacing,
     lineSpacingRule: previous.lineSpacingRule,
+    // The level travels with the style for the same reason the style does, and it has to: a paragraph this
+    // editor makes has no `w:pPr` slots to fall back on, so a heading split in two whose new half states no
+    // level would save as body text.
+    outlineLevel: previous.outlineLevel,
     inlines: [],
   };
 }

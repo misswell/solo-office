@@ -511,9 +511,14 @@ function buildDocRibbon(): void {
   );
 
   // 布局: the page itself rather than the text on it. WPS keeps these on a 「页面」 tab; this ribbon is one row,
-  // so the page's own settings get a group at the end, before the zoom control.
+  // so the page's own settings get a group at the end, before the zoom control. The 导航窗格 belongs with them:
+  // WPS puts it on the 视图 tab, and what it changes is the workspace around the page, not the text on it.
   const layout = group();
   button(layout, "pageSetup", "页面设置", "纸张大小与方向、页边距、页眉页脚距离、装订线", () => editor?.openPageSetup());
+  button(layout, "navPane", "导航窗格", "按大纲级别列出各级标题，点一行跳到那一处", () => {
+    editor?.showOutlinePane();
+    syncDocRibbon();
+  });
 
   ribbon.append(zoomGroup());
 }
@@ -537,6 +542,7 @@ function syncDocRibbon(): void {
   if (size && state?.sizePt) size.value = String(DOC_SIZES.includes(state.sizePt) ? state.sizePt : DOC_SIZES[4]);
   mark("track", editor?.trackingChanges ?? false);
   mark("revPane", editor?.reviewPaneOpen ?? false);
+  mark("navPane", editor?.outlinePaneOpen ?? false);
   const revView = ctl.revView as HTMLSelectElement | undefined;
   if (revView && editor) revView.value = editor.revisionShown;
   const undoBtn = ctl.undo as HTMLButtonElement | undefined;

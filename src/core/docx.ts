@@ -402,6 +402,16 @@ export interface Paragraph {
    */
   outlineLevel?: number;
   /**
+   * The size this paragraph's own mark resolves to, in points: `w:pPr/w:rPr/w:sz` (§17.3.1.4), and where the mark
+   * states none, what the paragraph's style chain and `w:rPrDefault` lend it — the same ladder a body run of this
+   * paragraph reads. It exists for one thing the page draws: a numbered paragraph's symbol is a character run of
+   * its own (§17.3.1.12), and where the *level* states no size this is the number the file left standing. Without
+   * it the mark falls through to the page stylesheet's 12pt, a size no document asked for — 331 of the corpus's
+   * 396 such paragraphs resolve elsewhere than 12pt (`NumberLevel.sizePt` covers the other 70, `.scratch/mark-size.ts`).
+   * Nothing writes it: the mark's own properties travel as `pPrSlots` text, so a save spells the file's bytes.
+   */
+  markSizePt?: number;
+  /**
    * The attributes written on this paragraph's own opening tag, as the part spelled them — `w14:paraId`,
    * `w14:textId`, `w:rsidR`, `w:rsidP`. The model has no field for any of them and a save writes this text
    * back onto the tag, the way `TableCell.tcPrXml` writes a property set it cannot explain. They are kept as
@@ -814,12 +824,15 @@ export interface NumberLevel {
   /**
    * The size this level names for its own mark, in points (`w:lvl/w:rPr/w:sz` ÷ 2 — the file counts half-points,
    * the same unit `readRunStyle` converts for body runs). §17.3.1.12 gives the symbol a character run of its own,
-   * so this is the mark's size and not the paragraph's: across the 86 WPS-written documents 42 paragraphs sit on a
-   * level that states one, and in **42 of 42** it is smaller than the size that paragraph's own text resolves to
-   * (5 distinct values over the 68 levels that write it: `.scratch/num-level-rpr.ts`). The other children of that
-   * `w:rPr` were counted in the same pass and left un-modelled on purpose: `w:b`/`w:bCs` appear on 8 used levels and
-   * all 8 agree with the paragraph's own boldness, so drawing them changes no page, while `w:i`, `w:u`, `w:color`,
-   * `w:caps`, `w:strike` and the rest appear on 4–28 levels that **no** paragraph in the corpus lists with them.
+   * so this is the mark's size and not the paragraph's: across the 86 WPS-written documents **70 paragraphs** sit on
+   * a level that states one — 42 of them `bullet` levels whose mark is smaller than that paragraph's own text
+   * (42/42), 28 `decimal` ones whose stated size equals the text already resolved to (28/28, so the page looks the
+   * same either way). 5 distinct values over the 68 levels that write it; the split is `.scratch/mark-size.ts`,
+   * which also cross-checks every one of those 70 against the raw `w:lvl` with no disagreement. The other children
+   * of that `w:rPr` were counted in the same pass and left un-modelled on purpose: `w:b`/`w:bCs` appear on 8 used
+   * levels and all 8 agree with the paragraph's own boldness, so drawing them changes no page, while `w:i`, `w:u`,
+   * `w:color`, `w:caps`, `w:strike` and the rest appear on 4–28 levels that **no** paragraph in the corpus lists
+   * with them.
    */
   sizePt?: number;
 }
@@ -1651,6 +1664,14 @@ export class WordDocument {
     const lentRuns = { ...this.docDefaultRun, ...this.runLent(styleId) };
     const ind = indOf(pPr.ind);
     const sp = spacingOf(pPr.spacing);
+    // §17.3.1.4: `w:pPr/w:rPr` is the paragraph's own mark — the paragraph break, and in WPS' lists the
+    // numbering symbol too (§17.3.1.12 gives that symbol a character run, whose properties the level states and
+    // this mark inherits when the level says nothing). Half-points here, the same unit `readRunStyle` converts.
+    // Across the 86 WPS-written documents 455 of 466 listed paragraphs state a mark run, 326 of them a size
+    // (`.scratch/mark-size.ts`); of the 396 whose *level* states no size, **every one** resolves to a number —
+    // 298 from this mark, 98 from the paragraph's style chain, 0 from nothing at all. 331 of the 396 differ from
+    // the page stylesheet's 12pt, so a mark that ignores this chain draws at a size no file asked for.
+    const markSz = num(pPr.rPr?.sz?.["@_val"]);
     const para: Paragraph = {
       kind: "paragraph",
       styleId,
@@ -1668,6 +1689,7 @@ export class WordDocument {
       pageBreakBefore: pPr.pageBreakBefore !== undefined,
       numPr: numPrOf(pPr.numPr) ?? lent?.numPr,
       outlineLevel: outlineOf(pPr.outlineLvl) ?? lent?.outlineLevel,
+      markSizePt: markSz === undefined ? lentRuns.sizePt : markSz / 2,
       inlines: [],
     };
     // The paragraph's own tag can carry an identity this model has no field for — `w14:paraId`, a revision
@@ -1697,8 +1719,9 @@ export class WordDocument {
       outlineLevel: para.outlineLevel,
     };
     // The paragraph's own mark can be revised: `w:pPr/w:rPr` holds the break that ends this paragraph,
-    // signed the same way a run is. Nothing here reads the mark's character properties — the break is
-    // what matters, and losing the signature would leave a merge nobody can refuse.
+    // signed the same way a run is. Its character properties are read for one thing only — `markSizePt` above,
+    // the size the mark resolves to — and the break's signature is what the rest of this loop is for: losing
+    // it would leave a merge nobody can refuse.
     for (const c of children(pPr.rPr ?? {})) {
       if (isRevision(c.name)) {
         para.markRev = revisionOf(c.name, c.node);

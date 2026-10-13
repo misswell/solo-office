@@ -94,12 +94,19 @@ export const NUMBERING = `<w:numbering xmlns:w="${NS_W}">
  * and the one 11 of its 48 chain-borrowing paragraphs hit (`.scratch/num-lent-shapes.ts`), which `numPrOf`
  * reads as numId 0. `Unnumbered` naming `Numbered` as its `w:basedOn` is the point of the
  * pair — the leaf states the property, so the ancestor's list gets no say.
+ *
+ * `MarkSized` states the size on the *style's* `w:rPr`, the rung a paragraph's own mark falls through to.
+ * Across the 86 WPS-written documents 455 of 466 listed paragraphs write `w:pPr/w:rPr` at all and 326 of them a
+ * `w:sz` — and those 326 always pair it with a `w:szCs` (`<w:sz w:val="28"/><w:szCs w:val="28"/>` is the shape this
+ * fixture copies, `.scratch/mark-size.ts`); a mark that states none takes its size from a rung like this one, which
+ * is where 98 of the paragraphs no size-stating level covers get their number.
  */
 const STYLES = `<w:styles xmlns:w="${NS_W}">
 <w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri"/><w:sz w:val="22"/></w:rPr></w:rPrDefault></w:docDefaults>
 <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
 <w:style w:type="paragraph" w:styleId="Numbered"><w:name w:val="编号来自样式"/><w:basedOn w:val="Normal"/><w:pPr><w:numPr><w:ilvl w:val="1"/><w:numId w:val="1"/></w:numPr></w:pPr></w:style>
 <w:style w:type="paragraph" w:styleId="Unnumbered"><w:name w:val="样式里取消编号"/><w:basedOn w:val="Numbered"/><w:pPr><w:numPr><w:ilvl w:val="1"/></w:numPr></w:pPr></w:style>
+<w:style w:type="paragraph" w:styleId="MarkSized"><w:name w:val="段落标记自己写了字号"/><w:basedOn w:val="Normal"/><w:rPr><w:sz w:val="32"/><w:szCs w:val="32"/></w:rPr></w:style>
 </w:styles>`;
 
 /** One paragraph: `pPr` is the caller's own `w:pPr` children, written the way the files write them. */

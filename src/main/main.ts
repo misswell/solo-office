@@ -273,8 +273,9 @@ function smoke(): void {
         const bulletWorn = [...document.querySelectorAll("#view .page .bullet")].filter(
           (s) => getComputedStyle(s).fontFamily !== getComputedStyle(s.parentElement ?? document.body).fontFamily,
         ).length;
-        // The same reading for the size the level states for its own mark: a count only, never a number that
-        // could name a document's typography.
+        // Symbols whose computed size is not the size their own paragraph has: the level states it for its mark
+        // (17.3.1.12), and when the level says nothing the paragraph mark's resolved size steps in (17.3.1.4).
+        // A count only, never a number that could name a document's typography.
         const bulletSized = [...document.querySelectorAll("#view .page .bullet")].filter(
           (s) => getComputedStyle(s).fontSize !== getComputedStyle(s.parentElement ?? document.body).fontSize,
         ).length;

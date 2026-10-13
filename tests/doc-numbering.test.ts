@@ -57,6 +57,9 @@ const markOf = (doc: WordDocument, needle: string): string =>
 const propOf = (doc: WordDocument, needle: string, prop: string): string =>
   new RegExp(`(?:^|;)${prop}:([^;]*)`).exec(/ style="([^"]*)"/.exec(drawnPara(doc, needle))?.[1] ?? "")?.[1] ?? "";
 
+/** The numbering part as text: the one part this reader never regenerates, so a save owes it byte for byte. */
+const numberingOf = (bytes: Uint8Array): string => text(OpcPackage.from(bytes).bytes("word/numbering.xml")!);
+
 /** `count` paragraphs joining the same list, each spelling its own `w:numPr`. */
 const list = (count: number, at: string, prefix: string): { pPr?: string; text: string }[] =>
   Array.from({ length: count }, (_, i) => ({ pPr: at, text: `${prefix}${i + 1}` }));
@@ -260,13 +263,15 @@ describe("列表符号的字体：私用区那颗码点按级自己声明的 w:r
   it("w:lvl/w:rPr/w:rFonts 进了模型，符号就穿着它", () => {
     const doc = open(makeNumberingDocx([{ pPr: numPr(7, 0), text: "方块" }]));
     expect(doc.levelOf(7, 0)).toMatchObject({ numFmt: "bullet", lvlText: MARK, font: "Wingdings" });
-    expect(markOf(doc, "方块")).toBe(`<span class="bullet" style="font-family:Wingdings">${MARK}</span>`);
+    // 级没写字号，所以那一段解析出来的 11 磅（docDefaults 的 w:sz w:val="22"）才是这颗符号的磅数。
+    expect(markOf(doc, "方块")).toBe(`<span class="bullet" style="font-family:Wingdings;font-size:11pt">${MARK}</span>`);
   });
 
   it("级没写 rFonts：符号不添字体——页面不能画文件没说过的东西", () => {
     const doc = open(makeNumberingDocx([{ pPr: numPr(8, 0), text: "方块" }]));
     expect(doc.levelOf(8, 0)?.font).toBeUndefined();
-    expect(markOf(doc, "方块")).toBe(`<span class="bullet">${MARK}</span>`);
+    // 字体是「没写就不画」，磅数不是：那一段在文件里本来就有个解析得出的数。
+    expect(markOf(doc, "方块")).toBe(`<span class="bullet" style="font-size:11pt">${MARK}</span>`);
   });
 
   it("只有符号穿这颗字体的脸，正文那串字照旧", () => {
@@ -285,9 +290,6 @@ describe("列表符号的字体：私用区那颗码点按级自己声明的 w:r
 
 describe("列表符号的字号：级上写的 w:sz 只落在那颗符号上", () => {
   const MARK = String.fromCharCode(0xf0a7);
-
-  /** The part the reader never regenerates, as the bytes a save hands back. */
-  const numberingOf = (bytes: Uint8Array): string => text(OpcPackage.from(bytes).bytes("word/numbering.xml")!);
 
   it("w:sz 按半点读进来，换成磅（与正文 run 同一个换算）", () => {
     const doc = open(makeNumberingDocx([{ pPr: numPr(9, 0), text: "方块" }, { pPr: numPr(10, 0), text: "点数" }]));
@@ -328,5 +330,54 @@ describe("列表符号的字号：级上写的 w:sz 只落在那颗符号上", (
     expect(pPrOf(regenerated, "方块")).toContain('<w:numPr><w:ilvl w:val="0"/><w:numId w:val="9"/></w:numPr>');
     expect((regenerated.match(/<w:sz\b/g) ?? []).length).toBe((part(src).match(/<w:sz\b/g) ?? []).length);
     expect(paraXml(regenerated, "方块")).not.toContain("8pt");
+  });
+});
+
+describe("那颗符号的字号回退：级没写就用段落标记自己解析出的磅数", () => {
+  const MARK = String.fromCharCode(0xf0a7);
+  /** The corpus's spelling of a mark that states its size: `w:sz` with a `w:szCs` beside it, 326 of 326. */
+  const markSz = (half: number): string => `<w:rPr><w:sz w:val="${half}"/><w:szCs w:val="${half}"/></w:rPr>`;
+
+  it("w:pPr/w:rPr/w:sz 进了模型：级没说，那颗符号用段落的 14 磅", () => {
+    const doc = open(makeNumberingDocx([{ pPr: numPr(8, 0) + markSz(28), text: "方块" }]));
+    expect(doc.paragraphs()[0].markSizePt).toBe(14);
+    expect(markOf(doc, "方块")).toBe(`<span class="bullet" style="font-size:14pt">${MARK}</span>`);
+  });
+
+  it("标记没写字号：往上一跳取样式链，不取 docDefaults", () => {
+    const doc = open(makeNumberingDocx([{ pPr: `<w:pStyle w:val="MarkSized"/>${numPr(8, 0)}`, text: "方块" }]));
+    expect(doc.paragraphs()[0].markSizePt).toBe(16);
+    expect(markOf(doc, "方块")).toBe(`<span class="bullet" style="font-size:16pt">${MARK}</span>`);
+  });
+
+  it("两个都没写：落到 docDefaults 那 11 磅——页面样式表的 12 磅不是文件说的数", () => {
+    const doc = open(makeNumberingDocx([{ pPr: numPr(8, 0), text: "方块" }]));
+    expect(doc.paragraphs()[0].markSizePt).toBe(11);
+    expect(markOf(doc, "方块")).toBe(`<span class="bullet" style="font-size:11pt">${MARK}</span>`);
+  });
+
+  it("级上写的赢段落标记写的：numId 9 的 8 磅盖掉标记那 11 磅", () => {
+    const doc = open(makeNumberingDocx([{ pPr: numPr(9, 0) + markSz(22), text: "方块" }]));
+    expect(doc.levelOf(9, 0)?.sizePt).toBe(8);
+    expect(doc.paragraphs()[0].markSizePt).toBe(11);
+    expect(markOf(doc, "方块")).toBe(`<span class="bullet" style="font-family:Wingdings;font-size:8pt">${MARK}</span>`);
+  });
+
+  it("标记的磅数只穿那颗符号：这一段自己的字照它 run 上解析出的大小", () => {
+    const doc = open(makeNumberingDocx([{ pPr: numPr(8, 0) + markSz(28), text: "方块" }]));
+    const para = drawnPara(doc, "方块");
+    expect((para.match(/font-size:14pt/g) ?? []).length).toBe(1);
+    expect(/<span class="bullet"[^>]*font-size:14pt/.test(para)).toBe(true);
+    expect(para).toContain("font-size:11pt");
+  });
+
+  it("画它不写它：段落的 w:pPr 按原件带回，numbering.xml 逐字节照旧", () => {
+    const src = makeNumberingDocx([{ pPr: numPr(8, 0) + markSz(28), text: "方块" }]);
+    const doc = open(src);
+    const regenerated = saved(doc);
+    expect(pPrOf(regenerated, "方块")).toContain('<w:sz w:val="28"/><w:szCs w:val="28"/>');
+    expect((regenerated.match(/<w:sz\b/g) ?? []).length).toBe((part(src).match(/<w:sz\b/g) ?? []).length);
+    expect(numberingOf(writeDocx(doc))).toBe(numberingOf(src));
+    expect(paraXml(regenerated, "方块")).not.toContain("14pt");
   });
 });

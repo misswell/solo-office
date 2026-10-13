@@ -279,10 +279,13 @@ function renderParagraph(p: Paragraph, doc: WordDocument, counters: Map<string, 
     const mark = esc(numberText(doc, counters, numId, ilvl, seen + 1, level));
     // Font and size are both the mark's own character properties (§17.3.1.12: the symbol is a run of its own),
     // and both travel as a declaration on the mark's span only — never on the paragraph, which the editor reads
-    // back through `inlinesOf`; that skips `.bullet`, so a level's size can never come back as body formatting.
+    // back through `inlinesOf`; that skips `.bullet`, so neither number can come back as body formatting.
+    // The size is the level's when the level states one. When it doesn't, the mark's own resolved size is what
+    // the file left standing (§17.3.1.4), and without it the span would inherit the page stylesheet's 12pt.
+    const markPt = level?.sizePt ?? p.markSizePt;
     const markStyle: string[] = [];
     if (level?.font) markStyle.push(`font-family:${esc(level.font)}`);
-    if (level?.sizePt) markStyle.push(`font-size:${level.sizePt}pt`);
+    if (markPt) markStyle.push(`font-size:${markPt}pt`);
     prefix = `<span class="bullet"${markStyle.length ? ` style="${markStyle.join(";")}"` : ""}>${mark}</span>`;
     style.push(`padding-left:${8 + ilvl * 24}px`);
   }

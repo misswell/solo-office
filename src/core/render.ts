@@ -25,9 +25,13 @@ export function renderInline(inline: Inline): string {
   let html = inline.text === "" ? "" : `<span${css ? ` style="${css}"` : ""}>${esc(inline.text)}</span>`;
   if (html === "" && !css) html = esc(inline.text);
   // A link to a place in this document keeps its window to itself: `target="_blank"` on a `#name` href hands
-  // the app's own page address to the system browser, where nobody has the bookmark open.
+  // the app's own page address to the system browser, where nobody has the bookmark open. The attributes the
+  // file put on the link element have no meaning on the page, so they ride along as data for the editor to
+  // hand back on the next keystroke — dropped here, they are gone from the saved file.
   if (inline.hyperlink)
-    html = `<a href="${esc(inline.hyperlink)}"${inline.hyperlink.startsWith("#") ? "" : ' target="_blank" rel="noreferrer"'}>${html || esc(inline.text)}</a>`;
+    html =
+      `<a href="${esc(inline.hyperlink)}"${inline.hyperlink.startsWith("#") ? "" : ' target="_blank" rel="noreferrer"'}` +
+      `${inline.linkAttrs ? ` data-link-attrs="${esc(inline.linkAttrs)}"` : ""}>${html || esc(inline.text)}</a>`;
   // A tracked change is marked by class, never by inline style: the editor reads inline styles
   // back into the run, and "underlined because inserted" must not become "underlined because bold".
   const rev = inline.rev;

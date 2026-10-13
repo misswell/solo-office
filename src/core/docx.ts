@@ -39,6 +39,13 @@ export interface RunStyle {
 export interface Inline extends RunStyle {
   text: string;
   hyperlink?: string;
+  /**
+   * The attributes on this link's own `w:hyperlink` opening tag that the model has no field for —
+   * `w:history`, `w:docProp`, `w:tm`, `w:invalid` — as the part spelled them, in the file's order. Where the
+   * link *points* is not here: `r:id` and `w:anchor` are the `hyperlink` field's job, and carrying them would
+   * let a save point at a target the model no longer holds. See `Paragraph.attrsXml`.
+   */
+  linkAttrs?: string;
   image?: { src: string; width: number; height: number; name: string; path: string };
   /**
    * The `w:drawing` this picture came from, exactly as the file wrote it, alongside the fields the page draws
@@ -1383,8 +1390,15 @@ export class WordDocument {
         this.revisionRuns(step.node, rels, para.inlines, revisionOf(name, step.node), step.span?.xml);
       } else if (name === "hyperlink") {
         const target = this.linkTarget(step.node, rels);
+        const extras = linkOwnAttrs(step.span?.xml);
         for (const inline of this.linkRuns(step.node, rels, step.span?.xml)) {
-          if (target) inline.hyperlink = target;
+          // The attributes belong to the element, and the element only survives as an element while the model
+          // can name its target: a link it cannot point at is already plain runs, and half-carrying its
+          // attributes onto a run that has no link would write them nowhere.
+          if (target) {
+            inline.hyperlink = target;
+            if (extras) inline.linkAttrs = extras;
+          }
           linkLook(inline);
           para.inlines.push(inline);
         }
@@ -1469,8 +1483,12 @@ export class WordDocument {
       }
       if (child.tag !== "hyperlink") continue;
       const target = this.linkTarget(child.node, rels);
+      const extras = linkOwnAttrs(child.span?.xml);
       for (const inline of this.linkRuns(child.node, rels, child.span?.xml)) {
-        if (target) inline.hyperlink = target;
+        if (target) {
+          inline.hyperlink = target;
+          if (extras) inline.linkAttrs = extras;
+        }
         linkLook(inline);
         into.push({ ...inline, rev });
       }
@@ -3027,6 +3045,27 @@ function ownAttrs(xml: string | undefined): string {
   const attrs = head.slice(space + 1).trim();
   const text = attrs.endsWith("/") ? attrs.slice(0, -1).trim() : attrs;
   return text ? ` ${text}` : "";
+}
+
+/**
+ * The attributes on a `w:hyperlink`'s own opening tag that this model does not interpret — `w:history`,
+ * `w:docProp`, `w:tm`, `w:invalid` — kept as written, in the file's order and with the file's prefixes.
+ * The two spellings of *where the link points* (`r:id`, `w:anchor`) are left out because the model owns
+ * those: carrying them would let the saved file point somewhere the model no longer holds. Both quote
+ * styles are read because XML allows either, and a saved file has to be able to spell them back as given.
+ */
+function linkOwnAttrs(span: string | undefined): string | undefined {
+  const head = ownAttrs(span).trim();
+  if (!head) return undefined;
+  const kept: string[] = [];
+  for (const match of head.matchAll(/(?:[\w.-]+:)?[\w.-]+\s*=\s*(?:"[^"]*"|'[^']*')/g)) {
+    const eq = match[0]!.indexOf("=");
+    const name = match[0]!.slice(0, eq).trim();
+    const local = name.includes(":") ? name.slice(name.indexOf(":") + 1) : name;
+    if (local === "id" || local === "anchor") continue;
+    kept.push(match[0]!);
+  }
+  return kept.length ? kept.join(" ") : undefined;
 }
 
 /**

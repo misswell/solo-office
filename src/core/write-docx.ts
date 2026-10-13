@@ -407,10 +407,14 @@ function inlinesXml(inlines: Inline[], rels: RelBuilder): string {
       i += 1;
       continue;
     }
+    // Runs join one `w:hyperlink` only while the element itself would be spelled the same: two links to the
+    // same target carrying different attributes are two elements, or one run's attributes would be written
+    // over its neighbour's.
+    const extras = inlines[i].linkAttrs;
     const group: Inline[] = [];
-    while (i < inlines.length && inlines[i].hyperlink === link) group.push(inlines[i++]);
+    while (i < inlines.length && inlines[i].hyperlink === link && inlines[i].linkAttrs === extras) group.push(inlines[i++]);
     const inner = group.map((r) => runXml(r, rels)).join("");
-    out.push(`<w:hyperlink ${linkAttrs(link, rels)}>${inner}</w:hyperlink>`);
+    out.push(`<w:hyperlink ${linkAttrs(link, rels, extras)}>${inner}</w:hyperlink>`);
   }
   return out.join("");
 }
@@ -419,9 +423,11 @@ function inlinesXml(inlines: Inline[], rels: RelBuilder): string {
  * A link to a place inside this document is spelled `w:anchor` and has no relationship at all; a link to
  * the outside is a relationship id. Writing an in-document link as `r:id` points the reader at a file
  * address instead of the bookmark, which is how a table of contents entry stops being one after a save.
+ * The target is spelled first and the attributes the file carried after, the way Word writes them
+ * (`r:id="rId4" w:history="1"`), because the target is this model's own field while the rest travel as text.
  */
-const linkAttrs = (link: string, rels: RelBuilder): string =>
-  link.startsWith("#") ? `w:anchor="${XML_ESC(link.slice(1))}"` : `r:id="${rels.hyperlink(link)}"`;
+const linkAttrs = (link: string, rels: RelBuilder, extras?: string): string =>
+  `${link.startsWith("#") ? `w:anchor="${XML_ESC(link.slice(1))}"` : `r:id="${rels.hyperlink(link)}"`}${extras ? ` ${extras}` : ""}`;
 
 const runXml = (r: Inline, rels: RelBuilder): string =>
   r.image ? imageRun(r, r.image.width, r.image.height, rels.image(r.image.path)) : textRun(r);
@@ -430,7 +436,7 @@ const runXml = (r: Inline, rels: RelBuilder): string =>
 const runWrapped = (r: Inline, rels: RelBuilder): string =>
   // Carried bytes are the element as it came. Inside a revision they belong in the wrapper rather than beside
   // it, because a run put outside is read as text nobody revised and the record next to it loses its cover.
-  r.carry ? r.carry.xml : r.hyperlink ? `<w:hyperlink ${linkAttrs(r.hyperlink, rels)}>${runXml(r, rels)}</w:hyperlink>` : runXml(r, rels);
+  r.carry ? r.carry.xml : r.hyperlink ? `<w:hyperlink ${linkAttrs(r.hyperlink, rels, r.linkAttrs)}>${runXml(r, rels)}</w:hyperlink>` : runXml(r, rels);
 
 const sameRevision = (a: Inline["rev"], b: Inline["rev"]): boolean =>
   a !== undefined && b !== undefined && a.kind === b.kind && a.move === b.move && a.id === b.id && a.author === b.author;

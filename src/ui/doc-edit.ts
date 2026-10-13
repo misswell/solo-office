@@ -166,7 +166,7 @@ function formatChangeOf(el: Element): FormatRevision | undefined {
   };
 }
 
-type Context = RunStyle & { hyperlink?: string; rev?: Revision; revFormat?: FormatRevision };
+type Context = RunStyle & Pick<Inline, "hyperlink" | "linkAttrs"> & { rev?: Revision; revFormat?: FormatRevision };
 
 /**
  * The paragraph-level revisions a rendered paragraph carries back to us. A paragraph object is reused
@@ -205,7 +205,10 @@ function readParagraphRevisions(el: Element, p: Paragraph): void {
   }
 }
 
-const CARRIED: (keyof Inline)[] = ["bold", "italic", "underline", "strike", "sizePt", "color", "highlight", "font", "vertAlign", "hyperlink", "break", "brXml", "tab"];
+const CARRIED: (keyof Inline)[] = [
+  "bold", "italic", "underline", "strike", "sizePt", "color", "highlight", "font", "vertAlign",
+  "hyperlink", "linkAttrs", "break", "brXml", "tab",
+];
 
 /** Two runs join only if they share their revision, or an edit would rewrite someone's tracked change. */
 const sameRevision = (a?: Revision, b?: Revision): boolean =>
@@ -942,7 +945,12 @@ export class DocEditor {
           continue;
         }
         const next: Context = { ...ctx, ...styleOf(child) };
-        if (tag === "a") next.hyperlink = child.getAttribute("href") || undefined;
+        if (tag === "a") {
+          next.hyperlink = child.getAttribute("href") || undefined;
+          // The attributes the link came in with ride on the anchor and have to come back off it, or a
+          // keystroke inside the link drops them the same way it used to drop the link itself.
+          next.linkAttrs = child.getAttribute("data-link-attrs") || undefined;
+        }
         const rev = revisionOf(child);
         if (rev) next.rev = rev;
         const fmt = formatChangeOf(child);

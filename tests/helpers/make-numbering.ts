@@ -116,6 +116,15 @@ export const NUMBERING = `<w:numbering xmlns:w="${NS_W}">
  * 424 paragraphs whose level names no face reach through the chain (`.scratch/mark-font.ts`). `numberingStyles`
  * takes the `w:rPrDefault` children as an argument because one test needs a document where *nothing* names a face
  * — the 18 paragraphs that must go on wearing whatever the page wears.
+ *
+ * `MarkColored` is that rung for the colour. Of the 473 listed paragraphs, 74 have a mark that states a
+ * `w:rPr/w:color` — every one of them spelled `w:val` with six hex digits and nothing else on the tag, so no
+ * paragraph in this corpus asks for a theme colour (`w:themeColor` appears on 0 of them, `.scratch/mark-color.ts`)
+ * — and in 74/74 that colour is the same one the paragraph's own text resolves to: the files write the ink on the
+ * mark as well as on the runs, and it is the *symbol* that had been left out of it. 8 more reach a rung like this
+ * one, and 391 state nothing anywhere and keep whatever ink the page wears. The level side has no such paragraph:
+ * 8 of the 617 levels do state a colour, and **no** listed paragraph sits on any of them — the same shape
+ * §17.3.1.12's other level properties were counted in, so this fixture has no colour-stating level either.
  */
 export const numberingStyles = (docDefaultRun = `<w:rFonts w:ascii="Calibri"/>`): string => `<w:styles xmlns:w="${NS_W}">
 <w:docDefaults><w:rPrDefault><w:rPr>${docDefaultRun}<w:sz w:val="22"/></w:rPr></w:rPrDefault></w:docDefaults>
@@ -124,6 +133,7 @@ export const numberingStyles = (docDefaultRun = `<w:rFonts w:ascii="Calibri"/>`)
 <w:style w:type="paragraph" w:styleId="Unnumbered"><w:name w:val="样式里取消编号"/><w:basedOn w:val="Numbered"/><w:pPr><w:numPr><w:ilvl w:val="1"/></w:numPr></w:pPr></w:style>
 <w:style w:type="paragraph" w:styleId="MarkSized"><w:name w:val="段落标记自己写了字号"/><w:basedOn w:val="Normal"/><w:rPr><w:sz w:val="32"/><w:szCs w:val="32"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="MarkFaced"><w:name w:val="段落标记从样式借脸"/><w:basedOn w:val="Normal"/><w:rPr><w:rFonts w:ascii="Arial" w:eastAsia="宋体" w:hAnsi="Arial"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="MarkColored"><w:name w:val="段落标记从样式借颜色"/><w:basedOn w:val="Normal"/><w:rPr><w:color w:val="7030A0"/></w:rPr></w:style>
 </w:styles>`;
 
 const STYLES = numberingStyles();

@@ -278,12 +278,16 @@ function renderParagraph(p: Paragraph, doc: WordDocument, counters: Map<string, 
     // codepoint in `w:lvlText`, and that codepoint only has a shape under the font its `w:rPr` points at.
     // Drawn in the paragraph's font it is tofu, and the list loses the one thing that made it that bullet.
     const mark = esc(numberText(doc, counters, numId, ilvl, seen + 1, level));
-    // Font and size are both the mark's own character properties (§17.3.1.12: the symbol is a run of its own),
-    // and both travel as a declaration on the mark's span only — never on the paragraph, which the editor reads
-    // back through `inlinesOf`; that skips `.bullet`, so neither number can come back as body formatting.
-    // Both fall back the same way: the level's own statement wins, and where the level is silent it is the
+    // Font, size and colour are all the mark's own character properties (§17.3.1.12: the symbol is a run of its
+    // own), and all three travel as a declaration on the mark's span only — never on the paragraph, which the
+    // editor reads back through `inlinesOf`; that skips `.bullet`, so none of them can come back as body formatting.
+    // Font and size fall back the same way: the level's own statement wins, and where the level is silent it is the
     // paragraph's mark chain (§17.3.1.4) — not the page stylesheet, whose 12pt and Times/Songti pair are the
     // App's own default and no document asked for them.
+    // The colour has no level side to beat yet: 8 of the corpus's 617 levels state a `w:rPr/w:color`, and no
+    // paragraph sits on any of those slots (`.scratch/mark-color.ts`), so nothing here has evidence for what a
+    // level's colour should override. The mark's own rung answers 82 of the 473 listed paragraphs and 391 state
+    // nothing — those stay in the page's ink, because no file asked for a colour this renderer would invent.
     const markPt = level?.sizePt ?? p.markSizePt;
     const markStyle: string[] = [];
     if (level?.font) markStyle.push(`font-family:${esc(level.font)}`);
@@ -292,6 +296,7 @@ function renderParagraph(p: Paragraph, doc: WordDocument, counters: Map<string, 
       if (markFaces) markStyle.push(`font-family:${esc(markFaces)}`);
     }
     if (markPt) markStyle.push(`font-size:${markPt}pt`);
+    if (p.markColor) markStyle.push(`color:${p.markColor}`);
     prefix = `<span class="bullet"${markStyle.length ? ` style="${markStyle.join(";")}"` : ""}>${mark}</span>`;
     style.push(`padding-left:${8 + ilvl * 24}px`);
   }

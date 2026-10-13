@@ -279,10 +279,17 @@ function smoke(): void {
         const bulletSized = [...document.querySelectorAll("#view .page .bullet")].filter(
           (s) => getComputedStyle(s).fontSize !== getComputedStyle(s.parentElement ?? document.body).fontSize,
         ).length;
+        // Symbols wearing an ink of their own rather than the page stylesheet's: the paragraph mark states a colour
+        // for the break (17.3.1.4) and these files write that same one on the runs, so before this round only the
+        // text wore it while the symbol stayed in the page stylesheet's --ink. A count only, never a value that
+        // could name a document's colour.
+        const bulletInked = [...document.querySelectorAll("#view .page .bullet")].filter(
+          (s) => getComputedStyle(s).color !== getComputedStyle(s.parentElement ?? document.body).color,
+        ).length;
         marker?.click();
         await wait(150);
         const after = document.querySelector("#view .page");
-        const docPart = { title: document.getElementById("title")?.textContent, editable: after?.getAttribute("contenteditable"), blocksBefore: blocks, blocksAfter: after?.children.length, typed: after?.textContent?.includes("SMOKE"), bulletsBefore: bullets, bulletsWearingOwnFont: bulletWorn, bulletsOwnSize: bulletSized, bulletsAfter: after?.querySelectorAll(".bullet").length, ribbonGroups: document.querySelectorAll("#ribbon .grp").length };
+        const docPart = { title: document.getElementById("title")?.textContent, editable: after?.getAttribute("contenteditable"), blocksBefore: blocks, blocksAfter: after?.children.length, typed: after?.textContent?.includes("SMOKE"), bulletsBefore: bullets, bulletsWearingOwnFont: bulletWorn, bulletsOwnSize: bulletSized, bulletsOwnColor: bulletInked, bulletsAfter: after?.querySelectorAll(".bullet").length, ribbonGroups: document.querySelectorAll("#ribbon .grp").length };
 
         // Insertion round: a 2×3 table, a page break and a picture land in the body.
         const rb = (label) => [...document.querySelectorAll("#ribbon button.rb")].find((b) => b.textContent === label);

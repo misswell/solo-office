@@ -426,6 +426,23 @@ export interface Paragraph {
   /** The `@w:eastAsia` half of the pair above — the face this mark's Chinese characters take. */
   markFontEastAsia?: string;
   /**
+   * The colour this paragraph's own mark resolves to: the `w:rPr/w:color` that sits beside the `w:rFonts` above
+   * (§17.3.1.4), falling back on the style chain and `w:rPrDefault` the way `readRunStyle` does — where
+   * `w:val="auto"` counts as no statement, and a shape that is not a colour counts as one neither. It exists for
+   * the same reason the two faces do: the numbering symbol is a character run of its own (§17.3.1.12).
+   *
+   * The level has no say here, because the corpus never tests one: 8 of its 617 levels do write
+   * `w:lvl/w:rPr/w:color`, and **8/8 of those have no listed paragraph sitting on them** (`.scratch/mark-color.ts`),
+   * so no file in hand says which of the two should win. Of the 473 listed paragraphs in the 86 WPS-written
+   * documents, **82** resolve a colour at this rung — 74 from the mark itself, 8 from the chain — and all 82 differ
+   * from the ink the App's own stylesheet gives a page, which is the number that changes on screen. In 74/74 of the
+   * mark-named ones it is the same colour the paragraph's own text resolves to
+   * (`.scratch/make-markcolor-fixture.ts`), so what this field fixes is not a difference from the body but the
+   * symbol having been left out of the ink the file chose for its paragraph. 391 resolve nothing and stay as they
+   * are drawn. Nothing writes it: the mark's properties travel as `pPrSlots` text, so a save spells the file's bytes.
+   */
+  markColor?: string;
+  /**
    * The attributes written on this paragraph's own opening tag, as the part spelled them — `w14:paraId`,
    * `w14:textId`, `w:rsidR`, `w:rsidP`. The model has no field for any of them and a save writes this text
    * back onto the tag, the way `TableCell.tcPrXml` writes a property set it cannot explain. They are kept as
@@ -1691,6 +1708,10 @@ export class WordDocument {
     const markRFonts = asArray(pPr.rPr?.rFonts)[0];
     const markAscii = markRFonts?.["@_ascii"] || undefined;
     const markEast = markRFonts?.["@_eastAsia"] || undefined;
+    // Colour the same way, with the two filters `readRunStyle` applies to a run's own: `auto` is no statement,
+    // and a value that is not a colour is no statement either — the mark then falls through to the chain.
+    const markColorRaw = asArray(pPr.rPr?.color)[0]?.["@_val"];
+    const markColor = markColorRaw && markColorRaw !== "auto" ? hex(markColorRaw) : undefined;
     const para: Paragraph = {
       kind: "paragraph",
       styleId,
@@ -1711,6 +1732,7 @@ export class WordDocument {
       markSizePt: markSz === undefined ? lentRuns.sizePt : markSz / 2,
       markFont: markAscii ?? lentRuns.font,
       markFontEastAsia: markEast ?? lentRuns.fontEastAsia,
+      markColor: markColor ?? lentRuns.color,
       inlines: [],
     };
     // The paragraph's own tag can carry an identity this model has no field for — `w14:paraId`, a revision
@@ -1740,8 +1762,8 @@ export class WordDocument {
       outlineLevel: para.outlineLevel,
     };
     // The paragraph's own mark can be revised: `w:pPr/w:rPr` holds the break that ends this paragraph,
-    // signed the same way a run is. Its character properties are read for two things — the size and the two faces
-    // the numbered paragraph's symbol falls back on (`markSizePt`, `markFont`, `markFontEastAsia`) — and the break's
+    // signed the same way a run is. Its character properties are read for the numbering symbol's own three —
+    // size, the two faces, colour (`markSizePt`, `markFont`, `markFontEastAsia`, `markColor`) — and the break's
     // signature is what the rest of this loop is for: losing it would leave a merge nobody can refuse.
     for (const c of children(pPr.rPr ?? {})) {
       if (isRevision(c.name)) {

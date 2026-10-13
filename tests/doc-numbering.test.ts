@@ -465,3 +465,92 @@ describe("那颗符号的脸回退：级没点脸就用段落标记自己解析�
     expect(pPrOf(saved(bare), "干净")).not.toContain("<w:rFonts");
   });
 });
+
+describe("那颗符号的颜色回退：级没点色就用段落标记自己解析出的那张", () => {
+  /** The corpus's own spelling of a mark that states a colour: `w:val` alone, six hex digits (74/74). */
+  const markColor = (val: string): string => `<w:rPr><w:color w:val="${val}"/></w:rPr>`;
+  /** A declaration off the *mark's* own style — `propOf` reads the paragraph wrapper, which is not this span. */
+  const markProp = (doc: WordDocument, needle: string, prop: string): string =>
+    new RegExp(`(?:^|;)${prop}:([^;]*)`).exec(/ style="([^"]*)"/.exec(markOf(doc, needle))?.[1] ?? "")?.[1] ?? "";
+
+  it("w:pPr/w:rPr/w:color 进了模型：一、 穿标记点的那张，三条声明按字体、字号、颜色排", () => {
+    const doc = open(
+      makeNumberingDocx([
+        { pPr: numPr(11, 0) + `<w:rPr><w:rFonts w:ascii="Arial" w:eastAsia="黑体"/><w:color w:val="C00000"/></w:rPr>`, text: "方块" },
+      ]),
+    );
+    expect(doc.paragraphs()[0].markColor).toBe("#C00000");
+    expect(markOf(doc, "方块")).toBe(
+      `<span class="bullet" style="font-family:&quot;solo-ea-黑体&quot;,&quot;Arial&quot;;font-size:11pt;color:#C00000">一、</span>`,
+    );
+  });
+
+  it("标记没点颜色：往上一跳取样式链那一张，字号仍归 docDefaults", () => {
+    // numId 11 的级既没点脸也没点色，链上只有 MarkColored 那一张颜色可取。
+    const doc = open(makeNumberingDocx([{ pPr: `<w:pStyle w:val="MarkColored"/>${numPr(11, 0)}`, text: "方块" }]));
+    expect(doc.paragraphs()[0].markColor).toBe("#7030A0");
+    expect(markOf(doc, "方块")).toContain(`font-size:11pt;color:#7030A0`);
+  });
+
+  it("标记点的赢样式链的：同一条属性也各自止步（§17.7.2）", () => {
+    const doc = open(
+      makeNumberingDocx([{ pPr: `<w:pStyle w:val="MarkColored"/>${numPr(11, 0)}${markColor("C00000")}`, text: "方块" }]),
+    );
+    expect(doc.paragraphs()[0].markColor).toBe("#C00000");
+    expect(markOf(doc, "方块")).toContain("color:#C00000");
+    expect(markOf(doc, "方块")).not.toContain("#7030A0");
+  });
+
+  it(`w:val="auto" 不算点了颜色：让位给链上那一张`, () => {
+    const doc = open(
+      makeNumberingDocx([
+        { pPr: `<w:pStyle w:val="MarkColored"/>${numPr(11, 0)}${markColor("auto")}`, text: "借链" },
+        { pPr: numPr(11, 0) + markColor("auto"), text: "没有链" },
+      ]),
+    );
+    expect(doc.paragraphs()[0].markColor).toBe("#7030A0");
+    // 这一段的 docDefaults 也没点色，所以「auto」一路读到底还是没有——不写 color 比造一个文件没说的色强。
+    expect(doc.paragraphs()[1].markColor).toBeUndefined();
+    expect(markOf(doc, "没有链")).not.toContain("color:");
+  });
+
+  it("不是颜色的值不算点了颜色：形状不对就退回链", () => {
+    const doc = open(
+      makeNumberingDocx([
+        { pPr: numPr(11, 0) + markColor("GGGGGG"), text: "坏值" },
+        { pPr: `<w:pStyle w:val="MarkColored"/>${numPr(11, 0)}${markColor("GGGGGG")}`, text: "坏值借链" },
+      ]),
+    );
+    expect(doc.paragraphs()[0].markColor).toBeUndefined();
+    expect(markOf(doc, "坏值")).not.toContain("color:");
+    expect([doc.paragraphs()[1].markColor, markProp(doc, "坏值借链", "color")]).toEqual(["#7030A0", "#7030A0"]);
+  });
+
+  it("三层都没点：不写 color——页面不能造文件里没有的颜色", () => {
+    const doc = open(makeNumberingDocx([{ pPr: numPr(11, 0), text: "方块" }]));
+    expect(doc.paragraphs()[0].markColor).toBeUndefined();
+    expect(markOf(doc, "方块")).toBe(`<span class="bullet" style="font-family:&quot;Calibri&quot;;font-size:11pt">一、</span>`);
+  });
+
+  it("颜色只穿那颗符号：这一段自己的字照它 run 解析出的，不跟着变红", () => {
+    const doc = open(makeNumberingDocx([{ pPr: numPr(11, 0) + markColor("C00000"), text: "方块" }]));
+    const para = drawnPara(doc, "方块");
+    // 语料里 74/74 的标记那张色与正文解析出的其实是**同一张**（文件把墨写在 run 上也写在标记上）；这一夹具故意只
+    // 让标记点色，为的是量「那张色不外溢」这条判据本身——正文没色时它必须一点色都不沾。
+    expect((para.match(/C00000/g) ?? []).length).toBe(1);
+    expect(/<span class="bullet"[^>]*C00000/.test(para)).toBe(true);
+    expect(para).toContain(`<span style="font-size:11pt;font-family:&quot;Calibri&quot;;">方块</span>`);
+  });
+
+  it("画它不写它：w:pPr 里的 w:color 按原件带回，numbering.xml 逐字节照旧", () => {
+    const src = makeNumberingDocx([{ pPr: numPr(11, 0) + markColor("C00000"), text: "方块" }]);
+    const doc = open(src);
+    const regenerated = saved(doc);
+    expect(pPrOf(regenerated, "方块")).toContain(`<w:color w:val="C00000"/>`);
+    expect(regenerated).not.toContain("#C00000");
+    expect(numberingOf(writeDocx(doc))).toBe(numberingOf(src));
+    // 没写 w:color 的段落，重拼也不给它添一个。
+    const bare = open(makeNumberingDocx([{ pPr: numPr(11, 0), text: "干净" }]));
+    expect(pPrOf(saved(bare), "干净")).not.toContain("<w:color");
+  });
+});

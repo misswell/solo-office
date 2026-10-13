@@ -1305,8 +1305,15 @@ export class WordDocument {
   private styles = new Map<string, StyleDef>();
   /** The `w:default="1"` paragraph style: what a paragraph that names no style falls back on (§17.7.2). */
   private defaultParaStyleId?: string;
+  /**
+   * `w:docDefaults/w:rPrDefault`, kept to the properties the ladder lends: the rung every paragraph chain ends
+   * on, §17.7.2. Only one rung, and it goes in below the chain rather than inside it — see `paragraph`.
+   */
+  private docDefaultRun: RunStyle = {};
   /** Resolved style chains, keyed by the style id the paragraph names. See `paraLent`. */
   private lentMemo = new Map<string | undefined, Partial<ParaStyle> | undefined>();
+  /** The same memo for `runLent`, keyed by which kind of chain was walked as well as by the style. */
+  private runLentMemo = new Map<string, Partial<RunStyle> | undefined>();
   private numbering = new Map<number, NumberLevel[]>();
   private media = new Map<string, string>();
   private pkg?: OpcPackage;
@@ -1449,19 +1456,26 @@ export class WordDocument {
 
   private readStyles(pkg: OpcPackage): void {
     this.defaultParaStyleId = undefined;
+    this.docDefaultRun = {};
     this.lentMemo.clear();
+    this.runLentMemo.clear();
     if (!pkg.parts.has("word/styles.xml")) return;
     const st = pkg.xml("word/styles.xml");
     const root = unwrap(st, "styles");
     const defaults = root?.docDefaults?.rPrDefault?.rPr;
-    const defaultStyle: RunStyle = defaults ? runStyle(defaults) : {};
+    // §17.7.2 puts `w:rPrDefault` beneath the *whole* ladder, so it is kept as the one floor the run read ends on
+    // and not folded into every style: merged in, a style that states no size would read as stating the default's,
+    // and a chain whose ancestor holds the real one would stop at the first hop.
+    const stated = (defaults ? runStyle(defaults) : {}) as Record<string, unknown>;
+    const floor: Record<string, unknown> = {};
+    for (const k of LENT_RUN_KEYS) if (stated[k] !== undefined) floor[k] = stated[k];
+    this.docDefaultRun = floor as RunStyle;
     for (const s of asArray(root?.style)) {
       const id = s["@_styleId"];
-      const rPr = s.rPr ? { ...defaultStyle, ...runStyle(s.rPr) } : defaultStyle;
       this.styles.set(id, {
         name: s.name?.["@_val"] ?? id,
         basedOn: s.basedOn?.["@_val"],
-        rPr,
+        rPr: s.rPr ? runStyle(s.rPr) : undefined,
         pPr: s.pPr ? paraStyle(s.pPr) : undefined,
       });
       if (this.defaultParaStyleId === undefined && s["@_type"] === "paragraph" && s["@_default"] === "1") this.defaultParaStyleId = id;
@@ -1511,6 +1525,46 @@ export class WordDocument {
     return lent;
   }
 
+  /**
+   * What a run borrows from one style chain. The same ladder `paraLent` walks, for character properties instead of
+   * paragraph ones: the style named, then each `w:basedOn` ancestor, and — for a paragraph's chain, where §17.7.2
+   * puts it beneath the whole chain — the default paragraph style.
+   *
+   * One chain only, and it stops there. The floor every character has, §17.7.2's `w:docDefaults/w:rPrDefault`, goes
+   * in under the whole ladder at `paragraph()` rather than being folded into each chain here: folded in, a
+   * character style that states no size would carry the default's size up over the paragraph chain's own, and the
+   * run would draw at the bottom rung while a style above the bottom stated the real one.
+   *
+   * The depth is measured, not assumed (`.scratch/run-lent-depth.ts`): 1,961 of the corpus's 2,378 styles state a
+   * `w:rPr` (1,186 paragraph styles, 738 character ones, 37 table ones), and 1,892 styles name a `w:basedOn`.
+   * Against that chain, 551 property statements belong to an ancestor rather than to the style itself — 442 sizes,
+   * 72 bolds, 37 colours — of which 536 sit one hop up, 13 two and 2 three. Every one of the 551 is missed by a
+   * reader that stops at the named style, which is the whole point of walking the chain.
+   *
+   * `fromPara` is the difference between the two kinds of style: a paragraph's chain ends at the default
+   * paragraph style, a character style's ends at its own `w:basedOn` root, because the paragraph default is not
+   * a character style's ancestor.
+   */
+  private runLent(styleId: string | undefined, fromPara = true): Partial<RunStyle> | undefined {
+    const key = `${fromPara ? "p" : "c"}:${styleId ?? ""}`;
+    if (this.runLentMemo.has(key)) return this.runLentMemo.get(key);
+    const out: Record<string, unknown> = {};
+    let cur = fromPara && (styleId === undefined || !this.styles.has(styleId)) ? this.defaultParaStyleId : styleId;
+    const seen = new Set<string>();
+    while (cur !== undefined && !seen.has(cur)) {
+      seen.add(cur);
+      const stated = this.styles.get(cur)?.rPr as Record<string, unknown> | undefined;
+      if (stated) for (const k of LENT_RUN_KEYS) if (out[k] === undefined && stated[k] !== undefined) out[k] = stated[k];
+      const based = this.styles.get(cur)?.basedOn;
+      cur = fromPara
+        ? based ?? (this.defaultParaStyleId === undefined || seen.has(this.defaultParaStyleId) ? undefined : this.defaultParaStyleId)
+        : based;
+    }
+    const lent = Object.keys(out).length ? (out as Partial<RunStyle>) : undefined;
+    this.runLentMemo.set(key, lent);
+    return lent;
+  }
+
   private readNumbering(pkg: OpcPackage): void {
     if (!pkg.parts.has("word/numbering.xml")) return;
     const root = unwrap(pkg.xml("word/numbering.xml"), "numbering");
@@ -1546,6 +1600,10 @@ export class WordDocument {
     const pPr = p.pPr ?? {};
     const styleId = pPr.pStyle?.["@_val"];
     const lent = this.paraLent(styleId);
+    // The runs below read their own properties off this chain too, so a heading whose size lives in the style
+    // draws at the size the file chose rather than at whatever the page's stylesheet happens to use. The floor
+    // goes on here, once, so it sits under both the paragraph's chain and any character chain a run names.
+    const lentRuns = { ...this.docDefaultRun, ...this.runLent(styleId) };
     const ind = indOf(pPr.ind);
     const sp = spacingOf(pPr.spacing);
     const para: Paragraph = {
@@ -1622,16 +1680,16 @@ export class WordDocument {
         continue;
       }
       const name = step.tag;
-      if (name === "r") para.inlines.push(...this.run(step.node, rels, step.span?.xml));
+      if (name === "r") para.inlines.push(...this.run(step.node, rels, step.span?.xml, lentRuns));
       else if (name === "commentRangeStart" || name === "commentRangeEnd") {
         const id = Number(step.node?.["@_id"]);
         if (Number.isFinite(id)) para.inlines.push(anchorInline({ id, kind: name === "commentRangeStart" ? "start" : "end" }));
       } else if (isRevision(name)) {
-        this.revisionRuns(step.node, rels, para.inlines, revisionOf(name, step.node), step.span?.xml);
+        this.revisionRuns(step.node, rels, para.inlines, revisionOf(name, step.node), step.span?.xml, lentRuns);
       } else if (name === "hyperlink") {
         const target = this.linkTarget(step.node, rels);
         const extras = linkOwnAttrs(step.span?.xml);
-        for (const inline of this.linkRuns(step.node, rels, step.span?.xml)) {
+        for (const inline of this.linkRuns(step.node, rels, step.span?.xml, lentRuns)) {
           // The attributes belong to the element, and the element only survives as an element while the model
           // can name its target: a link it cannot point at is already plain runs, and half-carrying its
           // attributes onto a run that has no link would write them nowhere.
@@ -1696,35 +1754,35 @@ export class WordDocument {
   }
 
   /** The runs inside a `w:hyperlink`, which may themselves sit inside a `w:ins` or `w:del`. */
-  private linkRuns(node: any, rels: Map<string, Rel2>, span?: string): Inline[] {
+  private linkRuns(node: any, rels: Map<string, Rel2>, span?: string, fromPara?: Partial<RunStyle>): Inline[] {
     const out: Inline[] = [];
     for (const child of this.childSteps(node, span)) {
       if (child.node === undefined) continue;
-      if (child.tag === "r") out.push(...this.run(child.node, rels, child.span?.xml));
-      else if (isRevision(child.tag)) this.revisionRuns(child.node, rels, out, revisionOf(child.tag, child.node), child.span?.xml);
+      if (child.tag === "r") out.push(...this.run(child.node, rels, child.span?.xml, fromPara));
+      else if (isRevision(child.tag)) this.revisionRuns(child.node, rels, out, revisionOf(child.tag, child.node), child.span?.xml, fromPara);
     }
     return out;
   }
 
   /** A revision's runs are ordinary runs with a signature on them; deleted text is spelled `w:delText`. */
-  private revisionRuns(node: any, rels: Map<string, Rel2>, into: Inline[], rev: Revision, span?: string): void {
+  private revisionRuns(node: any, rels: Map<string, Rel2>, into: Inline[], rev: Revision, span?: string, fromPara?: Partial<RunStyle>): void {
     for (const child of this.childSteps(node, span)) {
       if (child.node === undefined) continue;
       if (child.tag === "r") {
-        for (const inline of this.run(child.node, rels, child.span?.xml)) into.push({ ...inline, rev });
+        for (const inline of this.run(child.node, rels, child.span?.xml, fromPara)) into.push({ ...inline, rev });
         continue;
       }
       // A revision wraps a link as readily as a run, and the link keeps its own target.
       if (isRevision(child.tag)) {
         // Word nests a revision inside one when revised text is revised again; the inner signature is
         // the change that moved these characters, so it wins over the one we are already reading.
-        this.revisionRuns(child.node, rels, into, revisionOf(child.tag, child.node), child.span?.xml);
+        this.revisionRuns(child.node, rels, into, revisionOf(child.tag, child.node), child.span?.xml, fromPara);
         continue;
       }
       if (child.tag !== "hyperlink") continue;
       const target = this.linkTarget(child.node, rels);
       const extras = linkOwnAttrs(child.span?.xml);
-      for (const inline of this.linkRuns(child.node, rels, child.span?.xml)) {
+      for (const inline of this.linkRuns(child.node, rels, child.span?.xml, fromPara)) {
         if (target) {
           inline.hyperlink = target;
           if (extras) inline.linkAttrs = extras;
@@ -1747,8 +1805,15 @@ export class WordDocument {
     return throughRel ?? (anchor === undefined || anchor === "" ? undefined : `#${String(anchor)}`);
   }
 
-  private run(r: any, rels: Map<string, Rel2>, span?: string): Inline[] {
-    const style = runStyle(r.rPr ?? {});
+  private run(r: any, rels: Map<string, Rel2>, span?: string, fromPara?: Partial<RunStyle>): Inline[] {
+    // Three rungs hold a run's properties, and the file can put a field on any of them: the run's own `w:rPr`,
+    // the character style it names, and the paragraph it sits in. §17.7.2 ranks them in that order, so only a
+    // field the run leaves open is taken from below. `w:rStyle` says where the properties come from and is not
+    // itself one of them, so it is read off the parsed node rather than through `runStyle`.
+    const own = runStyle(r.rPr ?? {});
+    const named = r.rPr?.rStyle?.["@_val"];
+    const fromChar = typeof named === "string" ? this.runLent(named, false) : undefined;
+    const style: RunStyle = { ...fromPara, ...fromChar, ...own };
     // The run's own `w:rPr` travels as text, the same way the paragraph's does: read off the parsed tree the
     // answer is "which properties does the model have a field for", and nine fields is not what a Chinese
     // document writes. An empty `w:rPr` counts as written: the set the file chose is the one that goes back.
@@ -1767,10 +1832,13 @@ export class WordDocument {
           ...(record.length ? { prevSlots: record } : {}),
         }
       : undefined;
-    // The record is on the run, so everything the run holds carries it.
+    // The record is on the run, so everything the run holds carries it. The read snapshot is the *resolved*
+    // set, always: a field that came up from the paragraph or the character style is not the run's own, and a
+    // save that spelled it into `w:rPr` would write a property the file never put on the run.
     const base = {
       ...style,
-      ...(carried ? { rPrSlots: carried, asRead: style } : {}),
+      ...(carried ? { rPrSlots: carried } : {}),
+      asRead: { ...style },
       ...(revFormat ? { revFormat } : {}),
     };
     const out: Inline[] = [];
@@ -3304,6 +3372,16 @@ const entryType = (rev: Revision): "insert" | "delete" | "move-from" | "move-to"
 /** Every run property this model carries, so a rejected formatting change can clear the ones the record dropped. */
 export const RUN_STYLE_KEYS: (keyof RunStyle)[] = ["bold", "italic", "underline", "strike", "sizePt", "color", "highlight", "font", "vertAlign"];
 
+/**
+ * The run properties a style may lend a run. `font` is held back on purpose: the model's one face comes from
+ * `w:rFonts@w:ascii` (see `runStyle`), and 350 of the 1,320 style-side `w:rFonts` name a different face for
+ * `w:eastAsia` than for `w:ascii` (`.scratch/run-font-shape.ts`) — the Chinese text is drawn with the east-asian
+ * face and the Latin with the ascii one. Handing a run the ascii face as its only face would put Chinese
+ * headings in a Latin face the file never chose for them, which is a bigger untruth than the missing face is.
+ * 93 more state only `w:eastAsia`, which this model cannot read at all.
+ */
+export const LENT_RUN_KEYS: (keyof RunStyle)[] = RUN_STYLE_KEYS.filter((k) => k !== "font");
+
 /** A run's formatting on its own — the properties, without the text, anchors or revision records hanging off it. */
 export function runStyleOf(run: Inline): RunStyle {
   const out: Record<string, unknown> = {};
@@ -3509,6 +3587,24 @@ export function ownParaStyle(asRead: ParaStyle | undefined, s: ParaStyle): ParaS
     out[key] = v;
   }
   return out as ParaStyle;
+}
+
+/**
+ * Out of a set of run properties, the ones the run said for itself — the same question `ownParaStyle` answers
+ * for a paragraph, and the reason a run may be filled from the chain without the save claiming the chain's work.
+ *
+ * Unlike the paragraph set, `false` is a value the run wrote: `<w:b w:val="0"/>` turns off a bold the style
+ * lends, and dropping it here would turn an explicit cancellation back into silence.
+ */
+export function ownRunStyle(asRead: RunStyle | undefined, s: RunStyle): RunStyle {
+  const out: Record<string, unknown> = {};
+  for (const key of RUN_STYLE_KEYS) {
+    const v = s[key];
+    if (v === undefined) continue;
+    if (asRead && samePropValue(asRead[key], v)) continue;
+    out[key] = v;
+  }
+  return out as RunStyle;
 }
 
 /** An on/off property: present means true unless the file says otherwise (`w:noWrap`, `w:cantSplit`). */

@@ -190,6 +190,8 @@ export interface ChainStyle {
   isDefault?: boolean;
   /** The style's `w:pPr` children, written the way the files write them. */
   pPr?: string;
+  /** The style's `w:rPr` children — the character properties §17.7.2 hands down to the runs inside it. */
+  rPr?: string;
   /** `w:type`, needed only for the case that must not leak: a character style that is the default. */
   type?: "paragraph" | "character";
 }
@@ -214,7 +216,7 @@ export interface ChainStyle {
  */
 export function makeChainDocx(
   styles: readonly ChainStyle[],
-  paras: readonly { readonly pStyle?: string; readonly pPr?: string; readonly text: string }[],
+  paras: readonly { readonly pStyle?: string; readonly pPr?: string; readonly text: string; readonly rPr?: string; readonly rStyle?: string }[],
 ): Uint8Array {
   const sx = `<w:styles xmlns:w="${NS_W}">
 <w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri"/><w:sz w:val="22"/></w:rPr></w:rPrDefault></w:docDefaults>
@@ -225,7 +227,7 @@ ${styles
       .join(" ");
     return `<w:style ${attrs}><w:name w:val="${s.name ?? s.id}"/>${s.basedOn ? `<w:basedOn w:val="${s.basedOn}"/>` : ""}${
       s.type === "character" ? "" : "<w:qFormat/>"
-    }${s.pPr ? `<w:pPr>${s.pPr}</w:pPr>` : ""}</w:style>`;
+    }${s.pPr ? `<w:pPr>${s.pPr}</w:pPr>` : ""}${s.rPr ? `<w:rPr>${s.rPr}</w:rPr>` : ""}</w:style>`;
   })
   .join("\n")}
 </w:styles>`;
@@ -233,7 +235,8 @@ ${styles
     paras
       .map((e) => {
         const kids = [e.pStyle ? `<w:pStyle w:val="${e.pStyle}"/>` : "", e.pPr ?? ""].join("");
-        return `<w:p>${kids ? `<w:pPr>${kids}</w:pPr>` : ""}<w:r><w:t>${e.text}</w:t></w:r></w:p>`;
+        const own = [e.rStyle ? `<w:rStyle w:val="${e.rStyle}"/>` : "", e.rPr ?? ""].join("");
+        return `<w:p>${kids ? `<w:pPr>${kids}</w:pPr>` : ""}<w:r>${own ? `<w:rPr>${own}</w:rPr>` : ""}<w:t>${e.text}</w:t></w:r></w:p>`;
       })
       .join("\n") + `<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800"/></w:sectPr>`;
   return pack(document, sx);

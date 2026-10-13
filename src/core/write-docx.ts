@@ -1,7 +1,7 @@
 import { strToU8, zipSync } from "fflate";
 import type { Block, BorderSet, Inline, ParaStyle, Paragraph, ParagraphFormatRevision, PropSlot, RunStyle, RowInfo, Table, TableBorder, TableCell, WordDocument } from "./docx.js";
 import { bytesOfDataUrl } from "./media.js";
-import { BORDER_ORDER, ROW_REVISION_TAGS, ownParaStyle, paraStyleOf, preserve, revisionTag, samePropValue } from "./docx.js";
+import { BORDER_ORDER, ROW_REVISION_TAGS, ownParaStyle, ownRunStyle, paraStyleOf, preserve, revisionTag, runStyleOf, samePropValue } from "./docx.js";
 import { childSpans, elementContent } from "./opc.js";
 import { setChildren } from "./doc-table-revisions.js";
 import { commentDirty, commentElement, commentParaIds, commentsRootInfo, type DocComment } from "./comments.js";
@@ -336,7 +336,11 @@ function carriedRunProps(r: Inline): string {
 function revisedRunProps(inline: Inline): string {
   if (inline.rPrSlots) return carriedRunProps(inline);
   const fmt = inline.revFormat;
-  const inner = runPropsInner(inline) + (fmt ? `<w:rPrChange ${revAttrs(fmt)}>${runProps(fmt.prev) || "<w:rPr/>"}</w:rPrChange>` : "");
+  // Only what the run itself states goes into its `w:rPr`. A property that came down the style ladder is the
+  // style's, and `paragraphProps` keeps the same rule for a `w:pPr`: spelling a borrowed bold into every run
+  // of a heading would put the heading's formatting on runs whose file never carried it, and take it back the
+  // moment the paragraph left the style.
+  const inner = runPropsInner(ownRunStyle(inline.asRead, runStyleOf(inline))) + (fmt ? `<w:rPrChange ${revAttrs(fmt)}>${runProps(fmt.prev) || "<w:rPr/>"}</w:rPrChange>` : "");
   return inner ? `<w:rPr>${inner}</w:rPr>` : "";
 }
 

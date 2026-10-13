@@ -1,7 +1,7 @@
 import type { Block, Carried, CarriedInline, FormatRevision, HfSegment, Inline, ParaStyle, PageGeometry, PageSetup, Paragraph, ParagraphFormatRevision, PropSlot, Revision, RevisionEntry, RowInfo, RunStyle, Table, TableCell, WordDocument } from "../core/docx.js";
 import type { CommentAnchor, DocComment } from "../core/comments.js";
 import { bodyShape, commentTexts } from "../core/comments.js";
-import { DEFAULT_SECTION, RUN_STYLE_KEYS, ownParaStyle, paraStyleOf, runStyleOf, stampNow, syncParaSlots, twipsToPx } from "../core/docx.js";
+import { DEFAULT_SECTION, RUN_STYLE_KEYS, ownParaStyle, ownRunStyle, paraStyleOf, runStyleOf, stampNow, syncParaSlots, twipsToPx } from "../core/docx.js";
 import type { CellWhere, TableEdit } from "../core/doc-table-ops.js";
 import { cellRangeFor, cellRect, cellsInRect, cellsInSweep, deleteColumnHere, deleteRowHere, gridColumns, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, splitHere, splitTableAt } from "../core/doc-table-ops.js";
 import { IMAGE_EXT_BY_MIME } from "../core/media.js";
@@ -2020,13 +2020,17 @@ export class DocEditor {
     if (mine) return mine;
     this.revSeq += 1;
     // The record says what the run's whole property set was, not only the nine fields the model can name, so a
-    // later refusal puts back the `w:kern` and the `w:lang` the toolbar never touched.
+    // later refusal puts back the `w:kern` and the `w:lang` the toolbar never touched. Where the run carried no
+    // `w:rPr` of its own, what it showed came down the style ladder, and §17.13.5.19 records none of that: the
+    // record says nothing, and a refusal puts the run back to borrowing.
+    const stated = runStyleOf(before);
+    const prev = before.rPrSlots?.length ? stated : ownRunStyle(before.asRead, stated);
     return {
       kind: "format",
       id: this.revSeq,
       author: this.authorName,
       date: stampNow(),
-      prev: runStyleOf(before),
+      prev,
       ...(before.rPrSlots?.length ? { prevSlots: before.rPrSlots } : {}),
     };
   }
@@ -2883,10 +2887,11 @@ function pickTextStyle(inline: Inline): Partial<Inline> {
     const value = inline[key];
     if (value !== undefined) (style as Record<string, unknown>)[key] = value;
   }
-  if (inline.rPrSlots) {
-    style.rPrSlots = inline.rPrSlots;
-    style.asRead = inline.asRead;
-  }
+  if (inline.rPrSlots) style.rPrSlots = inline.rPrSlots;
+  // The read snapshot travels with the set it was taken against. A run whose bold came from the paragraph's
+  // style shows bold here, and the new run has to know it did not state it — otherwise the first save after
+  // typing writes a `w:b` into a run whose file never had one, and the text stops following its style.
+  if (inline.asRead) style.asRead = inline.asRead;
   return style;
 }
 

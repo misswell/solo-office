@@ -3,7 +3,7 @@ import type { Inline, Paragraph } from "../src/core/docx.js";
 import { WordDocument } from "../src/core/docx.js";
 import { writeDocx } from "../src/core/write-docx.js";
 import { childSpans, elementContent, OpcPackage, text } from "../src/core/opc.js";
-import { makeHighlightDocx, makeOnOffDocx, makeRunPropsDocx, makeUnderlineDocx } from "./helpers/make-run.js";
+import { makeHighlightDocx, makeOnOffDocx, makeRunPropsDocx, makeTextFillDocx, makeUnderlineDocx } from "./helpers/make-run.js";
 import { renderInline } from "../src/core/render.js";
 
 const part = (bytes: Uint8Array): string => text(OpcPackage.from(bytes).bytes("word/document.xml")!);
@@ -439,5 +439,76 @@ describe("docx highlight read as three states", () => {
     expect(runAt(back, "页面叫不出名字的高亮").highlight).toBe("blue");
     expect(runAt(back, "盖掉借来的高亮").highlight).toBe("none");
     expect(hlTags(elsewhere(makeHighlightDocx()))).toEqual(hlTags(part(makeHighlightDocx())));
+  });
+});
+
+/** How many `w14:textFill` elements the part states, wherever they sit. */
+const fillCount = (xml: string): number => (xml.match(/<w14:textFill\b/g) ?? []).length;
+
+describe("docx 字色与那句扩展色（w14:textFill）", () => {
+  it("改字色时那句扩展色跟着让位，其余的孩子原位不动", () => {
+    const doc = open(makeTextFillDocx());
+    const out = rPrOf(retyped(doc, "镜像的一对", { ...runAt(doc, "镜像的一对"), color: "#0000FF" }), "镜像的一对");
+    expect(out).toContain('<w:color w:val="0000FF"/>');
+    // 镜像跟着字色走：留下它，这一句就成了「一个 run 报两个颜色」，而谁说了算不由我们定。
+    expect(out).not.toContain("textFill");
+    expect(out).toContain('<w:kern w:val="28"/>');
+    expect(out).toContain('<w:sz w:val="24"/><w:szCs w:val="24"/>');
+    expect(out).toContain('w:hint="eastAsia"');
+  });
+
+  it("没动字色时不必重写那一句，连它报的主题名也原样留着", () => {
+    const doc = open(makeTextFillDocx());
+    const out = rPrOf(retyped(doc, "镜像的一对", { ...runAt(doc, "镜像的一对"), bold: true }), "镜像的一对");
+    expect(out).toContain('<w14:textFill><w14:solidFill><w14:schemeClr val="text1"/></w14:solidFill></w14:textFill>');
+    expect(out).toContain('w:themeColor="text1"');
+    expect(out).toContain("<w:b/>");
+  });
+
+  it("把字色改回它读进来的那一个，那一句一个字都不必重写", () => {
+    const before = rPrOf(part(makeTextFillDocx()), "镜像的一对");
+    const doc = open(makeTextFillDocx());
+    const run = runAt(doc, "镜像的一对");
+    paraAt(doc, "镜像的一对").inlines[0] = { ...run, color: "#0000FF" };
+    expect(fillCount(save(doc))).toBe(fillCount(part(makeTextFillDocx())) - 1);
+    paraAt(doc, "镜像的一对").inlines[0] = { ...run };
+    expect(rPrOf(save(doc), "镜像的一对")).toBe(before);
+  });
+
+  it("给一个只说过 w:color 的 run 改色，不替它编一句扩展色", () => {
+    const doc = open(makeTextFillDocx());
+    const out = rPrOf(retyped(doc, "只说了 w:color", { ...runAt(doc, "只说了 w:color"), color: "#0000FF" }), "只说了 w:color");
+    expect(out).toContain('<w:color w:val="0000FF"/>');
+    expect(out).not.toContain("w14:");
+    expect(out).toContain('<w:kern w:val="28"/>');
+  });
+
+  it("套过明暗的那一句也跟着让位，而不是留一个再算不回原来的颜色的形状", () => {
+    const doc = open(makeTextFillDocx());
+    const out = rPrOf(retyped(doc, "明暗过一道", { ...runAt(doc, "明暗过一道"), color: "#FF0000" }), "明暗过一道");
+    expect(out).toContain('<w:color w:val="FF0000"/>');
+    expect(out).not.toMatch(/textFill|lumMod|lumOff/);
+    expect(out).toContain('<w:sz w:val="21"/>');
+  });
+
+  it("只说过扩展色、没说过 w:color 的 run：没点色就留着，点了一色才替它让位", () => {
+    const only = "只说了那句扩展色";
+    expect(runAt(open(makeTextFillDocx()), only).color).toBeUndefined();
+    const kept = elsewhere(makeTextFillDocx());
+    expect(fillCount(kept)).toBe(fillCount(part(makeTextFillDocx())));
+    expect(rPrOf(kept, only)).toContain("<w14:textFill>");
+    const doc = open(makeTextFillDocx());
+    const out = rPrOf(retyped(doc, only, { ...runAt(doc, only), color: "#008000" }), only);
+    // 这一句同时钉住命名空间：这一组的别名要从「只能在文字命名空间里活」的孩子取。只有扩展色的 run 没有这样的
+    // 证人，早先按第一个孩子猜，把整组包成了 `<w14:rPr>` —— 没有读者认得的元素。
+    expect(out).toBe("<w:rPr><w:color w:val=\"008000\"/></w:rPr>");
+  });
+
+  it("别处加一段不带走任何一句扩展色，且保存两次写出同一句", () => {
+    const bytes = makeTextFillDocx();
+    expect(fillCount(elsewhere(bytes))).toBe(fillCount(part(bytes)));
+    const once = writeDocx(open(bytes));
+    expect(fillCount(part(once))).toBe(3);
+    expect(part(writeDocx(open(once)))).toBe(part(once));
   });
 });

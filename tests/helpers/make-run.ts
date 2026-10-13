@@ -189,3 +189,22 @@ export function makePendingFormatDocx(): Uint8Array {
 <w:p><w:r><w:t>什么都没点</w:t></w:r></w:p>`;
   return pack(document);
 }
+
+/**
+ * The shapes `w14:textFill` comes in — the 2010 extension's way of naming a run's colour, and the one colour
+ * property that has a field of its own (`color`) *and* a carried slot the file wrote. Measured over the 86
+ * WPS-written parts (`.scratch/textfill-counted.ts`, `.scratch/textfill-theme.ts`): all 3656 fills in the body
+ * and header/footer parts sit under a `w:rPr` that states a `w:color` with a hex value, 3288 of them naming the
+ * same theme colour as that `w:color` does, and once the `schemeClr` is resolved through `word/theme/theme1.xml`
+ * — with `lumMod`/`lumOff` applied where the file stated them — all 3296 resolvable fills give back exactly the
+ * hex `w:color` already gave. So it travels as a mirror of the colour field, and a save that re-spells the colour
+ * has to take the mirror with it: 16 of those files hold a run with text whose fill would otherwise go on naming
+ * the colour the run no longer has.
+ */
+export function makeTextFillDocx(): Uint8Array {
+  const document = `<w:p><w:r><w:rPr><w:rFonts w:hint="eastAsia"/><w:kern w:val="28"/><w:color w:val="808080" w:themeColor="text1"/><w:sz w:val="24"/><w:szCs w:val="24"/><w14:textFill><w14:solidFill><w14:schemeClr val="text1"/></w14:solidFill></w14:textFill></w:rPr><w:t>镜像的一对</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:color w:val="C00000"/><w:kern w:val="28"/></w:rPr><w:t>只说了 w:color</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:color w:val="404040" w:themeColor="dark1"/><w:sz w:val="21"/><w14:textFill><w14:solidFill><w14:schemeClr val="dark1"><w14:lumMod val="75000"/><w14:lumOff val="25000"/></w14:schemeClr></w14:solidFill></w14:textFill></w:rPr><w:t>明暗过一道</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w14:textFill><w14:solidFill><w14:srgbClr val="008000"/></w14:solidFill></w14:textFill></w:rPr><w:t>只说了那句扩展色</w:t></w:r></w:p>`;
+  return pack(document);
+}

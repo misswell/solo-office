@@ -282,7 +282,17 @@ const RUN_PROPS: {
   },
   {
     key: "color",
-    tags: ["color"],
+    // `w14:textFill` is the same sentence in the 2010 extension's words, so it moves with the colour. Over the 86
+    // WPS-written parts the 3656 extended fills (body plus headers/footers, 347 more in the style layer) all sit
+    // directly under a `w:rPr` that also states a `w:color` with a hex value, 2110 of them reaching our model as a
+    // slot and 1990 of those on a run carrying text (`.scratch/textfill-counted.ts`). Resolved through
+    // `word/theme/theme1.xml` — `schemeClr` name, then `lumMod`/`lumOff` — the fill names the colour `w:color`
+    // already gave in all 3296 cases that resolve, and the 360 that do not only differ in which naming generation
+    // the theme slot uses (`.scratch/textfill-theme.ts`). It is a mirror, not an extra: left standing, a colour
+    // change writes a run saying two colours at once, and which one a reader paints with is not ours to choose —
+    // measured over the 16 files with such a run, that is what saving did. Nothing is spelled for a run that never
+    // stated one, so a document without the extension does not gain a `w14:` child it never declared.
+    tags: ["color", "textFill"],
     spell: (r, prefix) => (r.color ? `<${prefix}:color w:val="${XML_ESC(r.color.replace(/^#/, "").toUpperCase())}"/>` : ""),
   },
   {
@@ -332,6 +342,19 @@ function putRunFonts(xml: string, prefix: string, r: Inline): string {
 }
 
 /**
+ * The prefix a carried `w:rPr` writes under. A prefix is taken from the set rather than assumed: `w` is only an
+ * alias for the words namespace where the part binds it, and a child written with another alias than its
+ * neighbours reads as another element. So the set's alias comes from a child that can live in no other
+ * namespace — one of the names `CT_RPr` gives — and a set holding nothing but extension children falls back to
+ * the `w` the rest of this writer already spells. Taking whichever child happened to come first instead wrapped a
+ * run whose set held only a `w14:textFill` in `<w14:rPr>`, an element no reader knows.
+ */
+function carriedRunPrefix(slots: PropSlot[]): string {
+  const xml = slots.find((s) => RPR_ORDER.includes(s.tag))?.xml ?? "";
+  return /^<([A-Za-z_][-\w.]*):/.exec(xml)?.[1] ?? "w";
+}
+
+/**
  * The run's `w:rPr` the way the file wrote it, with only the children whose field actually moved re-spelled.
  * The same split `paragraphProps` makes for a `w:pPr` and `applyCellProps` for a `w:tcPr`: the set belongs to
  * the document, and a property the model cannot explain is not the model's to remove. Rebuilding it from nine
@@ -339,9 +362,7 @@ function putRunFonts(xml: string, prefix: string, r: Inline): string {
  */
 function carriedRunProps(r: Inline): string {
   const slots = r.rPrSlots ?? [];
-  // A prefix is taken from the set rather than assumed: `w` is only an alias for the words namespace where the
-  // part binds it, and a child written with another prefix than its neighbours reads as another element.
-  const prefix = /^<([A-Za-z_][-\w.]*):/.exec(slots[0]?.xml ?? "")?.[1] ?? "w";
+  const prefix = carriedRunPrefix(slots);
   const drops = new Set<PropSlot>();
   const inserts: PropSlot[] = [];
   for (const prop of RUN_PROPS) {
@@ -458,7 +479,7 @@ function anchorXml(anchor: NonNullable<Inline["anchor"]>, from: Inline): string 
   // and that one takes the shape Word writes.
   const slots = from.rPrSlots;
   if (!slots) return `<w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:commentReference w:id="${anchor.id}"/></w:r>`;
-  const prefix = /^<([A-Za-z_][-\w.]*):/.exec(slots[0]?.xml ?? "")?.[1] ?? "w";
+  const prefix = carriedRunPrefix(slots);
   const props = slots.length ? `<${prefix}:rPr>${slots.map((s) => s.xml).join("")}</${prefix}:rPr>` : `<${prefix}:rPr/>`;
   return `<w:r>${props}<w:commentReference w:id="${anchor.id}"/></w:r>`;
 }

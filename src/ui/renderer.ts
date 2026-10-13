@@ -468,14 +468,9 @@ function buildDocRibbon(): void {
   button(align, "both", "两", "两端对齐", () => editor?.setParagraph({ align: "both" }));
 
   const lists = group();
-  const available = editor?.listAvailability() ?? { bullet: false, number: false };
   button(lists, "bullet", "• 符号", "项目符号", () => editor?.setParagraph({ list: "bullet" }));
   button(lists, "number", "1. 编号", "编号列表", () => editor?.setParagraph({ list: "number" }));
   button(lists, "nolist", "取消列表", "变回普通段落", () => editor?.setParagraph({ list: "none" }));
-  for (const [key, ok] of [["bullet", available.bullet], ["number", available.number]] as [string, boolean][]) {
-    const b = ctl[key] as HTMLButtonElement | undefined;
-    if (b) b.disabled = !ok;
-  }
 
   const insert = group();
   button(insert, "table", "表格", "插入表格", openTablePicker);

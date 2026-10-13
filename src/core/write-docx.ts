@@ -1,5 +1,5 @@
 import { strToU8, zipSync } from "fflate";
-import type { Block, BorderSet, Inline, ParaStyle, Paragraph, ParagraphFormatRevision, PropSlot, RunStyle, RowInfo, Table, TableBorder, TableCell, WordDocument } from "./docx.js";
+import type { Block, BorderSet, Inline, ListAddition, ParaStyle, Paragraph, ParagraphFormatRevision, PropSlot, RunStyle, RowInfo, Table, TableBorder, TableCell, WordDocument } from "./docx.js";
 import { bytesOfDataUrl } from "./media.js";
 import { BORDER_ORDER, ROW_REVISION_TAGS, ownParaStyle, ownRunStyle, paraStyleOf, preserve, revisionTag, runStyleOf, samePropValue } from "./docx.js";
 import { childSpans, elementContent } from "./opc.js";
@@ -25,6 +25,8 @@ const NS_MC = "http://schemas.openxmlformats.org/markup-compatibility/2006";
 const NS_CT = "http://schemas.openxmlformats.org/package/2006/content-types";
 const CT_W = "application/vnd.openxmlformats-officedocument.wordprocessingml";
 const DECL = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n`;
+/** Where list definitions live: this part is the only thing a list command on a definition-less file owes. */
+const NUMBERING_PART = "word/numbering.xml";
 const EMU_PER_PX = 9525;
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -792,6 +794,47 @@ function commentsXml(list: DocComment[], rootAttrs: string): string {
 /** Text runs only — a body holding a table, picture or field is never editable, so it never comes here. */
 const commentRuns = (runs: Inline[]): string => runs.filter((r) => !r.anchor).map(textRun).join("");
 
+/**
+ * A list definition the model had to invent, because the file named no such shape (docx.ts
+ * `ensureListNumbering`). The part is never rebuilt from the model — the definitions the document came with,
+ * its `w:numPicBullet`, its `mc:` alternates and everything else this writer does not read travel as the bytes
+ * that came in, and these are *joined onto* them. §17.4's one ordering rule holds either way: every
+ * `w:abstractNum` precedes every `w:num`.
+ *
+ * What the level states is the core the corpus really does spell — `start`, `numFmt`, `lvlText`, `lvlJc` — and
+ * no indentation or `w:suff`, which are layout claims this build has no evidence for. A part whose root this
+ * cannot find comes back untouched: inventing a root around bytes of unknown shape would be the bigger lie, and
+ * the paragraph then draws the definition-less list it was before the click.
+ */
+function numberingXml(carried: string | undefined, adds: ListAddition[]): string {
+  // Whatever prefix the part's own root declared is the prefix these elements use; `w:` is what every file in
+  // the corpus writes, and what a part created here declares.
+  const prefix = /<([\w-]+):numbering\b/.exec(carried ?? "")?.[1] ?? "w";
+  const q = (name: string): string => `${prefix}:${name}`;
+  const block =
+    adds
+      .map(
+        (a) =>
+          `<${q("abstractNum")} ${q("abstractNumId")}="${a.abstractId}"><${q("multiLevelType")} ${q("val")}="singleLevel"/>` +
+          `<${q("lvl")} ${q("ilvl")}="0"><${q("start")} ${q("val")}="1"/><${q("numFmt")} ${q("val")}="${a.numFmt}"/>` +
+          `<${q("lvlText")} ${q("val")}="${XML_ESC(a.lvlText)}"/><${q("lvlJc")} ${q("val")}="left"/></${q("lvl")}>` +
+          `</${q("abstractNum")}>`,
+      )
+      .join("") +
+    adds.map((a) => `<${q("num")} ${q("numId")}="${a.numId}"><${q("abstractNumId")} ${q("val")}="${a.abstractId}"/></${q("num")}>`).join("");
+
+  if (!carried) return `${DECL}<${q("numbering")} xmlns:${prefix}="${NS_W}">${block}</${q("numbering")}>`;
+  const open = new RegExp(`<${prefix}:numbering\\b[^>]*>`).exec(carried);
+  if (!open) return carried;
+  if (open[0].endsWith("/>"))
+    return `${carried.slice(0, open.index)}${open[0].slice(0, -2)}>${block}</${q("numbering")}>${carried.slice(open.index + open[0].length)}`;
+  // The only element named exactly `num` in this part is the top-level definition, so the first one is where the
+  // abstract definitions have to precede; a part with no `num` yet takes them at the end, before its close.
+  const firstNum = carried.search(new RegExp(`<${prefix}:num(?=[\\s>/])`));
+  const where = firstNum >= 0 ? firstNum : carried.lastIndexOf(`</${q("numbering")}>`);
+  return where < 0 ? carried : `${carried.slice(0, where)}${block}${carried.slice(where)}`;
+}
+
 interface RelEntry {
   id: string;
   type: string;
@@ -994,6 +1037,15 @@ export function writeDocx(doc: WordDocument): Uint8Array {
       // resolve state the user just set silently disappears on the next open.
       rels.relation(ext.relType, ext.target);
     }
+  }
+
+  // A list the document never defined owes bytes too: the part is created when the package had none — the shape
+  // of 文件 → 新建, where 47 of the 86 corpus files carry no `word/numbering.xml` at all — and joined onto the
+  // file's own definitions when it did. The body relationship is the other half of the promise; a part no
+  // relationship reaches is a part Word ignores, and the mark the user just asked for would not draw.
+  if (doc.listDirty()) {
+    files[NUMBERING_PART] = strToU8(numberingXml(src?.text(NUMBERING_PART), doc.listAdditions()));
+    if (!rels.entries.some((e) => e.type === `${NS_R}/numbering`)) rels.relation(`${NS_R}/numbering`, "numbering.xml");
   }
 
   files["word/_rels/document.xml.rels"] = strToU8(relsXml(rels));

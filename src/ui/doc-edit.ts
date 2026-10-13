@@ -1779,11 +1779,6 @@ export class DocEditor {
     };
   }
 
-  /** The numbering definitions the toolbar can offer come from the document itself. */
-  listAvailability(): { bullet: boolean; number: boolean } {
-    return { bullet: listNumId(this.doc, "bullet") !== undefined, number: listNumId(this.doc, "number") !== undefined };
-  }
-
   applyStyle(patch: StylePatch): void {
     const sel = document.getSelection();
     if (!sel || sel.rangeCount === 0) return;
@@ -1864,10 +1859,9 @@ export class DocEditor {
         // 本来就不在列表里的段落什么都不写。
         if (paragraph.numPr && paragraph.numPr.numId !== 0) paragraph.numPr = { numId: 0, ilvl: paragraph.numPr.ilvl };
       } else {
-        const numId = listNumId(this.doc, patch.list);
-        // The toolbar only offers a shape the document can name, so a file with no such definition is left alone
-        // rather than having its numbering cleared.
-        if (numId !== undefined) paragraph.numPr = { numId, ilvl: paragraph.numPr?.ilvl ?? 0 };
+        // WPS lets this click through on a page that has no numbering part at all, so the definition is the
+        // document's own when it names the shape and the model's when it does not (`ensureListNumbering`).
+        paragraph.numPr = { numId: this.doc.ensureListNumbering(patch.list), ilvl: paragraph.numPr?.ilvl ?? 0 };
       }
     }
     // The paragraph's `w:pPr` travels as text, so the child these two buttons own moves with them.
@@ -2926,15 +2920,6 @@ function startsAt(spans: { paragraph: Paragraph; length: number }[]): (at: numbe
 
 function sameList<T>(a: T[], b: T[]): boolean {
   return a.length === b.length && a.every((x, i) => x === b[i]);
-}
-
-/** Reuses the document's own numbering definitions; there is nothing to invent one from. */
-function listNumId(doc: WordDocument, kind: "bullet" | "number" | "none"): number | undefined {
-  if (kind === "none") return undefined;
-  for (const entry of doc.numberingTable()) {
-    if (listKind(doc, entry.numId) === kind) return entry.numId;
-  }
-  return undefined;
 }
 
 /** Cuts a run list at a flat caret offset, keeping styles on both sides. */

@@ -875,6 +875,26 @@ export interface NumberLevel {
   sizePt?: number;
 }
 
+/**
+ * The definition `ensureListNumbering` writes when a file names neither shape. Both marks are ordinary characters,
+ * not private-use codepoints: the corpus's own bullets are PUA glyphs whose font the level states (Wingdings 158,
+ * Symbol 6 of the 170 bullet levels, `.scratch/sym-count.ts`), and an invented definition carries no such font, so
+ * a codepoint would draw tofu. `%1.` is the ten-digit shape the same probe saw on 24 of the decimal levels.
+ */
+const LIST_SHAPE: Record<"bullet" | "number", { numFmt: string; lvlText: string }> = {
+  bullet: { numFmt: "bullet", lvlText: "•" },
+  number: { numFmt: "decimal", lvlText: "%1." },
+};
+
+/** One list definition a save owes `word/numbering.xml`, with the ids it was handed. */
+export interface ListAddition {
+  kind: "bullet" | "number";
+  numId: number;
+  abstractId: number;
+  lvlText: string;
+  numFmt: string;
+}
+
 const TWIPS_PER_PX = 15;
 export const twipsToPx = (tw: number): number => tw / TWIPS_PER_PX;
 
@@ -1403,6 +1423,11 @@ export class WordDocument {
   /** Resolved `w:next` per style id, the way `nextStyleOf` walks it. See §17.7.2.24. */
   private nextMemo = new Map<string, string | undefined>();
   private numbering = new Map<number, NumberLevel[]>();
+  /**
+   * The list definitions this document *did not come with*, keyed by the `w:numId` they were given. An id is only
+   * ever handed out here, so a paragraph that cites one of these is asking for a definition the file has to grow.
+   */
+  private inventedNumbers = new Map<number, { kind: "bullet" | "number"; abstractId: number }>();
   private media = new Map<string, string>();
   private pkg?: OpcPackage;
   private hyperlinks = new Map<string, string>();
@@ -2147,6 +2172,70 @@ export class WordDocument {
   /** Numbering definitions by id, for a writer that has to regenerate word/numbering.xml. */
   numberingTable(): { numId: number; levels: NumberLevel[] }[] {
     return [...this.numbering].map(([numId, levels]) => ({ numId, levels }));
+  }
+
+  /**
+   * The numbering a 「项目符号」/「1. 编号」 click needs: the file's own definition when it names *that* shape,
+   * one written here when it does not.
+   *
+   * Reusing the document's definitions was the whole strategy before, and the numbers say what that bought
+   * (`.scratch/list-availability-audience.ts`, 86 WPS-written documents): 项目符号 had nothing to point at in
+   * **80 of 86** files and 编号 in **48 of 86** — 47 carry no `word/numbering.xml` at all, which is also the shape
+   * of 文件 → 新建. In the 38 files where 编号 did answer, the id picked was the first one whose level 0 was not a
+   * bullet, and in **29 of those 38** that level says `w:numFmt val="chineseCounting"` — the button labelled 1.
+   * drew 一、. So the pick is now exact (`decimal` for 编号), and a file that names neither shape gets a definition
+   * instead of a grey button, the way WPS writes one when you click on a blank page.
+   *
+   * What gets invented is the core the corpus really does state for a level: `w:start`, `w:numFmt`, `w:lvlText`,
+   * `w:lvlJc` — all five shapes counted in column D of that probe carry those four, in §17.4's order. What is
+   * deliberately *not* invented is `w:ind` and `w:suff`: those are a layout claim, and what WPS puts in a new
+   * document's own definition is **未取证**.
+   */
+  ensureListNumbering(kind: "bullet" | "number"): number {
+    const want = LIST_SHAPE[kind].numFmt;
+    for (const [numId, levels] of this.numbering) {
+      if (this.inventedNumbers.has(numId)) continue;
+      if (levels[0]?.numFmt === want) return numId;
+    }
+    for (const [numId, held] of this.inventedNumbers) if (held.kind === kind) return numId;
+    const ids = this.nextListIds();
+    this.inventedNumbers.set(ids.numId, { kind, abstractId: ids.abstractId });
+    this.numbering.set(ids.numId, [{ ...LIST_SHAPE[kind], start: 1, ilvl: 0 }]);
+    return ids.numId;
+  }
+
+  /** Whether `word/numbering.xml` owes new bytes: only definitions handed out above make it dirty. */
+  listDirty(): boolean {
+    return this.inventedNumbers.size > 0;
+  }
+
+  /** The definitions to splice into (or to start) `word/numbering.xml`, oldest first. */
+  listAdditions(): ListAddition[] {
+    return [...this.inventedNumbers].map(([numId, held]) => ({
+      kind: held.kind,
+      numId,
+      abstractId: held.abstractId,
+      lvlText: LIST_SHAPE[held.kind].lvlText,
+      numFmt: LIST_SHAPE[held.kind].numFmt,
+    }));
+  }
+
+  /**
+   * Ids nothing in this package has used yet. Both accounts are read: the model's own map for `w:num`, and the
+   * part's bytes for `w:abstractNumId`, because the model keeps levels, not the ids the file numbered them with.
+   */
+  private nextListIds(): { numId: number; abstractId: number } {
+    const raw = this.pkg ? new TextDecoder().decode(this.pkg.bytes("word/numbering.xml") ?? new Uint8Array()) : "";
+    // Either spelling of an id counts: `<w:num w:numId="1">` puts it on the element, `<w:numId w:val="1"/>` puts it
+    // on a child, and the prefix is whatever the part declared. A name that merely *starts* with the same letters
+    // (`w:numIdMacAtCleanup`) must not read as one, so `=` or the part's own `val` attribute has to follow.
+    const ids = (name: string): number[] =>
+      [...raw.matchAll(new RegExp(`(?:[\\w-]+:)?${name}(?:="(-?\\d+)"|\\s+(?:[\\w-]+:)?val="(-?\\d+)")`, "g"))].map(
+        (m) => Number(m[1] ?? m[2]),
+      );
+    const numId = Math.max(0, ...this.numbering.keys(), ...ids("numId"));
+    const abstractId = Math.max(0, ...[...this.inventedNumbers.values()].map((h) => h.abstractId), ...ids("abstractNumId"));
+    return { numId: numId + 1, abstractId: abstractId + 1 };
   }
 
   /** Referenced style definitions, for a writer that has to regenerate word/styles.xml. */

@@ -4,6 +4,7 @@ import { renderWord } from "../src/core/render.js";
 import { writeDocx } from "../src/core/write-docx.js";
 import { OpcPackage, text } from "../src/core/opc.js";
 import { NUMBERING, makeNumberingDocx, numPr, numberingStyles } from "./helpers/make-numbering.js";
+import { makeChainDocx } from "./helpers/make-paragraph.js";
 
 /**
  * What a numbered paragraph draws. Three obligations, each measured over the 86 WPS-written documents before
@@ -552,5 +553,186 @@ describe("那颗符号的颜色回退：级没点色就用段落标记自己解�
     // 没写 w:color 的段落，重拼也不给它添一个。
     const bare = open(makeNumberingDocx([{ pPr: numPr(11, 0), text: "干净" }]));
     expect(pPrOf(saved(bare), "干净")).not.toContain("<w:color");
+  });
+});
+
+describe("列表按钮在没有编号定义的文档上：定义由模型补，部件由保存写出", () => {
+  const NS_W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+  const NS_R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+  const CT_NUM = "application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml";
+  const pack = (bytes: Uint8Array): OpcPackage => OpcPackage.from(bytes);
+  /** The part when this package has one, "" when it never did — the 47-of-86 shape is a real subject here. */
+  const numberingOrNull = (bytes: Uint8Array): string => {
+    const raw = pack(bytes).bytes("word/numbering.xml");
+    return raw ? text(raw) : "";
+  };
+  const relsOf = (bytes: Uint8Array): string => text(pack(bytes).bytes("word/_rels/document.xml.rels")!);
+  const typesOf = (bytes: Uint8Array): string => text(pack(bytes).bytes("[Content_Types].xml")!);
+  const numberingRels = (bytes: Uint8Array): number => (relsOf(bytes).match(new RegExp(`Type="${NS_R}/numbering"`, "g")) ?? []).length;
+
+  /** A document with no `word/numbering.xml` at all: 47 of the 86 corpus files, and every 文件 → 新建. */
+  const bare = (...texts: string[]): WordDocument => open(makeChainDocx([], texts.map((t) => ({ text: t }))));
+  /** What the ribbon's 「• 符号」/「1. 编号」 click does to the model (`setParagraph`'s list branch, slots and all). */
+  const click = (doc: WordDocument, needle: string, kind: "bullet" | "number"): number => {
+    const paragraph = byText(doc, needle);
+    const numId = doc.ensureListNumbering(kind);
+    paragraph.numPr = { numId, ilvl: paragraph.numPr?.ilvl ?? 0 };
+    syncParaSlots(paragraph);
+    return numId;
+  };
+
+  /** A level this model reads only partly, in the shapes the files really write beside the four it keeps. */
+  const WITH_EXTRAS = `<w:numbering xmlns:w="${NS_W}">
+<w:numPicBullet w:numPicBulletId="0"><w:pict><v:shape xmlns:v="urn:schemas-microsoft-com:vml" id="x" style="width:1pt"><v:fill xmlns:o="urn:schemas-microsoft-com:office:office" o:relid="rId6"/></v:shape></w:pict></w:numPicBullet>
+<w:abstractNum w:abstractNumId="0"><w:nsid w:val="12345678"/><w:multiLevelType w:val="hybridMultilevel"/><w:tmpl w:val="ABCDEF"/>
+<w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="chineseCounting"/><w:lvlText w:val="%1、"/><w:suff w:val="nothing"/><w:lvlJc w:val="left"/><w:pPr><w:tabs><w:tab w:val="left" w:pos="720"/></w:tabs></w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/><w:bCs/></w:rPr></w:lvl>
+<w:lvl w:ilvl="1"><w:numFmt w:val="none"/><w:lvlText w:val=""/></w:lvl>
+</w:abstractNum>
+<w:num w:numId="1" w:numIdMacAtCleanup="902"><w:abstractNumId w:val="0"/><w:lvlOverride w:ilvl="0"><w:startOverride w:val="5"/></w:lvlOverride></w:num>
+</w:numbering>`;
+
+  it("补出的项目符号定义：页面画得出那颗点，保存把部件、关系与内容类型一起新建", () => {
+    const doc = bare("第一句", "第二句");
+    expect(numberingOrNull(makeChainDocx([], [{ text: "x" }]))).toBe("");
+    const numId = click(doc, "第一句", "bullet");
+    expect(doc.levelOf(numId, 0)).toMatchObject({ numFmt: "bullet", lvlText: "•", start: 1, ilvl: 0 });
+    expect(drawn(doc, "第一句")).toBe("•");
+    expect(drawn(doc, "第二句")).toBe("");
+    expect(doc.edited).toBe(true);
+
+    const out = writeDocx(doc);
+    const num = numberingOrNull(out);
+    expect(num).toContain(`<w:abstractNum w:abstractNumId="${doc.listAdditions()[0].abstractId}">`);
+    expect(num).toContain(`<w:numFmt w:val="bullet"/>`);
+    expect(num).toContain(`<w:lvlText w:val="•"/>`);
+    expect(num).toContain(`<w:num w:numId="${numId}"><w:abstractNumId w:val="${doc.listAdditions()[0].abstractId}"/></w:num>`);
+    expect(numberingRels(out)).toBe(1);
+    expect(relsOf(out)).toContain(`Type="${NS_R}/numbering" Target="numbering.xml"`);
+    expect(typesOf(out)).toContain(`<Override PartName="/word/numbering.xml" ContentType="${CT_NUM}"/>`);
+
+    // 往返：下一次打开，那颗点指的是件里真有的定义，不是页面兜底画出来的。
+    const back = open(out);
+    expect(back.levelOf(numId, 0)).toMatchObject({ numFmt: "bullet", lvlText: "•" });
+    expect(drawn(back, "第一句")).toBe("•");
+  });
+
+  it("补出的编号是十进制那一条：画的是 1. 而不是文件兜底那颗点", () => {
+    const doc = bare("一", "二");
+    const numId = click(doc, "一", "number");
+    click(doc, "二", "number");
+    // 同一个 numId 的两项连着数：补的定义只有一条。
+    expect(drawn(doc, "一")).toBe("1.");
+    expect(drawn(doc, "二")).toBe("2.");
+    const back = open(writeDocx(doc));
+    expect(back.levelOf(numId, 0)).toMatchObject({ numFmt: "decimal", lvlText: "%1." });
+    expect(drawn(back, "一")).toBe("1.");
+  });
+
+  it("文件自己已经有 bullet 定义：用那一条，一个字节都不补", () => {
+    const doc = open(makeNumberingDocx([{ pPr: numPr(1, 0), text: "中文项" }]));
+    const numId = doc.ensureListNumbering("bullet");
+    expect(doc.levelOf(numId, 0)?.numFmt).toBe("bullet");
+    expect(doc.listDirty()).toBe(false);
+    expect(doc.listAdditions()).toEqual([]);
+    // 没点列表、只动了正文：部件逐字节照旧。
+    doc.blocks.push({ kind: "paragraph", inlines: [{ text: "补一行" }] });
+    const src = makeNumberingDocx([{ pPr: numPr(1, 0), text: "中文项" }]);
+    expect(numberingOrNull(writeDocx(doc))).toBe(numberingOrNull(src));
+  });
+
+  it(`文件自己已经有 decimal 定义：「1. 编号」借那一条，件里的模板说什么就画什么`, () => {
+    // 精确匹配 numFmt 换掉的是「第一条非 bullet」那条老判断：夹具里 numId 3 的级写的是 `%1`（不带点），
+    // 语料 205 个 decimal 级有 121 个就是这个形状。按钮写着 1.，借来的定义却画 1——**借件自己的定义**这一步过了，
+    // 那颗点究竟该由按钮补还是由件说，WPS 真机未取证。
+    const src = makeNumberingDocx([{ pPr: numPr(1, 0), text: "中文项" }]);
+    const doc = open(src);
+    const numId = doc.ensureListNumbering("number");
+    expect(numId).toBe(3);
+    expect(doc.levelOf(numId, 0)).toMatchObject({ numFmt: "decimal", lvlText: "%1", start: 1 });
+    expect(doc.listDirty()).toBe(false);
+    expect(doc.listAdditions()).toEqual([]);
+    byText(doc, "中文项").numPr = { numId, ilvl: 0 };
+    syncParaSlots(byText(doc, "中文项"));
+    expect(drawn(doc, "中文项")).toBe("1");
+    // 部件一个字节不补：还是原件那份。
+    expect(numberingOrNull(writeDocx(doc))).toBe(numberingOrNull(src));
+    expect(open(writeDocx(doc)).levelOf(numId, 0)?.lvlText).toBe("%1");
+  });
+
+  it(`只有 chineseCounting 的文档：「1. 编号」不借它，另立一条 decimal`, () => {
+    // 语料实测 38 份能按下去的文档里 29 份的第一条非 bullet 定义是 `chineseCounting`：按钮写着 1.，画出来是一、。
+    const doc = open(makeNumberingDocx([{ pPr: numPr(1, 0), text: "中文项" }], WITH_EXTRAS));
+    const numId = doc.ensureListNumbering("number");
+    expect(numId).not.toBe(1);
+    expect(doc.levelOf(1, 0)?.numFmt).toBe("chineseCounting");
+    expect(doc.levelOf(numId, 0)).toMatchObject({ numFmt: "decimal", lvlText: "%1." });
+    byText(doc, "中文项").numPr = { numId, ilvl: 0 };
+    expect(drawn(doc, "中文项")).toBe("1.");
+  });
+
+  it("新定义接在原有字节后面：件里未建模的孩子按原件带回，abstractNum 排在 num 之前", () => {
+    const src = makeNumberingDocx([{ pPr: numPr(1, 0), text: "中文项" }], WITH_EXTRAS);
+    const doc = open(src);
+    const numId = click(doc, "中文项", "bullet");
+    const num = numberingOrNull(writeDocx(doc));
+    // 模型不读的那些一个不动：`w:numPicBullet` 整块、级上的 `w:suff`/`w:tabs`/`w:bCs`、`w:lvlOverride`，
+    // 以及件自己写的 `w:nsid`/`w:tmpl`。
+    expect(num).toContain(WITH_EXTRAS.slice(WITH_EXTRAS.indexOf("<w:numPicBullet"), WITH_EXTRAS.indexOf("<w:abstractNum")));
+    expect(num).toContain(`<w:nsid w:val="12345678"/><w:multiLevelType w:val="hybridMultilevel"/><w:tmpl w:val="ABCDEF"/>`);
+    expect(num).toContain(`<w:suff w:val="nothing"/>`);
+    expect(num).toContain(`<w:tabs><w:tab w:val="left" w:pos="720"/></w:tabs>`);
+    expect(num).toContain(`<w:rFonts w:hint="eastAsia"/><w:bCs/>`);
+    expect(num).toContain(`<w:lvl w:ilvl="1"><w:numFmt w:val="none"/><w:lvlText w:val=""/></w:lvl>`);
+    expect(num).toContain(`<w:num w:numId="1" w:numIdMacAtCleanup="902"><w:abstractNumId w:val="0"/><w:lvlOverride w:ilvl="0"><w:startOverride w:val="5"/></w:lvlOverride></w:num>`);
+    // §17.4 的那一条顺序：所有 abstractNum 在所有 num 之前。
+    expect(num.indexOf(`<w:num w:numId="${numId}"`)).toBeGreaterThan(num.indexOf(`<w:abstractNum w:abstractNumId="1">`));
+    expect(num.indexOf(`<w:abstractNum w:abstractNumId="1">`)).toBeLessThan(num.indexOf(`<w:num w:numId="1"`));
+    // 关系不重复：件本来就在，来源已经许过一次。
+    expect(numberingRels(writeDocx(doc))).toBe(1);
+    // 往返后两套定义都读得回来。
+    const back = open(writeDocx(doc));
+    expect(back.levelOf(1, 0)?.numFmt).toBe("chineseCounting");
+    expect(back.levelOf(numId, 0)).toMatchObject({ numFmt: "bullet", lvlText: "•" });
+    expect(drawn(back, "中文项")).toBe("•");
+  });
+
+  it("id 取现有最大值之后：件里写到 902 的 `w:numIdMacAtCleanup` 不算 id，`w:abstractNumId` 的孩子拼法算", () => {
+    // 撞车是静默的：两条 `w:num` 同一个 numId，读者取哪条看运气。
+    const doc = open(makeNumberingDocx([{ pPr: numPr(1, 0), text: "中文项" }], WITH_EXTRAS));
+    const bullet = doc.ensureListNumbering("bullet");
+    const number = doc.ensureListNumbering("number");
+    expect([bullet, number]).toEqual([2, 3]);
+    expect(doc.listAdditions().map((a) => a.abstractId)).toEqual([1, 2]);
+    expect(doc.listAdditions().map((a) => a.kind)).toEqual(["bullet", "number"]);
+  });
+
+  it("同一类只补一条：两次点击共用一份定义", () => {
+    const doc = bare("甲", "乙", "丙");
+    const a = click(doc, "甲", "bullet");
+    const b = click(doc, "乙", "bullet");
+    expect(b).toBe(a);
+    expect(doc.listAdditions().length).toBe(1);
+    click(doc, "丙", "number");
+    expect(doc.listAdditions().length).toBe(2);
+    const num = numberingOrNull(writeDocx(doc));
+    expect((num.match(/<w:abstractNum /g) ?? []).length).toBe(2);
+    expect((num.match(/<w:num /g) ?? []).length).toBe(2);
+  });
+
+  it("没点列表的文档不新建部件，也不添关系与内容类型（无中生有）", () => {
+    const plain = bare("一句");
+    plain.blocks.push({ kind: "paragraph", inlines: [{ text: "补一行" }] });
+    expect(plain.edited).toBe(true);
+    const out = writeDocx(plain);
+    expect(numberingOrNull(out)).toBe("");
+    expect(numberingRels(out)).toBe(0);
+    expect(typesOf(out)).not.toContain("/word/numbering.xml");
+
+    const fixture = makeNumberingDocx([{ pPr: numPr(1, 0), text: "中文项" }], WITH_EXTRAS);
+    const untouched = open(fixture);
+    untouched.blocks.push({ kind: "paragraph", inlines: [{ text: "补一行" }] });
+    const kept = writeDocx(untouched);
+    expect(numberingOrNull(kept)).toBe(numberingOrNull(fixture));
+    expect(numberingRels(kept)).toBe(1);
   });
 });

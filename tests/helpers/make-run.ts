@@ -217,6 +217,10 @@ export function makeTextFillDocx(): Uint8Array {
  * the 字号 box lists — 21pt (五号) being the common one, so every stop there used to answer 16
  * (`<w:sz w:val="42"/>`). `darkRed` is the shape no WPS file in hand has: a colour name the palette cannot
  * paint, kept only so the box's third state — 文档说了、控件列不出 — has a case.
+ *
+ * The table is not decoration: of the corpus's 39,751 caret stops, 27,996 sit in a cell and 21,439 of the
+ * paragraphs inside cells state their own `w:jc`, so the box's reading has to survive the table's walls
+ * (`.scratch/align-three-state.ts`, `.scratch/cell-jc-audience.ts`).
  */
 export function makeRibbonEchoDocx(): Uint8Array {
   const document = `<w:p><w:r><w:rPr><w:highlight w:val="yellow"/></w:rPr><w:t>黄底的一句</w:t></w:r></w:p>
@@ -225,6 +229,10 @@ export function makeRibbonEchoDocx(): Uint8Array {
 <w:p><w:r><w:t>什么都没点的一句</w:t></w:r></w:p>
 <w:p><w:r><w:rPr><w:sz w:val="42"/><w:szCs w:val="42"/></w:rPr><w:t>二十一磅的一句</w:t></w:r></w:p>
 <w:p><w:r><w:rPr><w:b/><w:sz w:val="24"/><w:kern w:val="28"/></w:rPr><w:t>粗而十二磅</w:t></w:r></w:p>
-<w:p><w:r><w:rPr><w:color w:val="C00000"/><w:u w:val="single"/></w:rPr><w:t>红而带线</w:t></w:r></w:p>`;
+<w:p><w:r><w:rPr><w:color w:val="C00000"/><w:u w:val="single"/></w:rPr><w:t>红而带线</w:t></w:r></w:p>
+<w:tbl><w:tblGrid><w:gridCol w:w="2400"/></w:tblGrid><w:tr><w:tc>
+<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/><w:highlight w:val="yellow"/><w:sz w:val="36"/></w:rPr><w:t>格子里居中而黄底</w:t></w:r></w:p>
+<w:p><w:r><w:t>格子里什么都没点</w:t></w:r></w:p>
+</w:tc></w:tr></w:tbl>`;
   return pack(document);
 }

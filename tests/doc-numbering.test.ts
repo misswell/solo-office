@@ -736,3 +736,82 @@ describe("列表按钮在没有编号定义的文档上：定义由模型补，�
     expect(numberingRels(kept)).toBe(1);
   });
 });
+
+describe("列表层级：Tab／Shift+Tab 那一族改的是 w:ilvl，而哪一级走得进去由件说了算", () => {
+  const numberingOf = (bytes: Uint8Array): string => {
+    const raw = OpcPackage.from(bytes).bytes("word/numbering.xml");
+    return raw ? text(raw) : "";
+  };
+  /**
+   * 生产里 `shiftListLevel` 的那一步，剥掉光标与重绘：写完 `numPr` 必须让 `syncParaSlots` 把它落进段落带走的那块
+   * 属性，否则段落原本带着自己的 `w:pPr` 时，改动根本进不了字节（这一条 #43 立的法则）。
+   * `levelOf(...) === undefined` 是它的闸门：**件没写过的那一级不走进去**——页面不能替件编一条它没写的 `w:lvl`。
+   */
+  const toLevel = (doc: WordDocument, needle: string, ilvl: number): boolean => {
+    const paragraph = byText(doc, needle);
+    const was = paragraph.numPr;
+    if (!was || was.numId === 0 || doc.levelOf(was.numId, ilvl) === undefined) return false;
+    paragraph.numPr = { numId: was.numId, ilvl };
+    syncParaSlots(paragraph);
+    return true;
+  };
+
+  it("件里写了的第 1 级：画它自己那颗符号，缩进跟着层级走", () => {
+    const doc = open(makeNumberingDocx([{ pPr: numPr(6, 0), text: "甲" }, { pPr: numPr(6, 1), text: "乙" }]));
+    expect(doc.levelOf(6, 1)).toMatchObject({ numFmt: "upperLetter", lvlText: "(%2)", start: 1 });
+    expect(drawn(doc, "甲")).toBe("a)");
+    expect(drawn(doc, "乙")).toBe("(A)");
+    expect(propOf(doc, "乙", "padding-left")).toBe("32px");
+    expect(propOf(doc, "甲", "padding-left")).toBe("8px");
+  });
+
+  it("段落降到件里那条第 1 级：正文写下 w:ilvl，编号部件一个字节不动", () => {
+    const fixture = makeNumberingDocx([{ pPr: numPr(6, 0), text: "甲" }]);
+    const doc = open(fixture);
+    expect(toLevel(doc, "甲", 1)).toBe(true);
+    expect(drawn(doc, "甲")).toBe("(A)");
+    const out = writeDocx(doc);
+    expect(numberingOf(out)).toBe(numberingOf(fixture));
+    expect(paraXml(part(out), "甲")).toContain(`<w:numPr><w:ilvl w:val="1"/><w:numId w:val="6"/></w:numPr>`);
+    const back = open(out);
+    expect(byText(back, "甲").numPr).toEqual({ numId: 6, ilvl: 1 });
+    expect(drawn(back, "甲")).toBe("(A)");
+  });
+
+  it("件里没写第 2 级：那一步拒绝，层级与正文都不动", () => {
+    const doc = open(makeNumberingDocx([{ pPr: numPr(6, 0), text: "甲" }]));
+    expect(doc.levelOf(6, 2)).toBeUndefined();
+    expect(toLevel(doc, "甲", 2)).toBe(false);
+    expect(byText(doc, "甲").numPr).toEqual({ numId: 6, ilvl: 0 });
+  });
+
+  it("新纸上由模型补出的那条只有第 0 级：这一条命令在那张纸上没有级可去", () => {
+    const doc = open(makeChainDocx([], [{ text: "甲" }]));
+    const numId = doc.ensureListNumbering("bullet");
+    byText(doc, "甲").numPr = { numId, ilvl: 0 };
+    syncParaSlots(byText(doc, "甲"));
+    expect(doc.levelOf(numId, 0)).toMatchObject({ numFmt: "bullet" });
+    expect(doc.levelOf(numId, 1)).toBeUndefined();
+    expect(toLevel(doc, "甲", 1)).toBe(false);
+    expect(byText(doc, "甲").numPr).toEqual({ numId, ilvl: 0 });
+    // 拒绝的那一步也不该往件里补一条它没写的级。
+    expect(numberingOf(writeDocx(doc))).not.toContain(`<w:lvl w:ilvl="1">`);
+  });
+
+  it("编号从样式借来的段落在第 1 级：升到第 0 级由段落自己写下这一笔", () => {
+    const doc = open(makeNumberingDocx([{ pPr: `<w:pStyle w:val="Numbered"/>`, text: "借的" }]));
+    expect(byText(doc, "借的").numPr).toEqual({ numId: 1, ilvl: 1 });
+    expect(drawn(doc, "借的")).toBe("（一）");
+    expect(toLevel(doc, "借的", 0)).toBe(true);
+    expect(drawn(doc, "借的")).toBe("一、");
+    expect(paraXml(saved(doc), "借的")).toContain(`<w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr>`);
+  });
+
+  it("`w:numId w:val=\"0\"` 那一段带着 ilvl 也不动：它根本不在列表里", () => {
+    const doc = open(makeNumberingDocx([{ pPr: `<w:numPr><w:ilvl w:val="0"/><w:numId w:val="0"/></w:numPr>`, text: "取消" }]));
+    expect(byText(doc, "取消").numPr).toEqual({ numId: 0, ilvl: 0 });
+    expect(drawn(doc, "取消")).toBe("");
+    expect(toLevel(doc, "取消", 1)).toBe(false);
+    expect(byText(doc, "取消").numPr).toEqual({ numId: 0, ilvl: 0 });
+  });
+});

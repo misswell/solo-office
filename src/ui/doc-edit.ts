@@ -730,8 +730,18 @@ export class DocEditor {
     page.addEventListener("keydown", (e) => {
       if (e.isComposing || this.composing || e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key !== "Tab") return;
+      const dir = e.shiftKey ? -1 : 1;
+      // 列表项里 Tab 那一族说的是层级：普通 Tab 只在段落开头降一级（多缩一层），Shift+Tab 随时升一级。
+      // 表格里不碰——那面 Tab 是走格子的事。而那一级文件自己没说就什么都不动：`w:lvl` 是文件写的形状，
+      // 页面不能替它编一条它没写的（补出的那条只有第 0 级，所以在一张新纸上 Tab 仍是插入制表符）。
+      const caret = this.caretPath();
+      const atStart = dir < 0 || (document.getSelection()?.isCollapsed === true && caret?.offset === 0);
+      if (atStart && !this.tableAt(caret) && this.shiftListLevel(dir)) {
+        e.preventDefault();
+        return;
+      }
       e.preventDefault();
-      this.snapshot(this.caretPath());
+      this.snapshot(caret);
       document.execCommand("insertHTML", false, '<span class="tab"></span>');
       this.mutated();
     });
@@ -1875,6 +1885,33 @@ export class DocEditor {
     this.render();
     if (caret) this.setCaret(this.clamp(caret));
     this.hooks.changed();
+  }
+
+  /**
+   * WPS 列表项里 Tab／Shift+Tab 改的那个数：`w:numPr/w:ilvl`。只在**这一级由定义自己说过**时动
+   * （`w:lvl` 是文件的形状，页面不能凭空造一条），也不动 `w:numId w:val="0"` 那种取消——那一段根本不在列表里。
+   * 段落从样式链借来的那一条也算它的（读取时已经落在 `paragraph.numPr` 上），改完由段落自己写下这一笔。
+   */
+  shiftListLevel(dir: 1 | -1): boolean {
+    const path = this.caretPath()?.path;
+    const paragraph = path ? this.paragraphAt(path) : undefined;
+    const numPr = paragraph?.numPr;
+    if (!paragraph || !numPr || numPr.numId === 0) return false;
+    const to = numPr.ilvl + dir;
+    if (to < 0 || this.doc.levelOf(numPr.numId, to) === undefined) return false;
+    this.snapshot(this.caretPath());
+    const was = paraStyleOf(paragraph);
+    const wasSlots = paragraph.pPrSlots;
+    paragraph.numPr = { numId: numPr.numId, ilvl: to };
+    syncParaSlots(paragraph);
+    if (this.trackRevisions && JSON.stringify(was) !== JSON.stringify(paraStyleOf(paragraph))) {
+      paragraph.revFormat = this.signParagraphRevision(paragraph, was, wasSlots);
+    }
+    const caret = this.caretPath();
+    this.render();
+    if (caret) this.setCaret(this.clamp(caret));
+    this.hooks.changed();
+    return true;
   }
 
   // -------------------------------------------------------------- revisions

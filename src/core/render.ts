@@ -277,7 +277,13 @@ function renderParagraph(p: Paragraph, doc: WordDocument, counters: Map<string, 
     // codepoint in `w:lvlText`, and that codepoint only has a shape under the font its `w:rPr` points at.
     // Drawn in the paragraph's font it is tofu, and the list loses the one thing that made it that bullet.
     const mark = esc(numberText(doc, counters, numId, ilvl, seen + 1, level));
-    prefix = `<span class="bullet"${level?.font ? ` style="font-family:${esc(level.font)}"` : ""}>${mark}</span>`;
+    // Font and size are both the mark's own character properties (§17.3.1.12: the symbol is a run of its own),
+    // and both travel as a declaration on the mark's span only — never on the paragraph, which the editor reads
+    // back through `inlinesOf`; that skips `.bullet`, so a level's size can never come back as body formatting.
+    const markStyle: string[] = [];
+    if (level?.font) markStyle.push(`font-family:${esc(level.font)}`);
+    if (level?.sizePt) markStyle.push(`font-size:${level.sizePt}pt`);
+    prefix = `<span class="bullet"${markStyle.length ? ` style="${markStyle.join(";")}"` : ""}>${mark}</span>`;
     style.push(`padding-left:${8 + ilvl * 24}px`);
   }
   const body = wordRuns(p.inlines, state) || "&nbsp;";

@@ -24,11 +24,17 @@ const CT_NUM = "application/vnd.openxmlformats-officedocument.wordprocessingml.n
  * `w:lvlJc` and `w:pPr/w:ind` inside a level are the files' own extras; this model reads only the left indent
  * out of them (`indent`), and nothing here draws from them.
  *
- * The last two abstract numbers are the corpus's bullet spellings: `numId` 7 puts the mark in `w:lvlText` as a
+ * The last four abstract numbers are the corpus's bullet spellings: `numId` 7 puts the mark in `w:lvlText` as a
  * private-use codepoint (164 of the corpus's 170 `bullet` levels do) and names the font that codepoint belongs
  * to in the level's own `w:rPr/w:rFonts` (Wingdings 158, Symbol 6, other 6), while `numId` 8 states no font at
  * all. `w:sym` is in none of the 86 files (`.scratch/sym-count.ts`), so this is the shape a bullet has to
  * survive here — drawn in the paragraph's own font, the codepoint is tofu.
+ *
+ * `numId` 9 and 10 add the size the level states for its own mark (`w:lvl/w:rPr/w:sz`). Of the 42 corpus
+ * paragraphs that sit on a fonted bullet level, every one of them sits on a level that also writes a `w:sz`, and
+ * in all 42 that size is *smaller* than the paragraph's own text resolves to; the attribute set of those levels
+ * is `w:ascii + w:hAnsi + w:hint` (`numId` 9 spells it the same way), and 9 more levels carry a `w:sz` with no
+ * font at all — the shape of `numId` 10 (`.scratch/num-level-rpr.ts`).
  */
 const WINGDINGS_MARK = String.fromCharCode(0xf0a7);
 export const NUMBERING = `<w:numbering xmlns:w="${NS_W}">
@@ -61,6 +67,12 @@ export const NUMBERING = `<w:numbering xmlns:w="${NS_W}">
 <w:abstractNum w:abstractNumId="7">
 <w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="${WINGDINGS_MARK}"/></w:lvl>
 </w:abstractNum>
+<w:abstractNum w:abstractNumId="8">
+<w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="${WINGDINGS_MARK}"/><w:rPr><w:rFonts w:ascii="Wingdings" w:hAnsi="Wingdings" w:hint="eastAsia"/><w:sz w:val="16"/></w:rPr></w:lvl>
+</w:abstractNum>
+<w:abstractNum w:abstractNumId="9">
+<w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/><w:rPr><w:sz w:val="18"/></w:rPr></w:lvl>
+</w:abstractNum>
 <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
 <w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num>
 <w:num w:numId="3"><w:abstractNumId w:val="2"/></w:num>
@@ -69,6 +81,8 @@ export const NUMBERING = `<w:numbering xmlns:w="${NS_W}">
 <w:num w:numId="6"><w:abstractNumId w:val="5"/></w:num>
 <w:num w:numId="7"><w:abstractNumId w:val="6"/></w:num>
 <w:num w:numId="8"><w:abstractNumId w:val="7"/></w:num>
+<w:num w:numId="9"><w:abstractNumId w:val="8"/></w:num>
+<w:num w:numId="10"><w:abstractNumId w:val="9"/></w:num>
 </w:numbering>`;
 
 /**

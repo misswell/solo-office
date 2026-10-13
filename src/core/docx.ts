@@ -811,6 +811,17 @@ export interface NumberLevel {
    * where the shape comes from here.
    */
   font?: string;
+  /**
+   * The size this level names for its own mark, in points (`w:lvl/w:rPr/w:sz` ÷ 2 — the file counts half-points,
+   * the same unit `readRunStyle` converts for body runs). §17.3.1.12 gives the symbol a character run of its own,
+   * so this is the mark's size and not the paragraph's: across the 86 WPS-written documents 42 paragraphs sit on a
+   * level that states one, and in **42 of 42** it is smaller than the size that paragraph's own text resolves to
+   * (5 distinct values over the 68 levels that write it: `.scratch/num-level-rpr.ts`). The other children of that
+   * `w:rPr` were counted in the same pass and left un-modelled on purpose: `w:b`/`w:bCs` appear on 8 used levels and
+   * all 8 agree with the paragraph's own boldness, so drawing them changes no page, while `w:i`, `w:u`, `w:color`,
+   * `w:caps`, `w:strike` and the rest appear on 4–28 levels that **no** paragraph in the corpus lists with them.
+   */
+  sizePt?: number;
 }
 
 const TWIPS_PER_PX = 15;
@@ -1603,6 +1614,7 @@ export class WordDocument {
         key,
         asArray(a.lvl).map((l: any) => {
           const rFonts = asArray(l.rPr?.rFonts)[0];
+          const szHalf = num(l.rPr?.sz?.["@_val"]);
           return {
             numFmt: l.numFmt?.["@_val"] ?? "decimal",
             lvlText: l.lvlText?.["@_val"] ?? "%1.",
@@ -1610,6 +1622,7 @@ export class WordDocument {
             ilvl: num(l["@_ilvl"]),
             indent: num(l.pPr?.ind?.["@_left"]),
             font: rFonts?.["@_ascii"] ?? rFonts?.["@_hAnsi"],
+            sizePt: szHalf === undefined ? undefined : szHalf / 2,
           };
         }),
       );

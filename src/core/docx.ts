@@ -571,7 +571,15 @@ export const BORDER_ORDER = ["top", "start", "left", "bottom", "end", "right", "
 export interface Section {
   pageWidthTwips: number;
   pageHeightTwips: number;
-  margins: { top: number; right: number; bottom: number; left: number };
+  /**
+   * `w:pgMar`. The four body margins are what the page box draws its text column with. `header` and `footer`
+   * are a different measurement: ECMA-376 §17.3.2.13 counts them from the **edge of the paper**, not from the
+   * body, so a band's distance is only meaningful against the page margin it lives inside. `gutter` is extra
+   * width on the binding side, added to the margin it belongs to. All three stay optional: WPS states all
+   * seven attributes on all 115 `w:pgMar` in the 86 real files, but a file that says nothing is not owed a
+   * number this model invented.
+   */
+  margins: { top: number; right: number; bottom: number; left: number; header?: number; footer?: number; gutter?: number };
 }
 
 /**
@@ -3428,14 +3436,22 @@ function sectionGeometry(xml: string): Section {
     const v = a?.[k];
     return v === undefined || v === "" || Number.isNaN(Number(v)) ? d : Number(v);
   };
+  const stated = (a: Record<string, string> | undefined, k: string): number | undefined => {
+    const v = a?.[k];
+    return v === undefined || v === "" || Number.isNaN(Number(v)) ? undefined : Number(v);
+  };
+  const mar = attrs("pgMar");
   return {
     pageWidthTwips: num(attrs("pgSz"), "w", 11906),
     pageHeightTwips: num(attrs("pgSz"), "h", 16838),
     margins: {
-      top: num(attrs("pgMar"), "top", 1440),
-      right: num(attrs("pgMar"), "right", 1440),
-      bottom: num(attrs("pgMar"), "bottom", 1440),
-      left: num(attrs("pgMar"), "left", 1440),
+      top: num(mar, "top", 1440),
+      right: num(mar, "right", 1440),
+      bottom: num(mar, "bottom", 1440),
+      left: num(mar, "left", 1440),
+      header: stated(mar, "header"),
+      footer: stated(mar, "footer"),
+      gutter: stated(mar, "gutter"),
     },
   };
 }

@@ -17,6 +17,8 @@ import {
   makeFooterDocx,
   makeLogoFooterDocx,
   makeHeaderFooterDocx,
+  makeFullPageDistanceDocx,
+  makePageDistanceDocx,
   makeStyledHeaderDocx,
   makeTwoSectionDocx,
   pageFieldRuns,
@@ -721,5 +723,109 @@ describe("docx page fields in a header or footer", () => {
       expect(renderWord(d)).toContain("页脚左边");
       expect(WordDocument.openBytes(makeLogoFooterDocx(PAGE_BOX_RUN)).footer?.editable).toBe(true);
     });
+  });
+});
+
+/**
+ * `w:pgMar` states seven distances, not four (ECMA-376 §17.3.2.13), and all 115 of them in the 86 real files
+ * this machine's WPS wrote state all seven. `w:header` and `w:footer` are measured from the **edge of the
+ * paper**, so they say where a band sits rather than how wide the text column is; `w:gutter` is binding width
+ * added to the margin it belongs to. Reading only four left every file's bands at the stylesheet's fixed gap
+ * and its binding margin nowhere.
+ *
+ * 未取证: WPS' own scrolling view was not observed placing the band inside the margin, and here a band hangs
+ * outside the paper box, so the declared distance can only show as the spacing that separates it from the
+ * text — the numbers read are the file's, the mapping is this renderer's.
+ */
+describe("docx 页眉页脚：w:pgMar 的三个距离", () => {
+  /** One band's own box, which is where its spacing has to appear: the band is a sibling of `.page`. */
+  const band = (html: string, which: "header" | "footer"): string =>
+    new RegExp(`class="hf hf-${which}[^"]*"[^>]*?style="([^"]*)"`).exec(html)?.[1] ?? "";
+  /** The page box's own `style`, which carries the four margins and the binding width. */
+  const page = (html: string): string => /<div class="page" style="([^"]*)"/.exec(html)?.[1] ?? "";
+  const bodyXml = (bytes: Uint8Array): string => text(OpcPackage.from(bytes).bytes("word/document.xml")!);
+
+  it("reads the three distances a section states", () => {
+    const doc = WordDocument.openBytes(makeFullPageDistanceDocx());
+    expect(doc.sections[0]!.margins).toEqual({
+      top: 1440,
+      right: 1440,
+      bottom: 1440,
+      left: 1440,
+      header: 720,
+      footer: 720,
+      gutter: 288,
+    });
+  });
+
+  it("reads them when the section is a paragraph's break", () => {
+    // 18 of the 86 files carry more than one section, and the opening one hangs off a paragraph — the shape
+    // whose geometry a save splices into rather than one it rebuilds.
+    expect(WordDocument.openBytes(makeFullPageDistanceDocx("paragraph")).sections[0]!.margins.header).toBe(720);
+  });
+
+  it("invents nothing for a section that states none", () => {
+    const m = WordDocument.openBytes(makePageDistanceDocx('w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"')).sections[0]!.margins;
+    expect(m.header).toBeUndefined();
+    expect(m.footer).toBeUndefined();
+    expect(m.gutter).toBeUndefined();
+  });
+
+  it("holds the band off the text by the margin it sits in minus its own distance", () => {
+    // `w:header="720"` inside a 2160-twip top margin leaves 1440 twips = 96px; the footer's distance equals
+    // its margin, so nothing separates it from the text. Distinct numbers on both sides, because a swapped
+    // pair or a band measured against the wrong margin still lands somewhere plausible.
+    const html = renderWord(
+      WordDocument.openBytes(makePageDistanceDocx('w:top="2160" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="1440"')),
+    );
+    expect(band(html, "header")).toContain(`;padding-bottom:${twipsToPx(2160 - 720)}px`);
+    expect(band(html, "footer")).toContain(`;padding-top:${twipsToPx(1440 - 1440)}px`);
+  });
+
+  it("never answers a distance past the margin with a negative gap", () => {
+    const html = renderWord(WordDocument.openBytes(makePageDistanceDocx('w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="2160" w:footer="2160"')));
+    expect(band(html, "header")).toContain(";padding-bottom:0px");
+    expect(band(html, "footer")).toContain(";padding-top:0px");
+  });
+
+  it("leaves the stylesheet's gap where the file said nothing", () => {
+    const html = renderWord(WordDocument.openBytes(makePageDistanceDocx('w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"')));
+    expect(band(html, "header")).not.toContain("padding-bottom");
+    expect(band(html, "footer")).not.toContain("padding-top");
+  });
+
+  it("adds the binding width to the left margin the page and the bands draw with", () => {
+    const html = renderWord(WordDocument.openBytes(makePageDistanceDocx('w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:gutter="288"')));
+    const withGutter = `${twipsToPx(1440 + 288)}px`;
+    expect(page(html)).toContain(`--pad-l:${withGutter}`);
+    // The band's text starts at the body's column, so the same width has to reach it.
+    expect(band(html, "header")).toContain("padding-left:var(--pad-l)");
+    expect(band(html, "footer")).toContain("padding-left:var(--pad-l)");
+    // Without a stated gutter nothing is added — the column stays the margin the file wrote.
+    expect(page(renderWord(WordDocument.openBytes(makePageDistanceDocx('w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"'))))).toContain(
+      `--pad-l:${twipsToPx(1440)}px`,
+    );
+  });
+
+  it("hands the three distances back on a save, whichever sectPr stated them", () => {
+    // Every real file's section travels as the bytes it was read from, so a save that dropped one of these
+    // would be a rebuild — which is what the two shapes below pin from both sides.
+    const stated = 'w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="288"';
+    for (const at of ["body", "paragraph"] as const) {
+      const bytes = writeDocx(WordDocument.openBytes(makePageDistanceDocx(stated, at)));
+      expect(bodyXml(bytes)).toContain(`<w:pgMar ${stated}/>`);
+    }
+    // A section that stated none is not owed a set of numbers, either.
+    const bare = writeDocx(WordDocument.openBytes(makePageDistanceDocx('w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"')));
+    expect(bodyXml(bare)).not.toContain("w:header=");
+    expect(bodyXml(bare)).not.toContain("w:gutter=");
+  });
+
+  it("still states them after the header's words are edited and the file saved", () => {
+    const out = edited(makeFullPageDistanceDocx(), ["改过的页眉"]);
+    expect(bodyXml(out)).toContain('w:header="720" w:footer="720" w:gutter="288"');
+    expect(headerOf(out)).toContain("改过的页眉");
+    // Re-read reads the saved file, so the distances are the same on the second open.
+    expect(WordDocument.openBytes(out).sections[0]!.margins.gutter).toBe(288);
   });
 });

@@ -401,7 +401,19 @@ function renderCarried(b: Carried): string {
 export function renderWord(doc: WordDocument): string {
   const sec = doc.sections[0] ?? { pageWidthTwips: 11906, pageHeightTwips: 16838, margins: { top: 1440, right: 1440, bottom: 1440, left: 1440 } };
   const width = twipsToPx(sec.pageWidthTwips);
-  const style = `--page-w:${width}px;--pad-t:${twipsToPx(sec.margins.top)}px;--pad-r:${twipsToPx(sec.margins.right)}px;--pad-b:${twipsToPx(sec.margins.bottom)}px;--pad-l:${twipsToPx(sec.margins.left)}px`;
+  // `w:gutter` is binding width: ECMA-376 §17.3.2.13 adds it to the margin on the binding side, and a section
+  // that says nothing has none. This model holds no RTL section, so the binding side is the left.
+  const gutter = sec.margins.gutter ?? 0;
+  const style = `--page-w:${width}px;--pad-t:${twipsToPx(sec.margins.top)}px;--pad-r:${twipsToPx(sec.margins.right)}px;--pad-b:${twipsToPx(sec.margins.bottom)}px;--pad-l:${twipsToPx(sec.margins.left + gutter)}px`;
+  // The distance a band's text is held from the body's, taken from the section's own `w:header`/`w:footer`.
+  // Those count from the **page edge**, so what separates a band from the body text is the margin it sits in
+  // minus that distance: a header pinned near the edge has a wide gap under it, one pushed down toward the
+  // text has almost none. 未取证: WPS' own scrolling view was not observed placing the band, and here the band
+  // hangs outside the paper box, so the declared distance can only show as spacing rather than as placement
+  // inside the margin. A section that states neither keeps the stylesheet's fixed gap — inventing Word's
+  // docDefaults here would draw a number nobody wrote.
+  const bandGap = (margin: number, distance: number | undefined): number | undefined =>
+    distance === undefined ? undefined : Math.max(0, twipsToPx(margin - distance));
   const hf = (which: "header" | "footer"): string => {
     const area = which === "header" ? doc.header : doc.footer;
     if (!area) return "";
@@ -427,7 +439,9 @@ export function renderWord(doc: WordDocument): string {
     // stylesheet answers with its 794px fallback and a landscape section gets a portrait header — same page,
     // two widths. The horizontal padding is overridden to the section's margins so the band's text starts at
     // the same column as the body's.
-    return `<div class="hf hf-${which}${which === "footer" ? " hf-bottom" : ""}" data-hf="${which}" style="${style};padding-left:var(--pad-l);padding-right:var(--pad-r)" title="${tip}">${paras}${bar}</div>`;
+    const gap = bandGap(which === "header" ? sec.margins.top : sec.margins.bottom, which === "header" ? sec.margins.header : sec.margins.footer);
+    const spacing = gap === undefined ? "" : `;padding-${which === "header" ? "bottom" : "top"}:${gap}px`;
+    return `<div class="hf hf-${which}${which === "footer" ? " hf-bottom" : ""}" data-hf="${which}" style="${style};padding-left:var(--pad-l);padding-right:var(--pad-r)${spacing}" title="${tip}">${paras}${bar}</div>`;
   };
   return `${hf("header")}<div class="page" style="${style}">${renderBlocks(doc.blocks, doc, new Map(), {
     open: new Set(),

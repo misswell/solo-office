@@ -1542,7 +1542,7 @@ export class DocEditor {
     if (!caret || !paragraph) return;
     const { width, height } = await imageSize(url);
     const section = this.doc.sections[0];
-    const usable = section ? twipsToPx(section.pageWidthTwips - section.margins.left - section.margins.right) : 620;
+    const usable = section ? twipsToPx(section.pageWidthTwips - section.margins.left - (section.margins.gutter ?? 0) - section.margins.right) : 620;
     const scale = Math.min(1, usable / Math.max(1, width));
     const w = Math.max(24, Math.round(width * scale));
     const h = Math.max(24, Math.round(height * scale));

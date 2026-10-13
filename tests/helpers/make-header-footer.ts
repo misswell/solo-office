@@ -239,3 +239,49 @@ export function makeBoxWithWordsFooterDocx(box: string): Uint8Array {
   return makeFooterDocx(part);
 }
 
+/**
+ * A file with one header band and one footer band and a `w:pgMar` spelled exactly as the caller writes it, so
+ * the three distances beyond the body margins (`w:header` / `w:footer` / `w:gutter`) can be handed over — or
+ * withheld. WPS states all seven on every one of the 115 `w:pgMar` in the 86 real files, so the stated shape
+ * is the ordinary one; the withheld shape is what a hand-made file looks like, and it must not be answered
+ * with numbers nobody wrote.
+ *
+ * `at` chooses which `sectPr` owns the section: the body's, or the first paragraph's break. Both are places a
+ * distance can be stated, and they travel by different routes on a save — the body's as whole `sectPr` bytes,
+ * the paragraph's inside its `w:pPr`.
+ */
+export function makePageDistanceDocx(mar: string, at: "body" | "paragraph" = "body"): Uint8Array {
+  const section = `<w:sectPr><w:headerReference r:id="rId5" w:type="default"/><w:footerReference r:id="rId6" w:type="default"/>` +
+    `<w:pgSz w:w="11906" w:h="16838"/><w:pgMar ${mar}/></w:sectPr>`;
+  const body =
+    at === "body"
+      ? `<w:p><w:r><w:t>正文</w:t></w:r></w:p>${section}`
+      : `<w:p><w:pPr>${section.replace("<w:sectPr>", '<w:sectPr w:rsidR="00A1">')}</w:pPr><w:r><w:t>正文</w:t></w:r></w:p>`;
+  return zipSync(
+    {
+      "[Content_Types].xml": strToU8(
+        XML_DECL +
+          `<Types xmlns="${NS_CT}"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="${CT_W}"/><Override PartName="/word/header1.xml" ContentType="${CT_HDR}"/><Override PartName="/word/footer1.xml" ContentType="${CT_FTR}"/></Types>`,
+      ),
+      "_rels/.rels": strToU8(
+        XML_DECL + `<Relationships xmlns="${NS_PKG}"><Relationship Id="rId1" Type="${NS_R}/officeDocument" Target="word/document.xml"/></Relationships>`,
+      ),
+      "word/document.xml": strToU8(
+        XML_DECL + `<w:document xmlns:w="${NS_W}" xmlns:r="${NS_R}"><w:body>${body}</w:body></w:document>`,
+      ),
+      "word/_rels/document.xml.rels": strToU8(
+        XML_DECL +
+          `<Relationships xmlns="${NS_PKG}"><Relationship Id="rId5" Type="${NS_R}/header" Target="header1.xml"/><Relationship Id="rId6" Type="${NS_R}/footer" Target="footer1.xml"/></Relationships>`,
+      ),
+      "word/header1.xml": strToU8(`${XML_DECL}<w:hdr xmlns:w="${NS_W}"><w:p><w:r><w:t>页眉文字</w:t></w:r></w:p></w:hdr>`),
+      "word/footer1.xml": strToU8(`${XML_DECL}<w:ftr xmlns:w="${NS_W}"><w:p><w:r><w:t>页脚文字</w:t></w:r></w:p></w:ftr>`),
+    },
+    { level: 6 },
+  );
+}
+
+/** The same file with all seven attributes stated, the way the local WPS corpus writes it. */
+export function makeFullPageDistanceDocx(at: "body" | "paragraph" = "body"): Uint8Array {
+  return makePageDistanceDocx('w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="288"', at);
+}
+

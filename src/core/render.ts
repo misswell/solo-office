@@ -171,6 +171,26 @@ const firstLineIndent = (p: Paragraph): string => {
   return chars > 0 ? `${(chars / 100).toFixed(2)}em` : "";
 };
 
+/**
+ * The paragraph's line height as one CSS value, in the unit the file wrote it in. `w:line` counts 240ths of a
+ * line under `w:auto` (13,396 of the corpus's elements) and twips under `w:exact`/`w:atLeast` (6,802 of them),
+ * so drawing every one of them as a multiplier put 固定值 22 磅 at 1.83 倍行距 — a third of the heights in the
+ * files WPS itself wrote. A stated `w:line="0"` draws no height at all; the corpus states one once, and no unit
+ * turns a zero into a line.
+ *
+ * `exact` is a height, so it is simply that height; glyphs taller than it are cut, which is what 固定值 does.
+ * `atLeast` is a floor, and CSS has no line height that says "this much, or whatever the text needs", so it is
+ * drawn as the greater of the stated height and `1em` — the least that cannot clip the paragraph's own glyphs.
+ * 未取证 how much taller WPS makes such a line when the text needs more than `1em`, since that is a question
+ * about font metrics and this page has none.
+ */
+const lineHeight = (p: Paragraph): string => {
+  if (!p.lineSpacing) return "";
+  if (p.lineSpacingRule === "exact") return `${twipsToPx(p.lineSpacing)}px`;
+  if (p.lineSpacingRule === "atLeast") return `max(${twipsToPx(p.lineSpacing)}px, 1em)`;
+  return (p.lineSpacing / 240).toFixed(2);
+};
+
 function renderParagraph(p: Paragraph, doc: WordDocument, counters: Map<string, number>, state: CommentState): string {
   const style: string[] = [];
   if (p.align && ALIGN[p.align]) style.push(`text-align:${ALIGN[p.align]}`);
@@ -180,7 +200,8 @@ function renderParagraph(p: Paragraph, doc: WordDocument, counters: Map<string, 
   if (first) style.push(`text-indent:${first}`);
   if (p.spacingBefore !== undefined) style.push(`margin-top:${twipsToPx(p.spacingBefore)}px`);
   if (p.spacingAfter !== undefined) style.push(`margin-bottom:${twipsToPx(p.spacingAfter)}px`);
-  if (p.lineSpacing) style.push(`line-height:${(p.lineSpacing / 240).toFixed(2)}`);
+  const lh = lineHeight(p);
+  if (lh) style.push(`line-height:${lh}`);
   if (p.pageBreakBefore) style.push("page-break-before:always");
   const heading = /^Heading([1-9])$/i.exec(p.styleId ?? "");
   const tag = heading ? `h${heading[1]}` : "div";

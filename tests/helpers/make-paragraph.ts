@@ -115,3 +115,68 @@ export function makeIndentRevisionDocx(): Uint8Array {
     `<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800"/></w:sectPr>`;
   return pack(document, STYLES);
 }
+
+/**
+ * Paragraphs whose `w:spacing` states one shape each, plus a style that can lend a set. The spellings and the
+ * numbers are measured, not invented (`.scratch/spacing-census.ts` over the 25,801 `w:spacing` elements that
+ * state a height or a gap in the 86 documents WPS itself wrote, counting their `word/document.xml`,
+ * `word/styles.xml` and header/footer parts together — 38,427 `w:spacing` elements in all, of which 12,617 are
+ * the character-spacing kind inside `w:rPr`):
+ *
+ * - `w:lineRule` is stated as `w:auto` 13,396 times, `w:exact` 5,812 and `w:atLeast` 991, and 5,602 elements
+ *   state 段前段后 with no line at all. Every element that states a positive `w:line` states its rule too, so
+ *   there is no "height with no unit" to fall back on; 6,802 of the 20,198 stated heights are a fixed value or
+ *   a minimum, which are twips, not 240ths of a line.
+ * - The heights themselves cluster: `auto` on 240 (12,353 — single spacing written out loud), 360 (536),
+ *   480 (148), 180 (80); `exact` on 240 (2,968), 578 (1,518 — 28.9pt), 280 (910); `atLeast` on 363 (448)
+ *   and 270 (330).
+ * - `w:beforeLines`/`w:afterLines` are stated 2,572/2,581 times but positive only 128/135 of those (2,444/2,446
+ *   state `0`), and 120 of the positive pairs imply a "line" of 100 twips — a grid pitch, not a line height —
+ *   so this fixture keeps the twips spellings only. `w:beforeAutospacing`/`w:afterAutospacing` state `1` 66/54
+ *   times and `0` 4,850/4,852 times. Both pairs travel as the file's own bytes either way.
+ *
+ * `.scratch/spacing-lent.ts` counted the other half of it: 5,110 paragraphs state no `w:line` while the style
+ * named by their `w:pStyle` does (4,847 `auto`, 247 `exact`, 16 `atLeast`), which is what the `Lent` style
+ * here is for.
+ */
+export function makeSpacingDocx(
+  entries: readonly { readonly spacing?: string; readonly pStyle?: string; readonly text: string }[],
+  lentPPr = "",
+): Uint8Array {
+  const document =
+    entries
+      .map((e) => {
+        const kids = [e.pStyle ? `<w:pStyle w:val="${e.pStyle}"/>` : "", e.spacing ? `<w:spacing ${e.spacing}/>` : ""].join("");
+        return `<w:p>${kids ? `<w:pPr>${kids}</w:pPr>` : ""}<w:r><w:t>${e.text}</w:t></w:r></w:p>`;
+      })
+      .join("\n") + `<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800"/></w:sectPr>`;
+  const styles = lentPPr
+    ? STYLES.replace("</w:styles>", `<w:style w:type="paragraph" w:styleId="Lent"><w:name w:val="借来的"/><w:pPr>${lentPPr}</w:pPr></w:style></w:styles>`)
+    : STYLES;
+  return pack(document, styles);
+}
+
+/**
+ * Two paragraphs whose `w:pPrChange` records a different line-height unit than the set it sits in, in the shape
+ * §17.13.5.19 gives it: the record is the last child of `w:pPr` and holds a whole set of its own. The first
+ * states a 1.5x line now and 固定值 28.9pt before; the second states 固定值 16pt now, borrows a 最小值 from its
+ * style, and its record states neither — so refusing it has to hand the borrowed pair back, not leave the height
+ * without the unit it is counted in.
+ */
+export function makeSpacingRevisionDocx(): Uint8Array {
+  const document =
+    `<w:p><w:pPr><w:spacing w:line="360" w:lineRule="auto"/>` +
+    `<w:pPrChange w:id="14" w:author="顾峰" w:date="2026-03-01T08:00:00Z">` +
+    `<w:pPr><w:spacing w:line="578" w:lineRule="exact"/></w:pPr></w:pPrChange></w:pPr>` +
+    `<w:r><w:t>行距被改过</w:t></w:r></w:p>` +
+    `<w:p><w:pPr><w:pStyle w:val="Lent"/><w:spacing w:line="240" w:lineRule="exact"/>` +
+    `<w:pPrChange w:id="15" w:author="林晓" w:date="2026-03-01T08:00:00Z">` +
+    `<w:pPr><w:pStyle w:val="Lent"/></w:pPr></w:pPrChange></w:pPr>` +
+    `<w:r><w:t>行距靠样式也被改过</w:t></w:r></w:p>` +
+    `<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800"/></w:sectPr>`;
+  const styles = STYLES.replace(
+    "</w:styles>",
+    `<w:style w:type="paragraph" w:styleId="Lent"><w:name w:val="借来的"/><w:pPr><w:spacing w:line="363" w:lineRule="atLeast"/></w:pPr></w:style></w:styles>`,
+  );
+  return pack(document, styles);
+}

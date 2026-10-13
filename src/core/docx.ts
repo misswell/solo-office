@@ -182,9 +182,18 @@ export interface ParaStyle {
   spacingBefore?: number;
   spacingAfter?: number;
   lineSpacing?: number;
+  /**
+   * How to read `lineSpacing`: as a multiple of one line, a fixed height, or a minimum. `w:line` is a different
+   * unit under each of these, so leaving the rule out draws 固定值 22 磅 as 1.83 倍行距 — see `lineRuleOf` for
+   * how often that mattered in the files WPS itself wrote.
+   */
+  lineSpacingRule?: LineSpacingRule;
   pageBreakBefore?: boolean;
   numPr?: { numId: number; ilvl: number };
 }
+
+/** `w:spacing@w:lineRule` (§17.3.1.27) — and the only three literals the 86 WPS-written documents ever state. */
+export type LineSpacingRule = "auto" | "exact" | "atLeast";
 
 /** `w:pPrChange`: the paragraph properties from before someone revised this paragraph. */
 export interface ParagraphFormatRevision {
@@ -365,6 +374,8 @@ export interface Paragraph {
   spacingBefore?: number;
   spacingAfter?: number;
   lineSpacing?: number;
+  /** `w:spacing@w:lineRule`: which unit `lineSpacing` is written in. See `ParaStyle`. */
+  lineSpacingRule?: LineSpacingRule;
   pageBreakBefore?: boolean;
   /**
    * The attributes written on this paragraph's own opening tag, as the part spelled them — `w14:paraId`,
@@ -1422,7 +1433,7 @@ export class WordDocument {
         name: s.name?.["@_val"] ?? id,
         basedOn: s.basedOn?.["@_val"],
         rPr,
-        pPr: s.pPr ? { align: s.pPr.jc?.["@_val"], ...indOf(s.pPr.ind) } : undefined,
+        pPr: s.pPr ? { align: s.pPr.jc?.["@_val"], ...indOf(s.pPr.ind), ...spacingOf(s.pPr.spacing) } : undefined,
       });
     }
   }
@@ -1463,6 +1474,7 @@ export class WordDocument {
     const styleId = pPr.pStyle?.["@_val"];
     const lent = styleId ? this.styles.get(styleId)?.pPr : undefined;
     const ind = indOf(pPr.ind);
+    const sp = spacingOf(pPr.spacing);
     const para: Paragraph = {
       kind: "paragraph",
       styleId,
@@ -1473,9 +1485,10 @@ export class WordDocument {
       indentFirstLine: ind.indentFirstLine ?? lent?.indentFirstLine,
       indentFirstLineChars: ind.indentFirstLineChars ?? lent?.indentFirstLineChars,
       indentHanging: ind.indentHanging ?? lent?.indentHanging,
-      spacingBefore: num(pPr.spacing?.["@_before"]),
-      spacingAfter: num(pPr.spacing?.["@_after"]),
-      lineSpacing: num(pPr.spacing?.["@_line"]),
+      spacingBefore: sp.spacingBefore ?? lent?.spacingBefore,
+      spacingAfter: sp.spacingAfter ?? lent?.spacingAfter,
+      lineSpacing: sp.lineSpacing ?? lent?.lineSpacing,
+      lineSpacingRule: sp.lineSpacingRule ?? lent?.lineSpacingRule,
       pageBreakBefore: pPr.pageBreakBefore !== undefined,
       inlines: [],
     };
@@ -1507,6 +1520,7 @@ export class WordDocument {
       spacingBefore: para.spacingBefore,
       spacingAfter: para.spacingAfter,
       lineSpacing: para.lineSpacing,
+      lineSpacingRule: para.lineSpacingRule,
       pageBreakBefore: para.pageBreakBefore || undefined,
       numPr: para.numPr,
     };
@@ -2670,6 +2684,12 @@ export class WordDocument {
     p.indentFirstLine = p.indentFirstLine ?? inherited?.indentFirstLine;
     p.indentFirstLineChars = p.indentFirstLineChars ?? inherited?.indentFirstLineChars;
     p.indentHanging = p.indentHanging ?? inherited?.indentHanging;
+    // The spacing goes back the same way it was read: a record that left `w:spacing` out returns the paragraph
+    // to whatever its style lends, and one that stated a zero keeps that zero.
+    p.spacingBefore = p.spacingBefore ?? inherited?.spacingBefore;
+    p.spacingAfter = p.spacingAfter ?? inherited?.spacingAfter;
+    p.lineSpacing = p.lineSpacing ?? inherited?.lineSpacing;
+    p.lineSpacingRule = p.lineSpacingRule ?? inherited?.lineSpacingRule;
   }
 
   /** Tracked formatting changes on runs (`w:rPrChange`) still waiting for a decision, one entry per `w:id`. */
@@ -3214,6 +3234,47 @@ function restoreStyle(run: Inline, fmt: FormatRevision): Inline {
 }
 
 /**
+ * Which unit a `w:spacing@w:line` is written in. Counted over the 25,801 `w:spacing` elements in the 86
+ * WPS-written documents that state a height or a gap (their `word/document.xml`, `word/styles.xml` and
+ * header/footer parts together): `w:auto` 13,396, `w:exact` 5,812, `w:atLeast` 991, and 5,602 elements that
+ * state 段前段后 but no line at all. Two facts fall out of that. Every element that states a positive `w:line`
+ * does state its rule — there is no "height with no unit" to resolve against §17.3.1.27's default — and 6,802
+ * of the 20,198 positive heights (a third) are 固定值 or 最小值, counted in twips rather than in the 240ths of a
+ * line the drawing used for all of them; on the rendered page that is 5,859 heights in `px` and 967 in `max()`
+ * out of the 24,458 line heights the 86 files draw (`.scratch/spacing-draw-impact.ts`). Nothing outside the
+ * three literals appears, so an unrecognised one stays unread rather than being guessed at; the element itself
+ * still travels as the file's own text.
+ */
+function lineRuleOf(spacing: any): LineSpacingRule | undefined {
+  const v = spacing?.["@_lineRule"];
+  return v === "auto" || v === "exact" || v === "atLeast" ? v : undefined;
+}
+
+/**
+ * What a `w:spacing` states, as fields, one attribute at a time — §17.3.1.27's rule resolves each of them
+ * separately, so a paragraph may write its own height and take the rule from its style, and that is what the
+ * file said rather than a mix to be corrected.
+ *
+ * Read through the style because 5,110 of the paragraphs in the 86 WPS-written documents ask for a line height
+ * that way: they state no `w:line` themselves while the style named by their `w:pStyle` does (4,847 of them
+ * `w:auto`, 247 `w:exact`, 16 `w:atLeast` — `.scratch/spacing-lent.ts`, which counts only the style the
+ * paragraph names, since `w:basedOn` is one hop deeper than this model resolves). The same elements lend
+ * 段前 to 64 paragraphs and 段后 to 57 more.
+ */
+function spacingOf(spacing: any): Partial<ParaStyle> {
+  const out: Record<string, number | LineSpacingRule> = {};
+  const before = num(spacing?.["@_before"]);
+  if (before !== undefined) out.spacingBefore = before;
+  const after = num(spacing?.["@_after"]);
+  if (after !== undefined) out.spacingAfter = after;
+  const line = num(spacing?.["@_line"]);
+  if (line !== undefined) out.lineSpacing = line;
+  const rule = lineRuleOf(spacing);
+  if (rule !== undefined) out.lineSpacingRule = rule;
+  return out as Partial<ParaStyle>;
+}
+
+/**
  * What a `w:ind` states, as fields. Only the spellings the files really use on their own are read: over the
  * 29,207 `w:ind` elements in the `word/document.xml` of the 86 WPS-written documents, a positive
  * `w:firstLineChars` appears with no `w:firstLine` beside it 232 times, while a positive `w:leftChars`,
@@ -3249,13 +3310,7 @@ function paraStyle(pPr: any): ParaStyle {
   if (styleId !== undefined) s.styleId = String(styleId);
   const align = pPr.jc?.["@_val"];
   if (align !== undefined) s.align = String(align);
-  Object.assign(s, indOf(pPr.ind));
-  const before = num(pPr.spacing?.["@_before"]);
-  if (before !== undefined) s.spacingBefore = before;
-  const after = num(pPr.spacing?.["@_after"]);
-  if (after !== undefined) s.spacingAfter = after;
-  const line = num(pPr.spacing?.["@_line"]);
-  if (line !== undefined) s.lineSpacing = line;
+  Object.assign(s, indOf(pPr.ind), spacingOf(pPr.spacing));
   if (pPr.pageBreakBefore !== undefined) s.pageBreakBefore = true;
   const numPr = pPr.numPr;
   if (numPr) s.numPr = { numId: Number(numPr.numId?.["@_val"] ?? 0), ilvl: Number(numPr.ilvl?.["@_val"] ?? 0) };
@@ -3265,7 +3320,7 @@ function paraStyle(pPr: any): ParaStyle {
 /** Every paragraph property a `w:pPrChange` carries, so a refusal can clear the ones the record dropped. */
 export const PARA_STYLE_KEYS: (keyof ParaStyle)[] = [
   "styleId", "align", "indentLeft", "indentRight", "indentFirstLine", "indentFirstLineChars", "indentHanging",
-  "spacingBefore", "spacingAfter", "lineSpacing", "pageBreakBefore", "numPr",
+  "spacingBefore", "spacingAfter", "lineSpacing", "lineSpacingRule", "pageBreakBefore", "numPr",
 ];
 
 /** The paragraph's own properties, without its text or the revision records hanging off it. */

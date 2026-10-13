@@ -132,7 +132,9 @@ function paragraphProps(p: Paragraph): string {
   const spacing: string[] = [];
   if (p.spacingBefore !== undefined) spacing.push(` w:before="${Math.round(p.spacingBefore)}"`);
   if (p.spacingAfter !== undefined) spacing.push(` w:after="${Math.round(p.spacingAfter)}"`);
-  if (p.lineSpacing) spacing.push(` w:line="${Math.round(p.lineSpacing)}" w:lineRule="auto"`);
+  // A height the model holds without a rule of its own is signed `w:auto`: that is §17.3.1.27's default, and
+  // the 13,396 `w:auto` elements are what the files this comes from write anyway.
+  if (p.lineSpacing) spacing.push(` w:line="${Math.round(p.lineSpacing)}" w:lineRule="${p.lineSpacingRule ?? "auto"}"`);
   if (spacing.length) parts.push(`<w:spacing${spacing.join("")}/>`);
   const ind = indTag(p);
   if (ind) parts.push(ind);
@@ -165,7 +167,7 @@ function paraStyleTags(s: ParaStyle): string {
   const spacing: string[] = [];
   if (s.spacingBefore !== undefined) spacing.push(` w:before="${Math.round(s.spacingBefore)}"`);
   if (s.spacingAfter !== undefined) spacing.push(` w:after="${Math.round(s.spacingAfter)}"`);
-  if (s.lineSpacing) spacing.push(` w:line="${Math.round(s.lineSpacing)}" w:lineRule="auto"`);
+  if (s.lineSpacing) spacing.push(` w:line="${Math.round(s.lineSpacing)}" w:lineRule="${s.lineSpacingRule ?? "auto"}"`);
   if (spacing.length) parts.push(`<w:spacing${spacing.join("")}/>`);
   const ind = indTag(s);
   if (ind) parts.push(ind);

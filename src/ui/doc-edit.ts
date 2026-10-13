@@ -2594,6 +2594,7 @@ function fresh(previous: Paragraph | undefined): Paragraph {
     spacingBefore: previous.spacingBefore,
     spacingAfter: previous.spacingAfter,
     lineSpacing: previous.lineSpacing,
+    lineSpacingRule: previous.lineSpacingRule,
     inlines: [],
   };
 }

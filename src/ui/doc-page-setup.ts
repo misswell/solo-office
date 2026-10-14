@@ -258,10 +258,23 @@ export function openPageSetup(current: Section, apply: (set: PageSetup) => void)
    * Closes and takes the node out of the document in the same step. The `close` event is a queued task, so
    * relying on it alone leaves a shut dialog lying in the DOM until the next one runs — and the next
    * 「页面设置」 opened before then would find *that* one first, filling boxes on a dialog nobody is looking at.
+   *
+   * 光标也在这里放回来：`showModal()` 之后 `inputs.top.focus()` 一聚焦输入框，浏览器就把**文档选区**搬进
+   * 对话框（headless Chrome 实测：开→对话框里，关+摘除→BODY——与「定位」同一个浏览器行为，矩阵在
+   * `.scratch/sel-close-probe.html`）。开窗前存一份 Range，收尾时放回去；按「确定」那条路也走这里，放回
+   * 之后 `applyPageSetup` 才读得到开窗前的光标（它随后整张重排、按模型路径再落一次）。
    */
+  const sel = document.getSelection();
+  const saved = sel && sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
+  const restore = (): void => {
+    if (!saved || !sel) return;
+    sel.removeAllRanges();
+    sel.addRange(saved);
+  };
   const shut = (): void => {
     dialog.close();
     dialog.remove();
+    restore();
   };
   dialog.addEventListener("input", refresh);
   dialog.addEventListener("change", (e) => {
@@ -273,7 +286,13 @@ export function openPageSetup(current: Section, apply: (set: PageSetup) => void)
   // The editor owns the page's shortcuts; a dialog typing over them would move the caret behind it.
   dialog.addEventListener("keydown", (e) => e.stopPropagation());
   // Escape closes the dialog without going through any of the buttons, so this is the handler that path has.
-  dialog.addEventListener("close", () => dialog.remove(), { once: true });
+  // `shut()` 那条路连摘除都做完了（isConnected 是 false），这里就跳过——按「确定」之后已经被整张重排
+  // 换掉的那份押着的 Range 也就不会盖回来（放回它等于把选区指回一堆断开的节点）。
+  dialog.addEventListener("close", () => {
+    if (!dialog.isConnected) return;
+    dialog.remove();
+    restore();
+  });
   dialog.querySelector<HTMLButtonElement>(".solo-ps-close")!.onclick = shut;
   dialog.querySelector<HTMLButtonElement>(".solo-ps-cancel")!.onclick = shut;
   dialog.querySelector("form")!.onsubmit = (e) => {

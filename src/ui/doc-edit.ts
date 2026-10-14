@@ -1624,11 +1624,18 @@ export class DocEditor {
    * 「页面设置」: the page's margins, band distances, binding width and direction. The section the numbers land in
    * is the one the page is drawn from, and the step back restores it — the body's own `w:sectPr` bytes included,
    * which a text-only undo step would leave where they were.
+   *
+   * 光标在开窗前的位置上不动：对话框关窗时已经把押住的选区放回来了（`doc-page-setup.ts` 的 `restore`），
+   * 所以这里读到的就是开窗前那一个。`render()` 整张纸重建、旧节点全断，落点按**模型路径**找回来
+   * （与 `undo`/`redo` 同一条），不拿 DOM 节点。WPS 真机按「确定」之后光标停在哪 未取证；本版钉的是
+   * 「不动」——同一个字符位置。
    */
   applyPageSetup(set: PageSetup): void {
-    this.snapshot(this.caretPath());
+    const caret = this.caretPath();
+    this.snapshot(caret);
     this.doc.setPageSetup(set);
     this.render();
+    if (caret) this.setCaret(this.clamp(caret));
     this.hooks.changed();
   }
 

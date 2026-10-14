@@ -122,6 +122,13 @@ export interface CarriedInline {
   /** The element's local name — `bookmarkStart`, `fldSimple`, `sdt`. It says what was kept, not what it means. */
   tag: string;
   xml: string;
+  /**
+   * A bookmark's `w:name`, read off the parsed element while the read still has it. The one thing in these
+   * bytes anything addresses by name — 「定位」的书签目标 lists them. Read here rather than re-parsed from `xml`
+   * downstream: that would be a second reader of the same attribute, and the parsed value comes entity-decoded.
+   * Display-only; the write side puts `xml` back as it came.
+   */
+  name?: string;
   show: string;
 }
 
@@ -680,7 +687,7 @@ export type Block = Paragraph | Table | Carried;
  * accounted for the same paragraph — as the part actually wrote it. A step with no `node` is machinery this
  * model carries rather than reads, and its `span` is all of it.
  */
-type ParaChild = { tag: string; node?: any; span?: { tag: string; xml: string } };
+type ParaChild = { tag: string; node?: any; span?: { tag: string; xml: string }; name?: string };
 
 /** The tags a row's own record can be spelled as, inside its `w:trPr`. */
 export const ROW_REVISION_TAGS: ReadonlySet<string> = new Set(["ins", "del", "moveFrom", "moveTo"]);
@@ -1835,7 +1842,11 @@ export class WordDocument {
       // A child this model carries instead of reads — a bookmark, a field, an inline control — travels as
       // the bytes it came in with.
       if (step.node === undefined) {
-        if (step.span) para.inlines.push({ text: "", carry: { key: this.carryKey++, tag: step.tag, xml: step.span.xml, show: carriedText(step.span.xml) } });
+        if (step.span) {
+          const carry: CarriedInline = { key: this.carryKey++, tag: step.tag, xml: step.span.xml, show: carriedText(step.span.xml) };
+          if (step.name !== undefined) carry.name = step.name;
+          para.inlines.push({ text: "", carry });
+        }
         continue;
       }
       const name = step.tag;
@@ -1886,11 +1897,20 @@ export class WordDocument {
     const readable = (tag: string): boolean => tag === "r" || tag === "hyperlink" || tag === "commentRangeStart" || tag === "commentRangeEnd" || isRevision(tag);
     return own.map((s): ParaChild => {
       const node = readable(s.tag) ? queues.get(s.tag)?.shift() : undefined;
+      if (node === undefined) {
+        // Machinery this model carries rather than reads. The bytes are all it needs — except a bookmark
+        // start, whose `w:name` is read off the parsed element here while the read still has it: nothing
+        // downstream can pair the raw `xml` with its element again, and the 「定位」 bookmark target
+        // addresses these by name.
+        const parsedNode = queues.get(s.tag)?.shift();
+        const name = parsedNode?.["@_name"];
+        return { tag: s.tag, span: s, ...(name === undefined ? {} : { name: String(name) }) };
+      }
       // A run that is only field machinery keeps the name of the machinery it holds, so the model and the
       // page can say which part of the field this is rather than just "a run".
-      const kind = node !== undefined && s.tag === "r" ? machineryOf(node) : "";
-      if (node !== undefined && kind) return { tag: kind, span: s };
-      return node === undefined ? { tag: s.tag, span: s } : { tag: s.tag, node, span: s };
+      const kind = s.tag === "r" ? machineryOf(node) : "";
+      if (kind) return { tag: kind, span: s };
+      return { tag: s.tag, node, span: s };
     });
   }
 

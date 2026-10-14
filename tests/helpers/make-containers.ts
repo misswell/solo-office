@@ -7,7 +7,9 @@ const NS_CT = "http://schemas.openxmlformats.org/package/2006/content-types";
 const NS_PKG = "http://schemas.openxmlformats.org/package/2006/relationships";
 const CT_W = "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml";
 
-const pack = (document: string): Uint8Array =>
+/** The three parts a readable document needs, over whatever body XML the caller wrote. Exported so the DOM
+ *  gates can build bodies makeSectionsDocx cannot spell — tables, bookmarks between runs. */
+export const pack = (document: string): Uint8Array =>
   zipSync(
     {
       "[Content_Types].xml": strToU8(

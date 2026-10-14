@@ -137,6 +137,29 @@ describe("docx inline structures", () => {
     ]);
   });
 
+  it("hands a bookmark start the w:name it came in with — the one thing 「定位」 addresses it by", () => {
+    const startsOf = (doc: WordDocument): (string | undefined)[] => {
+      const out: (string | undefined)[] = [];
+      eachInline(doc.blocks, (inline) => {
+        if (inline.carry?.tag === "bookmarkStart") out.push(inline.carry.name);
+      });
+      return out;
+    };
+    expect(startsOf(WordDocument.openBytes(makeContainersDocx()))).toEqual(["_Toc_1"]);
+    expect(startsOf(WordDocument.openBytes(makeContainersInTableDocx()))).toEqual(["_CellMark"]);
+    expect(startsOf(WordDocument.openBytes(makeGoBackDocx()))).toEqual(["_GoBack"]);
+  });
+
+  it("writes no name onto a structure that has none, and none into the saved bytes", () => {
+    const doc = WordDocument.openBytes(makeContainersDocx());
+    eachInline(doc.blocks, (inline) => {
+      if (inline.carry && inline.carry.tag !== "bookmarkStart") expect(inline.carry.name).toBeUndefined();
+    });
+    // The name is a read, not a spelling: what goes back is the bytes, so the paragraph still writes its own spelling.
+    const after = saved(doc);
+    expect(after).toContain('<w:bookmarkStart w:id="0" w:name="_Toc_1"/>');
+  });
+
   it("saves each inline structure back byte for byte after a keystroke", () => {
     const original = part(makeContainersDocx());
     const spans = [

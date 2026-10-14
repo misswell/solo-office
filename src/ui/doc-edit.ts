@@ -1466,7 +1466,8 @@ export class DocEditor {
    * 实据）：先量一次当前页（`caretPage()`，与状态栏同一份），再开对话框。纸没画上、或页高量不出来时**不开**——
    * 一个没有页数的定位对话框只能骗人。光标不在纸面上时种子取第 1 页／第 1 节：状态栏那种情形保留上一次读数，
    * 编辑器没有那一份存档，这里不假装有。`target` 是打开时预选的目标（「页」或「节」），由点哪一格决定；
-   * ⌘G 走默认的「页」。
+   * ⌘G 走默认的「页」。打开这一刻顺手把书签名单量一份（`bookmarks()`）交给对话框——名单是这一刻的模型
+   * 读数，对话框是模态的，期间模型不会变。
    */
   showGoTo(target: "page" | "section" = "page"): void {
     const at = this.caretPage();
@@ -1475,8 +1476,8 @@ export class DocEditor {
     const cs = this.caretSection();
     const sections = cs?.sections ?? sectionEndsOf(this.doc.blocks).length + 1;
     openGoTo(
-      { page: at?.page ?? 1, pages, section: cs?.section ?? 1, sections, target },
-      { page: (n) => this.goToPage(n), section: (n) => this.goToSection(n) },
+      { page: at?.page ?? 1, pages, section: cs?.section ?? 1, sections, bookmarks: this.bookmarks().map((b) => b.name), target },
+      { page: (n) => this.goToPage(n), section: (n) => this.goToSection(n), bookmark: (name) => this.goToBookmark(name) },
     );
   }
 
@@ -1503,6 +1504,47 @@ export class DocEditor {
     const ends = sectionEndsOf(this.doc.blocks);
     const anchor = sectionCaretAnchor(this.page, ends, ends.length + 1, section);
     return anchor ? this.landAt(anchor) : false;
+  }
+
+  /**
+   * 正文里的书签，按文档顺序：`w:bookmarkStart` 是随 run/段落携带的结构（`CarriedInline`），这里只收
+   * `forEachInline` 那一趟能走到的地方——正文块与表内（含嵌套表）。**页眉页脚的书签不进列表**：那是另一
+   * 个 story，Word 的「定位」列的是正文书签（真机**未取证**）。含 `_` 前缀的机器书签（`_Toc`／`_GoBack`）
+   * 不过滤：WPS 的「隐藏书签」开关真机**未取证**，而 /tmp 那批 86 份 WPS 写的件里 86/86 都带这类名字，
+   * 过滤掉等于把列表做成空的。同名取第一枚（Word 自己不许同名；这 86 份里 0 处重复，真机遇重名落哪一枚
+   * **未取证**）。表格行与行之间的 `w:bookmarkStart`（`betweenRows`）不在这一趟里——纸上没有它的元素
+   * （见 `goToBookmark` 同一条），语料那 86 份实测该位置只出现过 `w:bookmarkEnd`。
+   */
+  bookmarks(): { name: string; key: number }[] {
+    const out: { name: string; key: number }[] = [];
+    const seen = new Set<string>();
+    forEachInline(this.doc.blocks, (inline) => {
+      const carry = inline.carry;
+      if (carry?.tag !== "bookmarkStart" || carry.name === undefined || seen.has(carry.name)) return;
+      seen.add(carry.name);
+      out.push({ name: carry.name, key: carry.key });
+    });
+    return out;
+  }
+
+  /**
+   * 定位到书签 `name`：第一枚同名书签的渲染键找回它在纸上的 `run-carry` 元素（`data-carry` 是页上唯一
+   * 的把手，见 `carries` 的注释），光标落在它前面那一位——书签零宽，落前落后是同一处。落点动作与
+   * `goToPage`／`goToSection` 共用 `landAt`；滚动要的「块」取元素在纸上的直接祖先（书签在表格单元格里
+   * 时，块就是那张表）。元素不在纸上——行间书签这类没有元素的位置，或段落已被重整而标记被吞——不落，
+   * 返回 false；名字不在列表里同样 false（对话框的名单来自 `bookmarks()`，这是第二道闸门）。
+   */
+  goToBookmark(name: string): boolean {
+    if (!this.page) return false;
+    const hit = this.bookmarks().find((b) => b.name === name);
+    if (!hit) return false;
+    const span = this.page.querySelector<HTMLElement>(`.${RUN_CARRY_CLASS}[data-carry="${hit.key}"]`);
+    const parent = span?.parentNode;
+    if (!span || !parent) return false;
+    let block: HTMLElement | null = span.parentElement;
+    while (block && block.parentElement !== this.page) block = block.parentElement;
+    if (!block) return false;
+    return this.landAt({ node: parent, offset: [...parent.childNodes].indexOf(span), block });
   }
 
   /** 落点动作：折叠 Range 落到 `anchor` 指出的文档位置，块滚进视野中上段，焦点收进纸张。 */

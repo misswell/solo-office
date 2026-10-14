@@ -8,7 +8,7 @@ import { IMAGE_EXT_BY_MIME } from "../core/media.js";
 import { CARRY_CLASS, CARRY_STYLE, PAGE_BORDER_CLASS, RUN_CARRY_CLASS, highlightColor, renderWord } from "../core/render.js";
 import { flatOf, inlineLength, isMark, keepRunIdentity } from "../core/run-identity.js";
 import { CommentPanel } from "./doc-comments.js";
-import { measurePageLayout, pageAtCaret, pageCaretAnchor, pagePositionAt, rowColumnAt, sectionCaretAnchor, type CaretLine, type PageAnchor, type PageMeasure, type PagePlacement } from "./doc-layout.js";
+import { lineCaretAnchor, lineNumberAt, measurePageLayout, pageAtCaret, pageCaretAnchor, pagePositionAt, rowColumnAt, sectionCaretAnchor, type CaretLine, type PageAnchor, type PageMeasure, type PagePlacement } from "./doc-layout.js";
 import { ReviewPanel } from "./doc-review.js";
 import { OutlinePanel } from "./doc-outline.js";
 import { openPageSetup as showPageSetupDialog } from "./doc-page-setup.js";
@@ -1396,6 +1396,25 @@ export class DocEditor {
   }
 
   /**
+   * 「定位」「行」目标那两行读数：光标在第几行（**绝对行号**——从文首连数、换页不重数，口径与走法见
+   * `doc-layout.ts` 的 `lineNumberAt`）与全文共几行（`measurePageLayout` 的 `lines`，与「字数统计」那一页
+   * 同一份测量）。与状态栏「行」格不同：那一格数的是**页内**序数（`rowInPage`），这里数的是全篇序数；
+   * WPS 真机「行」按哪种数**未取证**。取点、判「光标在不在纸面上」与 `caretPage()` 同一条。
+   */
+  caretLineNumber(): { line: number; lines: number } | undefined {
+    if (!this.page) return undefined;
+    const sel = document.getSelection();
+    const node = sel?.focusNode ?? null;
+    if (!node || !this.page.contains(node)) return undefined;
+    const mid = caretMidOf(node, sel!.focusOffset);
+    if (mid === undefined) return undefined;
+    const line = lineNumberAt(this.page, this.doc, { mid, node, offset: sel!.focusOffset });
+    const lines = this.layout()?.lines;
+    if (line === undefined || lines === undefined) return undefined;
+    return { line, lines };
+  }
+
+  /**
    * 状态栏 节 那一格（WPS 的 `KxWpsStatusSectionInfoCommand`）：光标在第几节、一共几节。与 页码/行/列 那几格不同，
    * 这一对**不量几何**——节的边界是文件自己声明的（`w:pPr/w:sectPr` 的段落结束它那一节，`sectionEndsOf` 从模型
    * 数出来），块 `b` 属于第 `1 + #{e < b}` 节：带断点的段落自己属于**它结束的那一节**。节首一块的头是
@@ -1465,22 +1484,24 @@ export class DocEditor {
    * 「定位」（⌘G 与状态栏 页码／页数／节 那三格，WPS 的 `KxLegacyTriggerCommand id="GoTo"`，`doc-goto.ts` 头注有
    * 实据）：先量一次当前页（`caretPage()`，与状态栏同一份），再开对话框。纸没画上、或页高量不出来时**不开**——
    * 一个没有页数的定位对话框只能骗人。光标不在纸面上时种子取第 1 页／第 1 节：状态栏那种情形保留上一次读数，
-   * 编辑器没有那一份存档，这里不假装有。`target` 是打开时预选的目标（页／节／书签／批注），由点哪一格决定；
-   * ⌘G 走默认的「页」。打开这一刻顺手把书签名单（`bookmarks()`）与批注条数（`doc.comments` 的条数，与
-   * 纸上编号同一份数组）量一份交给对话框——都是这一刻的模型读数，对话框是模态的，期间模型不会变；批注号
-   * 的种子从光标所在的那条读（`commentIdsAtCaret` 给的 id 反查下标 + 1），落点不指着任何一条时归 1。
+   * 编辑器没有那一份存档，这里不假装有。`target` 是打开时预选的目标（页／节／行／书签／批注），由点哪一格决定；
+   * ⌘G 走默认的「页」。打开这一刻顺手把书签名单（`bookmarks()`）、批注条数（`doc.comments` 的条数，与
+   * 纸上编号同一份数组）与总行数/光标行号（`caretLineNumber`，绝对行号）量一份交给对话框——都是这一刻的
+   * 模型读数，对话框是模态的，期间模型不会变；批注号的种子从光标所在的那条读（`commentIdsAtCaret` 给的 id
+   * 反查下标 + 1），落点不指着任何一条时归 1；行号的种子是光标所在那一行的绝对行号，光标不在纸面上时归 1。
    */
-  showGoTo(target: "page" | "section" | "bookmark" | "comment" = "page"): void {
+  showGoTo(target: "page" | "section" | "line" | "bookmark" | "comment" = "page"): void {
     const at = this.caretPage();
     const pages = at?.pages ?? this.layout()?.pages;
     if (pages === undefined) return;
     const cs = this.caretSection();
     const sections = cs?.sections ?? sectionEndsOf(this.doc.blocks).length + 1;
+    const cl = this.caretLineNumber();
     const first = this.commentIdsAtCaret()[0];
     const at0 = first === undefined ? -1 : this.doc.comments.findIndex((c) => c.id === first);
     openGoTo(
-      { page: at?.page ?? 1, pages, section: cs?.section ?? 1, sections, bookmarks: this.bookmarks().map((b) => b.name), comments: this.doc.comments.length, comment: at0 >= 0 ? at0 + 1 : 1, target },
-      { page: (n) => this.goToPage(n), section: (n) => this.goToSection(n), bookmark: (name) => this.goToBookmark(name), comment: (n) => this.goToComment(n) },
+      { page: at?.page ?? 1, pages, section: cs?.section ?? 1, sections, line: cl?.line ?? 1, lines: this.layout()?.lines ?? 0, bookmarks: this.bookmarks().map((b) => b.name), comments: this.doc.comments.length, comment: at0 >= 0 ? at0 + 1 : 1, target },
+      { page: (n) => this.goToPage(n), section: (n) => this.goToSection(n), line: (n) => this.goToLine(n), bookmark: (name) => this.goToBookmark(name), comment: (n) => this.goToComment(n) },
     );
   }
 
@@ -1506,6 +1527,19 @@ export class DocEditor {
     if (!this.page) return false;
     const ends = sectionEndsOf(this.doc.blocks);
     const anchor = sectionCaretAnchor(this.page, ends, ends.length + 1, section);
+    return anchor ? this.landAt(anchor) : false;
+  }
+
+  /**
+   * 定位到第 `line` 行：行号是**绝对**的（从文首连数、换页不重数），与「行」那一格的种子同一条口径；
+   * 落点落在这一行头一个字符上（`lineCaretAnchor`，行首按上沿二分量出来，与「列」同一趟取点）。
+   * 落光标与滚动同 `goToPage`——同一枚落点动作 `landAt`。越界的行号在 `lineCaretAnchor` 那层就不给位置，
+   * 返回 false（对话框的 1..N 来自同一刻量出来的总行数，这是第二道闸门）。WPS 真机「行」按绝对还是按页
+   * 重数**未取证**。
+   */
+  goToLine(line: number): boolean {
+    if (!this.page) return false;
+    const anchor = lineCaretAnchor(this.page, this.doc, line);
     return anchor ? this.landAt(anchor) : false;
   }
 

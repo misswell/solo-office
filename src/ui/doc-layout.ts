@@ -514,12 +514,12 @@ function flatOfCaret(block: HTMLElement, node: Node, offset: number): number | u
 }
 
 /**
- * 光标字符位置 `at` 在这一行里排第几（1 起）。把每个字符起点的上沿排出来：同一行上各处上沿相同，
- * 折行处整行高地下落一次，所以上沿对字符位置单调不减，二分找光标那一行的首字符，列 = 位置 − 首字符 + 1。
- * 容差取半行高：行内因字号不一差几像素的不管，跨行至少差一整行高。量不出上沿时不猜，`undefined`。
+ * 拉平串里第一条落进 `unit` 这枚行盒的字符位置（0..len；量不出上沿时不猜，`undefined`）：把每个字符起点
+ * 的上沿排出来，同一行上各处上沿相同，折行处整行高地下落一次，所以上沿对位置单调不减，二分找
+ * 「上沿 ≥ 行盒顶 − 半行高」的第一个位置。容差取半行高：行内因字号不一差几像素的不管，跨行至少差一整行高。
+ * 「列」（`columnOf`）与「第 N 行在哪里」（`lineCaretAnchor`）共用这一趟——行首与列底数必须是同一个位置。
  */
-function columnOf(flat: FlatText, unit: PlacedUnit, at: number): number | undefined {
-  if (!flat.len) return 1;
+function firstAtUnit(flat: FlatText, unit: PlacedUnit): number | undefined {
   let lo = 0;
   let hi = flat.len;
   while (lo < hi) {
@@ -530,6 +530,17 @@ function columnOf(flat: FlatText, unit: PlacedUnit, at: number): number | undefi
     if (top >= unit.top - unit.height / 2) hi = mid;
     else lo = mid + 1;
   }
+  return lo;
+}
+
+/**
+ * 光标字符位置 `at` 在这一行里排第几（1 起）：行首位置由 `firstAtUnit` 找（上沿二分的口径写在那里），
+ * 列 = 位置 − 行首 + 1。量不出上沿时不猜，`undefined`。
+ */
+function columnOf(flat: FlatText, unit: PlacedUnit, at: number): number | undefined {
+  if (!flat.len) return 1;
+  const lo = firstAtUnit(flat, unit);
+  if (lo === undefined) return undefined;
   return Math.max(1, at - lo + 1);
 }
 
@@ -655,6 +666,70 @@ export function pageCaretAnchor(page: HTMLElement, doc: WordDocument, target: nu
   const br = [...block.querySelectorAll<HTMLBRElement>("br")].filter(forcesPage)[segment - 1];
   if (!br?.parentElement) return undefined;
   return { node: br.parentElement, offset: [...br.parentElement.childNodes].indexOf(br) + 1, block };
+}
+
+/**
+ * 光标在**全篇第几行**（绝对行号，从文首连数、换页不重数）——「定位」对话框「行」目标的种子。取点与状态栏
+ * 「行」格同一条（`unitIndexAt` 的中线），但那一格数的是**页内**序数（`rowInPage`），这一支数的是全篇序数；
+ * 行 = 铺排出来的一枚行盒（表格按行计），0 高的断点记号不占行。WPS 真机「行」按哪种数**未取证**。
+ * 光标落到防呆路径上时算第 1 行（`rowInPage` 同一条守则）；纸上什么都没有时也报 1（那是种子不是范围，
+ * 范围由 `measurePageLayout().lines` 给）；纸没画上、量不出时不猜，`undefined`。
+ */
+export function lineNumberAt(page: HTMLElement, doc: WordDocument, caret: { mid: number; node: Node; offset: number }): number | undefined {
+  const plan = planOf(page, doc);
+  if (!plan) return undefined;
+  const { units } = plan;
+  if (!units.length) return 1;
+  const idx = unitIndexAt(units, caret.mid);
+  let n = 0;
+  for (let j = 0; j <= idx; j++) {
+    if (units[j]!.height > 0) n++;
+  }
+  return Math.max(1, n);
+}
+
+/**
+ * 「第 `target` 行在哪里」（`pageCaretAnchor`／`sectionCaretAnchor` 的姊妹，「行」目标的反向映射）：行号是
+ * **绝对**的——从文首连数、换页不重数，与 `lineNumberAt` 同一口径；数的是同一趟铺排出来的正高行盒
+ * （0 高的断点记号不占行）。落点落在这一行**头一个字符**上：段落里按上沿二分找行首（`firstAtUnit`，与
+ * 「列」的底数同一趟取点），表格取那一行开头，一枚文字都没有、上沿量不出时退回块首（那是这一块的第 1 行，
+ * 与落不到时的容错同一条）。越界的行号（<1、>总行数、非整数）不猜，返回 `undefined`，由调用方拒绝。
+ * WPS 真机落点落在行首、上下文怎么滚动**未取证**；这一版钉的是「行号 → 那一行」这条回路本身。
+ */
+export function lineCaretAnchor(page: HTMLElement, doc: WordDocument, target: number): PageAnchor | undefined {
+  const plan = planOf(page, doc);
+  if (!plan) return undefined;
+  const { blocks, units } = plan;
+  if (!Number.isInteger(target) || target < 1) return undefined;
+  let idx = -1;
+  let seen = 0;
+  for (let i = 0; i < units.length; i++) {
+    if (units[i]!.height > 0 && ++seen === target) {
+      idx = i;
+      break;
+    }
+  }
+  if (idx < 0) return undefined;
+  let block: HTMLElement | undefined;
+  let segment = idx;
+  for (const b of blocks) {
+    if (segment < b.units.length) {
+      block = b.el;
+      break;
+    }
+    segment -= b.units.length;
+  }
+  if (!block) return undefined;
+  if (block.tagName === "TABLE") {
+    // 表的一枚单位是一行；0 高的行 `unitsOfBlock` 已经撇掉，这里按同一口径取第 segment 行（`pageCaretAnchor` 同一条）。
+    const row = [...(block as HTMLTableElement).rows].filter((r) => r.getBoundingClientRect().height > 0)[segment];
+    return row ? { ...headPositionOf(row), block } : undefined;
+  }
+  if (block.classList.contains(CARRY_CLASS)) return { ...headPositionOf(block), block };
+  const flat = flattenText(block);
+  const at = flat.len ? firstAtUnit(flat, units[idx]!) : undefined;
+  const pos = at === undefined ? undefined : positionAt(flat, at);
+  return pos ? { ...pos, block } : { ...headPositionOf(block), block };
 }
 
 /**

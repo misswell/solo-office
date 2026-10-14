@@ -1,9 +1,11 @@
 import type { PageSetup, Section } from "../core/docx.js";
-import { cmToTwips, twipsToCm } from "../core/docx.js";
+import { cmToTwips } from "../core/docx.js";
+import { currentUnit, twipText, twipsFromUnit, unitDef } from "./doc-units.js";
+import type { Unit } from "./doc-units.js";
 
 /**
  * 「页面设置」: the sheet the page is cut from, which way it lies, the four body margins, the two paper-edge
- * distances, and the binding width. The dialog counts in centimetres the way the Word family does, and hands
+ * distances, and the binding width. The dialog counts in the status bar's 测量单位 (`doc-units.ts`), and hands
  * the model twips — `w:pgMar` and `w:pgSz` have no other unit (ECMA-376 §17.3.2.13, §17.3.2.12) — converting
  * once here so no number is rounded twice.
  *
@@ -12,11 +14,15 @@ import { cmToTwips, twipsToCm } from "../core/docx.js";
  * two edges are always sent, because the page on screen is drawn from them and a save has to write the box it
  * showed.
  *
- * Prefilled to three decimals, because that is what brings the twip count back exactly: 851 twips is
- * 1.501 cm, and the 1.50 a two-decimal dialog would show comes back as 850. Every whole twip count from 0 to
- * 60000 comes back as itself at that spacing, which is why a dialog nobody retouched cannot move a margin or
- * an edge — and why a sheet that is not on the list, like the near-A4 11900×16840 four of the corpus sections
- * spell, stays 11900×16840 instead of being pulled to A4.
+ * Prefilled to each unit's **twip-exact** decimals — the fewest that bring every whole twip count from 0 to
+ * 60000 back as itself (`doc-units.ts` spells the two inequalities; the traversal is `tests/doc-units.test.ts`):
+ * 厘米 3, 毫米 2, 英寸 4, 磅 2. 851 twips is 1.501 厘米, and the 1.50 a two-decimal box would show comes back as
+ * 850; the same number in inches is 0.591, because 0.59 would come back as 850 too. That is why a dialog nobody
+ * retouched cannot move a margin or an edge, and why a sheet that is not on the list — the near-A4 11900×16840
+ * four of the corpus sections spell — stays 11900×16840 instead of being pulled to A4. The paper-name row
+ * shows the file's own twips to the last digit: A4's 11906 reads 21.001 厘米, not the 21 a name-based table
+ * might print, because in inches the same edge has no short spelling at all (8.2681) and one rule has to hold
+ * in all four units.
  *
  * Styles are injected from here: `src/ui/index.html` is copied verbatim by the build and is not ours to touch.
  * The dialog is mounted on `document.body` rather than the editor's host, which `render()` replaces whole.
@@ -68,8 +74,8 @@ function injectStyles(): void {
   document.head.append(style);
 }
 
-/** The centimetres a section's twips are worth, spelled tightly enough to come back as the same integer. */
-const cmText = (tw: number | undefined): string => (tw === undefined ? "" : String(Number(twipsToCm(tw).toFixed(3))));
+/** 一个缇数按当前测量单位写进格子的字面；`undefined`（文件没说的距离）是空格子。 */
+const unitText = (tw: number | undefined): string => (tw === undefined ? "" : twipText(tw));
 
 /**
  * The sheets 「页面设置」 offers by name. `w:pgSz` carries no names — §17.3.2.12 stores two distances and all
@@ -96,20 +102,20 @@ const CUSTOM = "自定义尺寸";
 /** What one box holds: nothing typed means "not asked about", and anything unparseable is refused. */
 type Reading = { value?: number; bad: boolean };
 
-const read = (input: HTMLInputElement): Reading => {
+const read = (input: HTMLInputElement, u: Unit): Reading => {
   const text = input.value.trim();
   if (!text) return { bad: false };
-  const cm = Number(text);
+  const v = Number(text);
   // No upper bound is invented: `w:pgMar` takes any twip count, and a producer's own limit is not evidenced
   // in this corpus. What is refused is a value that is not a number at all, or a negative distance.
-  if (!Number.isFinite(cm) || cm < 0) return { bad: true };
-  return { value: cmToTwips(cm), bad: false };
+  if (!Number.isFinite(v) || v < 0) return { bad: true };
+  return { value: twipsFromUnit(v, u), bad: false };
 };
 
 /** A paper edge: the box has to say a sheet's side, so empty and zero are refused rather than ignored. */
-const readEdge = (input: HTMLInputElement): number | undefined => {
-  const cm = Number(input.value.trim());
-  return Number.isFinite(cm) && cm > 0 ? cmToTwips(cm) : undefined;
+const readEdge = (input: HTMLInputElement, u: Unit): number | undefined => {
+  const v = Number(input.value.trim());
+  return Number.isFinite(v) && v > 0 ? twipsFromUnit(v, u) : undefined;
 };
 
 /**
@@ -126,29 +132,32 @@ export function openPageSetup(current: Section, apply: (set: PageSetup) => void)
   const dialog = document.createElement("dialog");
   dialog.className = "solo-ps-dialog";
   dialog.setAttribute("aria-label", "页面设置");
+  // The unit is read once, at open: the dialog is modal, so 「选项」 cannot change it while the boxes are up.
+  const u = currentUnit();
+  const unitName = unitDef(u).name;
   const box = (name: string, label: string, value: string, hint = ""): string =>
-    `<label>${label}<span class="solo-ps-num"><input name="${name}" inputmode="decimal" autocomplete="off" value="${value}"><span>厘米</span></span>${hint}</label>`;
+    `<label>${label}<span class="solo-ps-num"><input name="${name}" inputmode="decimal" autocomplete="off" value="${value}"><span>${unitName}</span></span>${hint}</label>`;
   dialog.innerHTML =
     `<form><header><h2>页面设置</h2><button type="button" class="solo-ps-close" aria-label="关闭">×</button></header>
     <div class="solo-ps-paper">
     <label>纸张大小<select name="ps-paper">${[...PAPER.map((p) => p.name), CUSTOM]
       .map((n) => `<option value="${n}">${n}</option>`)
       .join("")}</select></label>
-    ${box("ps-width", "宽", cmText(current.pageWidthTwips))}
-    ${box("ps-height", "高", cmText(current.pageHeightTwips))}
+    ${box("ps-width", "宽", unitText(current.pageWidthTwips))}
+    ${box("ps-height", "高", unitText(current.pageHeightTwips))}
     <label class="solo-ps-orient">纸张方向
       <span><label><input type="radio" name="ps-orient" value="portrait">纵向</label>
       <label><input type="radio" name="ps-orient" value="landscape">横向</label></span>
     </label>
     </div>
     <div class="solo-ps-fields">
-    ${box("ps-top", "上", cmText(current.margins.top))}
-    ${box("ps-bottom", "下", cmText(current.margins.bottom))}
-    ${box("ps-left", "左", cmText(current.margins.left))}
-    ${box("ps-right", "右", cmText(current.margins.right))}
-    ${box("ps-header", "页眉距离", cmText(current.margins.header), "<small>从纸张边缘量；留空表示不改</small>")}
-    ${box("ps-footer", "页脚距离", cmText(current.margins.footer), "<small>从纸张边缘量；留空表示不改</small>")}
-    ${box("ps-gutter", "装订线", cmText(current.margins.gutter), "<small>加在装订侧的页边距上；留空表示不改</small>")}
+    ${box("ps-top", "上", unitText(current.margins.top))}
+    ${box("ps-bottom", "下", unitText(current.margins.bottom))}
+    ${box("ps-left", "左", unitText(current.margins.left))}
+    ${box("ps-right", "右", unitText(current.margins.right))}
+    ${box("ps-header", "页眉距离", unitText(current.margins.header), "<small>从纸张边缘量；留空表示不改</small>")}
+    ${box("ps-footer", "页脚距离", unitText(current.margins.footer), "<small>从纸张边缘量；留空表示不改</small>")}
+    ${box("ps-gutter", "装订线", unitText(current.margins.gutter), "<small>加在装订侧的页边距上；留空表示不改</small>")}
     </div>
     <p class="solo-ps-error" role="status"></p>
     <footer><button type="button" class="solo-ps-cancel">取消</button><button type="submit" class="solo-ps-apply">确定</button></footer></form>`;
@@ -177,8 +186,8 @@ export function openPageSetup(current: Section, apply: (set: PageSetup) => void)
    * 自定义 and `build` refuses.
    */
   const matchedPaper = (): (typeof PAPER)[number] | undefined => {
-    const a = readEdge(inputs.width);
-    const b = readEdge(inputs.height);
+    const a = readEdge(inputs.width, u);
+    const b = readEdge(inputs.height, u);
     if (a === undefined || b === undefined) return undefined;
     const long = Math.max(a, b);
     const short = Math.min(a, b);
@@ -187,28 +196,30 @@ export function openPageSetup(current: Section, apply: (set: PageSetup) => void)
 
   /**
    * Lays the named sheet out along the direction the page is turned. Called when the user picks from the list
-   * and once on open, never while a box is being typed in: a file's 11906 twips prefills as 21.001, and 「A4」
-   * would restate it as 21 — the same twip count both ways, so the bytes a save owes do not move and only the
-   * number the user reads changes. Retyping mid-edit would swallow the keystroke that produced the match.
+   * and once on open, never while a box is being typed in: the boxes are already re-read on every keystroke's
+   * `input`, and retyping over the user's edit would swallow the keystroke that produced the match. The two
+   * numbers written are the sheet's own twips in the current unit — A3's 42 厘米 come back exactly, and A4's
+   * 11906 is written as 21.001 厘米 — so choosing a name and pressing 确定 writes the bytes that name has
+   * always meant.
    */
   const fillPaper = (name: string): void => {
     const sheet = PAPER.find((p) => p.name === name);
     if (!sheet) return;
     const land = isLandscape();
-    inputs.width.value = String(land ? sheet.longCm : sheet.shortCm);
-    inputs.height.value = String(land ? sheet.shortCm : sheet.longCm);
+    inputs.width.value = twipText(cmToTwips(land ? sheet.longCm : sheet.shortCm));
+    inputs.height.value = twipText(cmToTwips(land ? sheet.shortCm : sheet.longCm));
   };
 
   /** The setup the boxes say, or nothing at all when a box cannot be read. */
   const build = (): PageSetup | undefined => {
-    const width = readEdge(inputs.width);
-    const height = readEdge(inputs.height);
-    const taken = [read(inputs.top), read(inputs.bottom), read(inputs.left), read(inputs.right)];
-    const optional = [read(inputs.header), read(inputs.footer), read(inputs.gutter)];
+    const width = readEdge(inputs.width, u);
+    const height = readEdge(inputs.height, u);
+    const taken = [read(inputs.top, u), read(inputs.bottom, u), read(inputs.left, u), read(inputs.right, u)];
+    const optional = [read(inputs.header, u), read(inputs.footer, u), read(inputs.gutter, u)];
     const bad = taken.some((r) => r.bad) || optional.some((r) => r.bad);
     const missing = taken.some((r) => r.value === undefined);
     if (width === undefined || height === undefined) {
-      error.textContent = "纸张宽与高要填大于 0 厘米的数。";
+      error.textContent = `纸张宽与高要填大于 0 ${unitName}的数。`;
       applyButton.disabled = true;
       return undefined;
     }
@@ -242,16 +253,16 @@ export function openPageSetup(current: Section, apply: (set: PageSetup) => void)
    * byte that the same direction and the same sheet would not already have written.
    */
   const swapEdges = (): void => {
-    const width = readEdge(inputs.width);
-    const height = readEdge(inputs.height);
+    const width = readEdge(inputs.width, u);
+    const height = readEdge(inputs.height, u);
     if (width === undefined || height === undefined) return;
-    // A sheet the list knows is re-filled from the list rather than re-measured: turning 21 厘米 sideways is
-    // 29.7 × 21 to the user, and 21.001 — the same twip count in the other box — would look like a new number.
+    // A sheet the list knows is refilled from the list rather than re-measured: a box the user left as the
+    // file's own twips should turn into the sheet's own numbers, not stay whatever was typed there.
     const sheet = matchedPaper();
     if (sheet) fillPaper(sheet.name);
     else {
-      inputs.width.value = cmText(height);
-      inputs.height.value = cmText(width);
+      inputs.width.value = unitText(height);
+      inputs.height.value = unitText(width);
     }
   };
   /**

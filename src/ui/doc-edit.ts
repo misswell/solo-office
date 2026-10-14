@@ -11,6 +11,7 @@ import { CommentPanel } from "./doc-comments.js";
 import { ReviewPanel } from "./doc-review.js";
 import { OutlinePanel } from "./doc-outline.js";
 import { openPageSetup as showPageSetupDialog } from "./doc-page-setup.js";
+import { openWordCount } from "./doc-word-count.js";
 
 /**
  * Word-like editing over the whole page: one `contenteditable` owns the body, so
@@ -1254,6 +1255,15 @@ export class DocEditor {
   /** Ribbon command: 「页面设置」 for the page this document is drawn on. */
   openPageSetup(): void {
     showPageSetupDialog(this.doc.sections[0] ?? DEFAULT_SECTION, (set) => this.applyPageSetup(set));
+  }
+
+  /**
+   * Ribbon command: 「字数统计」. The counts come from the model, and the 页数 from how many 张纸 this document
+   * is actually drawn on — the same pages the reader is looking at, not a number derived from the text.
+   * Reading a count changes nothing, so this takes no undo step and does not call `changed()`.
+   */
+  showWordCount(): void {
+    openWordCount({ ...this.doc.wordCounts(), pages: this.host.querySelectorAll<HTMLElement>(".page").length });
   }
 
   /**

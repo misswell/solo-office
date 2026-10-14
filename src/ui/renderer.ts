@@ -510,6 +510,7 @@ function buildDocRibbon(): void {
     editor?.rejectRevisions();
     syncDocRibbon();
   });
+  button(review, "wordCount", "字数统计", "字数统计：报出页数、段落数、字数与字符数", () => editor?.showWordCount());
   chooser(
     review,
     "revView",

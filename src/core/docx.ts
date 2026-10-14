@@ -2234,6 +2234,50 @@ export class WordDocument {
   }
 
   /**
+   * 「字数统计」报的数，由模型自己数出来。范围只有**正文**——表格里的那些段落算（它们是 `w:tbl` 里的 `w:p`，
+   * 与正文同一段逻辑），页眉页脚、脚注尾注、文本框都不算：那几条在 WPS 的对话框里是勾选项，它的默认勾选
+   * **未取证**，所以只数没有争议的那一块。
+   *
+   * 四条口径都是**推导**（WPS 真机把这几个数报成什么，本轮没有实据）：
+   * - 段落数数的是段落标记，空段落也算一个；嵌套表顺着 `w:tc` 的块递归下去，一格里的表不漏。
+   * - 字符数按**码点**数（`for…of`），否则一个增补平面的字算成两个；「不计空格」把 Unicode `White_Space`
+   *   剔掉——里面含全角空格 U+3000 与不换行空格 U+00A0，这两个在中文件里最常见。
+   * - 「中文字符和朝鲜语单词」只数汉字、假名、谚文这些**字位**，中文标点不计；「非中文单词」是空白与这些
+   *   字位切出来的、至少含一个字母或数字的片段。`字数 = 中文字符 + 非中文单词`，与 Word 一族那三行的连法一致。
+   * - 制表符、换行、域指令一个都不计：它们由 `w:tab`/`w:br`/`w:instrText` 说，不在 `inlines[].text` 上，
+   *   而这里只认文字节点。`w:del` 里的删字仍带着 `text`，**算进字数**——这是本轮的取舍，与页面上画删除线
+   *   却还留着它们同一套逻辑（未接受的修订还没消失）。
+   */
+  wordCounts(): { paragraphs: number; characters: number; charactersNoSpace: number; cjk: number; words: number } {
+    let paragraphs = 0;
+    let characters = 0;
+    let charactersNoSpace = 0;
+    let cjk = 0;
+    let words = 0;
+    // 汉字（含扩充 A 与兼容区）、假名、谚文（含字母区与兼容 Jamo）。增补平面 B–F 用 \u{…} 写。
+    const CJK = /[\u3040-\u30ff\u3130-\u318f\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u1100-\u11ff\u{20000}-\u{2fa1f}]/gu;
+    const walk = (bs: readonly Block[]): void => {
+      for (const b of bs) {
+        if (b.kind === "table") {
+          for (const row of b.rows) for (const cell of row) walk(cell.paragraphs);
+          continue;
+        }
+        if (b.kind !== "paragraph") continue;
+        paragraphs++;
+        const text = b.inlines.map((i) => i.text ?? "").join("");
+        for (const ch of text) {
+          characters++;
+          if (!/\s/u.test(ch)) charactersNoSpace++;
+        }
+        cjk += text.match(CJK)?.length ?? 0;
+        for (const token of text.replace(CJK, " ").split(/\s+/)) if (/[\p{L}\p{N}]/u.test(token)) words++;
+      }
+    };
+    walk(this.blocks);
+    return { paragraphs, characters, charactersNoSpace, cjk, words };
+  }
+
+  /**
    * Where 增加缩进量／减少缩进量 puts this paragraph's left indent: the pair to write, or `undefined` when the
    * paragraph already sits on that edge and the click would change nothing.
    *

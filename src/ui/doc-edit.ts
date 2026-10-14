@@ -8,7 +8,7 @@ import { IMAGE_EXT_BY_MIME } from "../core/media.js";
 import { CARRY_CLASS, CARRY_STYLE, PAGE_BORDER_CLASS, RUN_CARRY_CLASS, highlightColor, renderWord } from "../core/render.js";
 import { flatOf, inlineLength, isMark, keepRunIdentity } from "../core/run-identity.js";
 import { CommentPanel } from "./doc-comments.js";
-import { lineCaretAnchor, lineNumberAt, measurePageLayout, pageAtCaret, pageCaretAnchor, pagePositionAt, rowColumnAt, sectionCaretAnchor, type CaretLine, type PageAnchor, type PageMeasure, type PagePlacement } from "./doc-layout.js";
+import { applySheetGaps, caretCharTop, lineCaretAnchor, lineNumberAt, measurePageLayout, pageAtCaret, pageCaretAnchor, pagePositionAt, rowColumnAt, sectionCaretAnchor, SHEET_STRIP_CLASS, type CaretLine, type PageAnchor, type PageMeasure, type PagePlacement } from "./doc-layout.js";
 import { ReviewPanel } from "./doc-review.js";
 import { OutlinePanel } from "./doc-outline.js";
 import { openPageSetup as showPageSetupDialog } from "./doc-page-setup.js";
@@ -288,6 +288,8 @@ const charLength = (inlines: Inline[]): number => inlines.reduce((n, i) => n + i
  * 光标（`node`/`offset` 处那枚**折叠** Range）画出来的矩形**中线**，px。
  * Chrome 给折叠 Range 一枚零宽、整行高的矩形；中线而不是上沿是给 `pageAtCaret` 用的：光标矩形的上沿是字体盒
  * 的上沿，与量出来的行盒跨度差零点几像素且方向不定，正好落在相邻两枚相接的缝上（`doc-layout.ts` 文件头）。
+ * 落在**折行边界**（光标正好在一枚行头）时，折叠矩形量到的是**上一行**——上沿取自那一枚字自己的矩形
+ * （`caretCharTop`，与「行首二分」同一把尺），高度仍用折叠矩形的（整行高）。字量不到再退回折叠矩形。
  * 一枚矩形都拿不到时退回它的包围盒，包围盒也是空的话退回所在元素的盒子（这种退路上只有盒子中心可用）。
  * 都拿不到时 `undefined`——那时状态栏宁可保留上一次的读数，也不报一个凭空算出来的页。
  */
@@ -300,7 +302,7 @@ function caretMidOf(node: Node, offset: number): number | undefined {
     return undefined;
   }
   const own = range.getClientRects()[0];
-  if (own) return own.top + own.height / 2;
+  if (own) return (caretCharTop(node, offset) ?? own.top) + own.height / 2;
   const box = range.getBoundingClientRect();
   if (box.width || box.height || box.top || box.left) return box.top + box.height / 2;
   const el = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
@@ -526,6 +528,32 @@ export class DocEditor {
     this.wireHF();
     this.wire();
     this.applyRevisionView();
+    this.applySheets();
+  }
+
+  /**
+   * 把连续的一张纸画出页缝与纸层（`doc-layout.ts` 的 `applySheetGaps` 量，这里落 DOM）：先清掉上一趟
+   * 的条带，`applySheetGaps` 清掉上一趟的垫片、重量、重垫，再把每一条空档画成纸盒里绝对定位的条带。
+   * 条带排在全部正文块与页面边框之后——编辑器按位置数块，装饰得垫底（`PAGE_BORDER_CLASS` 同一先例）；
+   * 条带是装饰：`sync()` 读回模型时跳过，缩放折算进它的本地坐标（`top` 以纸盒本地 px 计）。
+   */
+  private applySheets(): void {
+    const page = this.page;
+    if (!page) return;
+    for (const el of [...page.querySelectorAll<HTMLElement>(`.${SHEET_STRIP_CLASS}`)]) el.remove();
+    const strips = applySheetGaps(page, this.doc);
+    if (!strips?.length) return;
+    const zoom = parseFloat(page.style.getPropertyValue("zoom")) || 1;
+    const box = page.getBoundingClientRect();
+    page.style.position = "relative";
+    for (const strip of strips) {
+      const el = document.createElement("div");
+      el.className = SHEET_STRIP_CLASS;
+      el.contentEditable = "false";
+      el.setAttribute("aria-hidden", "true");
+      el.style.cssText = `position:absolute;left:0;right:0;top:${(strip.top - box.top) / zoom}px;height:${strip.height}px;background:var(--chrome,#1c1f24);pointer-events:none`;
+      page.append(el);
+    }
   }
 
   private hfEditing: HTMLElement | null = null;
@@ -662,6 +690,9 @@ export class DocEditor {
   setZoom(z: number): void {
     this.zoomLevel = z;
     this.page?.style.setProperty("zoom", String(z));
+    // A strip's `top` is written in paper pixels, and `zoom` scales those with the paper. Re-measure under
+    // the new scale, or the band keeps the old number and drifts away from the seam it was pinned to.
+    this.applySheets();
   }
 
   /** Ids are re-stamped per render because the model and the DOM are built in the same pass. */
@@ -912,6 +943,10 @@ export class DocEditor {
     if (before !== shape(this.doc.blocks) || recorded || markers !== drawn || orphaned || anchorsBefore !== countAnchors(this.doc.blocks)) {
       this.render();
       if (caret) this.setCaret(this.clamp(caret));
+    } else {
+      // No structural change, so no render: but a plain keystroke can still move a line across a page
+      // seam, and the sheets have to follow it without throwing the caret away.
+      this.applySheets();
     }
     this.hooks.changed();
   }
@@ -950,6 +985,8 @@ export class DocEditor {
       // A page border is drawn into the paper box rather than written on it. It holds no text and is not a
       // block, so reading it back would turn the file's `w:pgBorders` into an empty paragraph in the body.
       if (el.classList.contains(PAGE_BORDER_CLASS)) continue;
+      // Same for a sheet strip: a decoration over the seam, not a block.
+      if (el.classList.contains(SHEET_STRIP_CLASS)) continue;
       if (el.tagName === "TABLE") {
         const known = this.ownedAt(el);
         next.push(this.tableOf(el as HTMLTableElement, known?.kind === "table" ? known : undefined));

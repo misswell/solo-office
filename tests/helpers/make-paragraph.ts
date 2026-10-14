@@ -7,19 +7,27 @@ const NS_CT = "http://schemas.openxmlformats.org/package/2006/content-types";
 const NS_PKG = "http://schemas.openxmlformats.org/package/2006/relationships";
 const CT_W = "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml";
 
-const pack = (document: string, styles: string): Uint8Array =>
+const pack = (document: string, styles: string, settings = ""): Uint8Array =>
   zipSync(
     {
       "[Content_Types].xml": strToU8(
         XML_DECL +
-          `<Types xmlns="${NS_CT}"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="${CT_W}"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>`,
+          `<Types xmlns="${NS_CT}"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="${CT_W}"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>${
+            settings ? `<Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>` : ""
+          }</Types>`,
       ),
-      "_rels/.rels": strToU8(XML_DECL + `<Relationships xmlns="${NS_PKG}"><Relationship Id="rId1" Type="${NS_R}/officeDocument" Target="word/document.xml"/></Relationships>`),
+      "_rels/.rels": strToU8(
+        XML_DECL +
+          `<Relationships xmlns="${NS_PKG}"><Relationship Id="rId1" Type="${NS_R}/officeDocument" Target="word/document.xml"/>${
+            settings ? `<Relationship Id="rId2" Type="${NS_R}/settings" Target="word/settings.xml"/>` : ""
+          }</Relationships>`,
+      ),
       "word/_rels/document.xml.rels": strToU8(
         XML_DECL + `<Relationships xmlns="${NS_PKG}"><Relationship Id="rId1" Type="${NS_R}/styles" Target="styles.xml"/></Relationships>`,
       ),
       "word/document.xml": strToU8(XML_DECL + `<w:document xmlns:w="${NS_W}" xmlns:r="${NS_R}"><w:body>${document}</w:body></w:document>`),
       "word/styles.xml": strToU8(XML_DECL + styles),
+      ...(settings ? { "word/settings.xml": strToU8(XML_DECL + `<w:settings xmlns:w="${NS_W}">${settings}</w:settings>`) } : {}),
     },
     { level: 6 },
   );
@@ -88,6 +96,8 @@ export function makeParaPropsDocx(): Uint8Array {
 export function makeIndentDocx(
   entries: readonly { readonly ind?: string; readonly pStyle?: string; readonly text: string }[],
   lentPPr = "",
+  /** The `w:settings` children, for the case where the document states its own 默认制表位. */
+  settings = "",
 ): Uint8Array {
   const document =
     entries
@@ -99,7 +109,7 @@ export function makeIndentDocx(
   const styles = lentPPr
     ? STYLES.replace("</w:styles>", `<w:style w:type="paragraph" w:styleId="Lent"><w:name w:val="借来的"/><w:pPr>${lentPPr}</w:pPr></w:style></w:styles>`)
     : STYLES;
-  return pack(document, styles);
+  return pack(document, styles, settings);
 }
 
 /**

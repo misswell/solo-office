@@ -466,6 +466,10 @@ function buildDocRibbon(): void {
   button(align, "center", "中", "居中", () => editor?.setParagraph({ align: "center" }));
   button(align, "right", "右", "右对齐", () => editor?.setParagraph({ align: "right" }));
   button(align, "both", "两", "两端对齐", () => editor?.setParagraph({ align: "both" }));
+  // WPS 把这两条放在主页段落组里（`IncreaseIndent`/`DecreaseIndent`，图标 `indent_increase_kd`/`indent_decrease_kd`，
+  // Touch Bar 图标的中文标题写的就是「增加缩进量」「减少缩进量」），右键菜单里也有同名的一对。
+  button(align, "outdent", "缩进−", "减少缩进量", () => editor?.shiftParagraphIndent(-1));
+  button(align, "indent", "缩进+", "增加缩进量", () => editor?.shiftParagraphIndent(1));
 
   const lists = group();
   button(lists, "bullet", "• 符号", "项目符号", () => editor?.setParagraph({ list: "bullet" }));

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Paragraph } from "../src/core/docx.js";
-import { WordDocument } from "../src/core/docx.js";
+import { WordDocument, syncParaSlots } from "../src/core/docx.js";
 import { renderWord } from "../src/core/render.js";
 import { writeDocx } from "../src/core/write-docx.js";
 import { OpcPackage, text } from "../src/core/opc.js";
@@ -194,5 +194,117 @@ describe("docx 段落缩进（w:ind）：首行、悬挂、右缩进读得出也
     expect(p).toMatchObject({ indentFirstLine: 480, indentFirstLineChars: 200 });
     expect(drawnStyle(doc, "缩进被改过")).toContain("text-indent:32px");
     expect(indXml(save(doc), "缩进被改过")).toBe('<w:ind w:firstLine="480" w:firstLineChars="200"/>');
+  });
+});
+
+/**
+ * Where 增加缩进量／减少缩进量 puts the number, measured over the 39 distinct bodies WPS itself wrote inside
+ * its own install bundle (`.scratch/indent-step.ts`, files deduped by content hash of `word/document.xml`):
+ *
+ * - `w:defaultTabStop` is stated 420 36 times and 720 3 times, and never left out — so the distance an indent
+ *   spelled in twips moves is the file's own 默认制表位, and 420 缇 is 2 字符 at the 10.5pt these files write.
+ * - a positive `w:leftChars` never arrives without its twips value, and the pairs that show up are 200↔420 (3),
+ *   400↔840 (23), 303↔1207 (16), 100↔198 (14): dividing one by the other gives the paragraph's own em size
+ *   (210/399/402 缇 per character), so a step moves both spellings and the twips value follows the ratio the
+ *   file used rather than a width this model assumes.
+ * - `w:left="0"` is stated 187 times, which is how these files say 回到边内. Whether the button keeps going past
+ *   the left margin onto a negative value is 未取证 — the corpus holds `w:left="-1"`, `-41`, `-178`, but none of
+ *   those files was made by clicking it, so this stops at 0.
+ */
+describe("docx 段落缩进：增加／减少缩进量走的那一步（两笔一起动）", () => {
+  it("moves a character-counted indent by 2 字符 and keeps the file's own per-character width", () => {
+    const doc = open(
+      makeIndentDocx([
+        { ind: 'w:left="840" w:leftChars="400"', text: "四字符" },
+        { ind: 'w:left="1207" w:leftChars="303"', text: "十九点九磅的" },
+      ]),
+    );
+    // 840/400 is 210 缇 per 1% character (10.5pt); 1260/600 states the same width, so the pair the file wrote
+    // grows along its own line instead of being snapped to a number this model picked.
+    expect(doc.nextIndent(byText(doc, "四字符"), 1)).toEqual({ indentLeft: 1260, indentLeftChars: 600 });
+    expect(doc.nextIndent(byText(doc, "四字符"), -1)).toEqual({ indentLeft: 420, indentLeftChars: 200 });
+    // 1207/303 is 399 缇 per character (19.9pt): rounding to 420 would move it by more than the step.
+    expect(doc.nextIndent(byText(doc, "十九点九磅的"), 1)).toEqual({ indentLeft: 2004, indentLeftChars: 503 });
+    expect(doc.nextIndent(byText(doc, "十九点九磅的"), -1)).toEqual({ indentLeft: 410, indentLeftChars: 103 });
+  });
+
+  it("steps a twips-only indent by the document's own 默认制表位 and invents no character count", () => {
+    const doc = open(makeIndentDocx([{ ind: 'w:left="840"', text: "只写缇" }]));
+    const p = byText(doc, "只写缇");
+    expect(doc.defaultTabStop()).toBeUndefined();
+    expect(doc.nextIndent(p, 1)).toEqual({ indentLeft: 1260 });
+    expect(doc.nextIndent(p, 1)!.indentLeftChars).toBeUndefined();
+    expect(doc.nextIndent(p, -1)).toEqual({ indentLeft: 420 });
+
+    // The 3 files of the 39 that state 720 move by 720, not by the 420 the other 36 use.
+    const wide = open(makeIndentDocx([{ ind: 'w:left="840"', text: "只写缇" }], "", '<w:defaultTabStop w:val="720"/>'));
+    expect(wide.defaultTabStop()).toBe(720);
+    expect(wide.nextIndent(byText(wide, "只写缇"), 1)).toEqual({ indentLeft: 1560 });
+  });
+
+  it("stops at the margin instead of writing a change that is nothing", () => {
+    const doc = open(
+      makeIndentDocx([
+        { ind: 'w:left="0" w:leftChars="0"', text: "说了贴边" },
+        { text: "没提过缩进" },
+      ]),
+    );
+    // Both read as sitting on the edge, so 减少缩进量 has nowhere to go and the click must not put `w:ind` down.
+    expect(doc.nextIndent(byText(doc, "说了贴边"), -1)).toBeUndefined();
+    expect(doc.nextIndent(byText(doc, "没提过缩进"), -1)).toBeUndefined();
+    // A stated zero is the 187-element shape: it moves out by 2 字符, and both spellings arrive together.
+    expect(doc.nextIndent(byText(doc, "说了贴边"), 1)).toEqual({ indentLeft: 420, indentLeftChars: 200 });
+    expect(doc.nextIndent(byText(doc, "没提过缩进"), 1)).toEqual({ indentLeft: 420 });
+  });
+
+  it("saves the moved pair over the file's own w:ind, leaving the attributes with no field in place", () => {
+    const bytes = makeIndentDocx([
+      { ind: 'w:left="840" w:leftChars="400" w:right="220" w:rightChars="100" w:firstLine="0" w:firstLineChars="0"', text: "点到的那段" },
+      { ind: 'w:left="420" w:leftChars="200" w:hangingChars="0" w:hanging="0"', text: "别的那一段" },
+    ]);
+    const doc = open(bytes);
+    const p = byText(doc, "点到的那段");
+    const next = doc.nextIndent(p, 1)!;
+    p.indentLeft = next.indentLeft;
+    p.indentLeftChars = next.indentLeftChars;
+    syncParaSlots(p);
+    const after = save(doc);
+    // `w:rightChars` has no field here, and `w:right`, both first-line spellings were not moved — they keep
+    // their values and their places, so only the two numbers the step owns change.
+    expect(indXml(after, "点到的那段")).toBe('<w:ind w:left="1260" w:leftChars="600" w:right="220" w:rightChars="100" w:firstLine="0" w:firstLineChars="0"/>');
+    // The paragraph nobody clicked keeps its exact bytes even though its neighbour was rewritten.
+    expect(indXml(after, "别的那一段")).toBe(indXml(part(bytes), "别的那一段"));
+  });
+
+  it("writes the indent a paragraph borrowed from its style down when the step moves it", () => {
+    const doc = open(
+      makeIndentDocx([{ pStyle: "Lent", text: "靠样式缩进" }], '<w:ind w:left="420" w:leftChars="200"/><w:jc w:val="center"/>'),
+    );
+    const p = byText(doc, "靠样式缩进");
+    expect(p).toMatchObject({ indentLeft: 420, indentLeftChars: 200 });
+    expect(p.pPrSlots?.map((s) => s.tag)).toEqual(["pStyle"]);
+    const next = doc.nextIndent(p, -1)!;
+    p.indentLeft = next.indentLeft;
+    p.indentLeftChars = next.indentLeftChars;
+    syncParaSlots(p);
+    // 减少缩进量 on a borrowed indent answers the style out loud, in `CT_PPrBase`'s own slot for it: `w:pStyle`
+    // keeps its place at the front and the new `w:ind` lands after it.
+    expect(indXml(save(doc), "靠样式缩进")).toBe('<w:ind w:left="0" w:leftChars="0"/>');
+    expect(paraXml(save(doc), "靠样式缩进").indexOf('<w:pStyle w:val="Lent"/>')).toBeLessThan(
+      paraXml(save(doc), "靠样式缩进").indexOf("<w:ind"),
+    );
+  });
+
+  it("draws the step on the page as well as writing it", () => {
+    const doc = open(makeIndentDocx([{ ind: 'w:left="840" w:leftChars="400"', text: "点到的那段" }]));
+    expect(drawnStyle(doc, "点到的那段")).toContain("margin-left:56px");
+    const p = byText(doc, "点到的那段");
+    const next = doc.nextIndent(p, 1)!;
+    p.indentLeft = next.indentLeft;
+    p.indentLeftChars = next.indentLeftChars;
+    syncParaSlots(p);
+    // 1260 缇 is 63pt is 84px — the character form would draw 6.00em, and the two agree because the pair the
+    // step wrote is the pair the file wrote.
+    expect(drawnStyle(doc, "点到的那段")).toContain("margin-left:84px");
   });
 });

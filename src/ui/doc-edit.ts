@@ -1914,6 +1914,34 @@ export class DocEditor {
     return true;
   }
 
+  /**
+   * WPS 主页 ribbon 段落组那两条 增加缩进量／减少缩进量（`IncreaseIndent` aid=3472 `idMso="IndentIncreaseWord"`、
+   * `DecreaseIndent` aid=3473 `idMso="IndentDecreaseWord"`，右键菜单里同名的两条是 80089/80088，Touch Bar 图标的
+   * 中文标题写着「增加缩进量」「减少缩进量」）改的那个数。一档是多少、按字符还是按缇走，都由 `WordDocument.nextIndent`
+   * 按件自己的写法决定（取证见那里）；已经在边上时它返回 `undefined`，这一击就不进撤销栈。
+   */
+  shiftParagraphIndent(dir: 1 | -1): boolean {
+    const path = this.caretPath()?.path;
+    const paragraph = path ? this.paragraphAt(path) : undefined;
+    if (!paragraph) return false;
+    const next = this.doc.nextIndent(paragraph, dir);
+    if (!next) return false;
+    this.snapshot(this.caretPath());
+    const was = paraStyleOf(paragraph);
+    const wasSlots = paragraph.pPrSlots;
+    paragraph.indentLeft = next.indentLeft;
+    if (next.indentLeftChars !== undefined) paragraph.indentLeftChars = next.indentLeftChars;
+    syncParaSlots(paragraph);
+    if (this.trackRevisions && JSON.stringify(was) !== JSON.stringify(paraStyleOf(paragraph))) {
+      paragraph.revFormat = this.signParagraphRevision(paragraph, was, wasSlots);
+    }
+    const caret = this.caretPath();
+    this.render();
+    if (caret) this.setCaret(this.clamp(caret));
+    this.hooks.changed();
+    return true;
+  }
+
   // -------------------------------------------------------------- revisions
 
   /** The insertions and deletions still waiting for a decision, in body order. */

@@ -181,6 +181,19 @@ export interface ParaStyle {
   align?: string;
   indentLeft?: number;
   /**
+   * The same left indent in hundredths of a character (`w:leftChars`) — how WPS spells a Chinese indent. Over the
+   * 39 distinct WPS-written bodies in the bundle (`.scratch/indent-step.ts`, deduped by content hash) a positive
+   * `w:leftChars` arrives alongside its twips value every single time: `200` with `420` 3 times, `400` with `840`
+   * 23 times, `303` with `1207` 16 times. The 缇-per-character those pairs work out to (210, 402, 399) are the
+   * paragraph's own font sizes, so the two spellings say the same indent twice — and 420 缇 is also the
+   * `w:defaultTabStop` 36 of those 39 files state, which is what makes one step of 增加缩进量 2 字符 = 420 缇 at 10.5pt.
+   *
+   * The page draws the twips value (no paragraph states a positive `w:leftChars` without it), but the button has
+   * to move both: leave the character count behind and the file contradicts itself, and Word lays the paragraph
+   * out from the count while our page shows the twips.
+   */
+  indentLeftChars?: number;
+  /**
    * The rest of what `w:ind` can state about the first line and the right edge. `indentRight` and
    * `indentHanging` are twips like `indentLeft` (`w:right`, `w:hanging`); `indentFirstLineChars` is hundredths
    * of a character, which is how WPS writes 首行缩进 2 字符 (`w:firstLineChars="200"`).
@@ -392,7 +405,8 @@ export interface Paragraph {
   align?: string;
   numPr?: { numId: number; ilvl: number };
   indentLeft?: number;
-  /** The same four the `w:ind` element can state, resolved through the paragraph's style. See `ParaStyle`. */
+  indentLeftChars?: number;
+  /** The rest of what `w:ind` states about this paragraph, resolved through its style. See `ParaStyle`. */
   indentRight?: number;
   indentFirstLine?: number;
   indentFirstLineChars?: number;
@@ -1750,6 +1764,7 @@ export class WordDocument {
       styleName: styleId ? this.styles.get(styleId)?.name : undefined,
       align: pPr.jc?.["@_val"] ?? lent?.align,
       indentLeft: ind.indentLeft ?? lent?.indentLeft,
+      indentLeftChars: ind.indentLeftChars ?? lent?.indentLeftChars,
       indentRight: ind.indentRight ?? lent?.indentRight,
       indentFirstLine: ind.indentFirstLine ?? lent?.indentFirstLine,
       indentFirstLineChars: ind.indentFirstLineChars ?? lent?.indentFirstLineChars,
@@ -1781,6 +1796,7 @@ export class WordDocument {
       styleId: para.styleId,
       align: para.align,
       indentLeft: para.indentLeft,
+      indentLeftChars: para.indentLeftChars,
       indentRight: para.indentRight,
       indentFirstLine: para.indentFirstLine,
       indentFirstLineChars: para.indentFirstLineChars,
@@ -2202,6 +2218,51 @@ export class WordDocument {
     this.inventedNumbers.set(ids.numId, { kind, abstractId: ids.abstractId });
     this.numbering.set(ids.numId, [{ ...LIST_SHAPE[kind], start: 1, ilvl: 0 }]);
     return ids.numId;
+  }
+
+  /**
+   * The document's own 默认制表位 (`w:defaultTabStop` in `word/settings.xml`), in twips — the distance
+   * 增加缩进量／减少缩进量 moves a paragraph that spells its indent in twips. Measured over the 39 distinct
+   * WPS-written bodies in the bundle: 36 state 420 and 3 state 720, and none leaves it out
+   * (`.scratch/indent-step.ts`). `word/settings.xml` is not a part this model owns, so this reads it on demand
+   * and a save still carries the bytes the file wrote.
+   */
+  defaultTabStop(): number | undefined {
+    const raw = this.pkg ? new TextDecoder().decode(this.pkg.bytes("word/settings.xml") ?? new Uint8Array()) : "";
+    const v = /<(?:[\w-]+:)?defaultTabStop\s+(?:[\w-]+:)?val="(\d+)"/.exec(raw)?.[1];
+    return v === undefined ? undefined : Number(v);
+  }
+
+  /**
+   * Where 增加缩进量／减少缩进量 puts this paragraph's left indent: the pair to write, or `undefined` when the
+   * paragraph already sits on that edge and the click would change nothing.
+   *
+   * The unit follows how the file spells that paragraph's indent, because the two spellings are the same number
+   * twice (see `ParaStyle.indentLeftChars`): a paragraph stating `w:leftChars` moves by 2 字符 and its twips
+   * value follows the per-character width the file itself used (210 for a 10.5pt paragraph, 399 for a 19.9pt
+   * one — read off its own pair), while a paragraph that only states twips moves by one `w:defaultTabStop` and
+   * gets no character count invented for it. Stepping only one of the two is what would make the file disagree
+   * with itself, and the page would show the twips while Word showed the characters.
+   *
+   * It stops at 0 rather than going negative: WPS writes `w:left="0"` out loud 187 times in these same bodies,
+   * which is its way of saying 回到边内. Whether the button keeps going past the left margin onto negative
+   * values (the corpus holds `w:left="-1"`, `-41`, `-178`) is 未取证 — no file here was made by clicking it.
+   */
+  nextIndent(p: Paragraph, dir: 1 | -1): { indentLeft: number; indentLeftChars?: number } | undefined {
+    const stepChars = 200;
+    const tab = this.defaultTabStop() ?? 420;
+    const chars = p.indentLeftChars;
+    const left = p.indentLeft ?? 0;
+    let nextLeft: number;
+    let nextChars: number | undefined;
+    if (chars !== undefined) {
+      nextChars = Math.max(0, chars + dir * stepChars);
+      nextLeft = chars > 0 && left > 0 ? Math.round((nextChars * left) / chars) : Math.max(0, left + dir * tab);
+    } else {
+      nextLeft = Math.max(0, left + dir * tab);
+    }
+    if (nextLeft === left && nextChars === chars) return undefined;
+    return { indentLeft: nextLeft, ...(nextChars === undefined ? {} : { indentLeftChars: nextChars }) };
   }
 
   /** Whether `word/numbering.xml` owes new bytes: only definitions handed out above make it dirty. */
@@ -3105,6 +3166,7 @@ export class WordDocument {
     // Every `w:ind` attribute resolves on its own, the way the paragraph's first read did it: a record that
     // left the indent out hands the style's indent back, and one that said `w:firstLine="0"` keeps that zero.
     p.indentLeft = p.indentLeft ?? inherited?.indentLeft;
+    p.indentLeftChars = p.indentLeftChars ?? inherited?.indentLeftChars;
     p.indentRight = p.indentRight ?? inherited?.indentRight;
     p.indentFirstLine = p.indentFirstLine ?? inherited?.indentFirstLine;
     p.indentFirstLineChars = p.indentFirstLineChars ?? inherited?.indentFirstLineChars;
@@ -3778,6 +3840,7 @@ function indOf(ind: any): Partial<ParaStyle> {
     if (v !== undefined) out[field] = v;
   };
   take("indentLeft", "left");
+  take("indentLeftChars", "leftChars");
   take("indentRight", "right");
   take("indentFirstLine", "firstLine");
   take("indentFirstLineChars", "firstLineChars");
@@ -3845,8 +3908,9 @@ function paraStyle(pPr: any): ParaStyle {
 
 /** Every paragraph property a `w:pPrChange` carries, so a refusal can clear the ones the record dropped. */
 export const PARA_STYLE_KEYS: (keyof ParaStyle)[] = [
-  "styleId", "align", "indentLeft", "indentRight", "indentFirstLine", "indentFirstLineChars", "indentHanging",
-  "spacingBefore", "spacingAfter", "lineSpacing", "lineSpacingRule", "pageBreakBefore", "numPr", "outlineLevel",
+  "styleId", "align", "indentLeft", "indentLeftChars", "indentRight", "indentFirstLine", "indentFirstLineChars",
+  "indentHanging", "spacingBefore", "spacingAfter", "lineSpacing", "lineSpacingRule", "pageBreakBefore", "numPr",
+  "outlineLevel",
 ];
 
 /**
@@ -3858,8 +3922,8 @@ export const PARA_STYLE_KEYS: (keyof ParaStyle)[] = [
  * write, and `w:pageBreakBefore` is not among the ones a paragraph borrows).
  */
 const LENT_PARA_KEYS: (keyof ParaStyle)[] = [
-  "align", "indentLeft", "indentRight", "indentFirstLine", "indentFirstLineChars", "indentHanging",
-  "spacingBefore", "spacingAfter", "lineSpacing", "lineSpacingRule", "numPr", "outlineLevel",
+  "align", "indentLeft", "indentLeftChars", "indentRight", "indentFirstLine", "indentFirstLineChars",
+  "indentHanging", "spacingBefore", "spacingAfter", "lineSpacing", "lineSpacingRule", "numPr", "outlineLevel",
 ];
 
 /** Every paragraph property the model holds for it, from its own `w:pPr` and from its styles. */
@@ -4209,9 +4273,12 @@ const pprRank = (tag: string): number => {
  * A prefix is copied from the set rather than assumed: `w` is only an alias for the words namespace where the
  * part binds it, and a child written with a different prefix than its neighbours would read as another element.
  *
- * `w:spacing` and `w:ind` are not among the properties this moves, so their bytes stay as the file wrote them —
- * which is also why they must not be re-spelled here: each states more attributes than the model has fields
- * for, and rewriting one from the fields would take `w:firstLine`, `w:hanging` and `w:lineRule` down with it.
+ * `w:spacing` stays out: it states more attributes than the model has fields for, and rewriting it from the
+ * fields would take `w:lineRule` down with it. `w:ind` is re-spelled, but only over the attributes the model
+ * holds (`left`, `leftChars`, `right`, `firstLine`, `firstLineChars`, `hanging`) — the character spellings it
+ * does not hold (`w:rightChars`, `w:hangingChars`) stay in place with the file's own bytes, and the whole child
+ * is left untouched whenever none of the six moved. That is what lets 增加缩进量 move a Chinese indent without
+ * the file saying 420 缇 in one attribute and 4 字符 in the next.
  */
 export function syncParaSlots(p: Paragraph): void {
   const slots = p.pPrSlots;
@@ -4234,7 +4301,38 @@ export function syncParaSlots(p: Paragraph): void {
     p.numPr,
     p.numPr ? `<${prefix}:numPr><w:ilvl w:val="${p.numPr.ilvl}"/><w:numId w:val="${p.numPr.numId}"/></${prefix}:numPr>` : "",
   );
-  const owned = new Set(["pStyle", "pageBreakBefore", "numPr", "jc"]);
+  // 缩进那一句：六个属性跟着字段走，件里说过而模型没有字段的那些（`w:rightChars`、`w:hangingChars`）留在原位。
+  // 一个都没动时整句按原件的字节留着——属性之间怎么空格、值怎么写，都是文件自己的事。
+  const IND_ATTRS: [keyof ParaStyle, string][] = [
+    ["indentLeft", "left"], ["indentLeftChars", "leftChars"], ["indentRight", "right"],
+    ["indentFirstLine", "firstLine"], ["indentFirstLineChars", "firstLineChars"], ["indentHanging", "hanging"],
+  ];
+  const IND_ORDER = ["left", "leftChars", "right", "rightChars", "firstLine", "firstLineChars", "hangingChars", "hanging"];
+  const indSlot = slots.find((s) => s.tag === "ind");
+  const indMoved = IND_ATTRS.some(([key]) => !samePropValue(p.asRead?.[key], p[key]));
+  if (indMoved) {
+    const written = [...(indSlot?.xml ?? "").matchAll(/([A-Za-z_][-\w.]*:)?([\w-]+)\s*=\s*"([^"]*)"/g)].map((m) => ({
+      name: m[2],
+      xml: `${m[1] ?? ""}${m[2]}="${m[3]}"`,
+    }));
+    for (const [key, name] of IND_ATTRS) {
+      const value = p[key] as number | undefined;
+      const at = written.findIndex((k) => k.name === name);
+      if (value === undefined) {
+        if (at >= 0) written.splice(at, 1);
+        continue;
+      }
+      const spell = { name, xml: `${prefix}:${name}="${Math.round(value)}"` };
+      if (at >= 0) written[at] = spell;
+      else {
+        const after = written.findIndex((k) => IND_ORDER.indexOf(k.name) > IND_ORDER.indexOf(name));
+        if (after < 0) written.push(spell);
+        else written.splice(after, 0, spell);
+      }
+    }
+    wanted.push({ tag: "ind", xml: written.length ? `<${prefix}:ind ${written.map((k) => k.xml).join(" ")}/>` : "" });
+  }
+  const owned = new Set(["pStyle", "pageBreakBefore", "numPr", "jc", ...(indMoved ? ["ind"] : [])]);
   let next = slots.filter((s) => !owned.has(s.tag));
   for (const w of wanted) {
     const at = next.findIndex((s) => pprRank(s.tag) > pprRank(w.tag));

@@ -104,6 +104,7 @@ function indTag(s: ParaStyle): string {
     if (value !== undefined) attrs.push(` ${name}="${Math.round(value)}"`);
   };
   put("w:left", s.indentLeft);
+  put("w:leftChars", s.indentLeftChars);
   put("w:right", s.indentRight);
   put("w:firstLine", s.indentFirstLine);
   put("w:firstLineChars", s.indentFirstLineChars);
@@ -149,6 +150,7 @@ function paragraphProps(p: Paragraph): string {
   if (spacing.length) parts.push(`<w:spacing${spacing.join("")}/>`);
   const ind = indTag({
     ...(has("indentLeft") ? { indentLeft: p.indentLeft } : {}),
+    ...(has("indentLeftChars") ? { indentLeftChars: p.indentLeftChars } : {}),
     ...(has("indentRight") ? { indentRight: p.indentRight } : {}),
     ...(has("indentFirstLine") ? { indentFirstLine: p.indentFirstLine } : {}),
     ...(has("indentFirstLineChars") ? { indentFirstLineChars: p.indentFirstLineChars } : {}),

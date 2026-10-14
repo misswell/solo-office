@@ -1617,6 +1617,13 @@ window.addEventListener("keydown", (e) => {
       openFind();
       return;
     }
+    // WPS 给这条命令的快捷键：`res/wpscommon.kuip:267` 写着 `shortcutHint="Ctrl+Shift+G"`，
+    // `wpsentries.kuip` 那条 `shortcut cmd="WordCount"` 又同时挂着 `Meta+Shift+G`，macOS 上就是 ⌘⇧G。
+    if (key === "g" && ke.shiftKey) {
+      ke.preventDefault();
+      editor?.showWordCount();
+      return;
+    }
   }
   if (current?.kind !== "xlsx" || ke.isComposing) return;
   if (key === "f") {

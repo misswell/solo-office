@@ -6,6 +6,9 @@
  * 以及状态栏右键菜单里的 `WordCountStatusBar`（那一串 15 项就是各格的开关）——后三处都在
  * `res/wpscommon.kuip` / `res/wpsentries.kuip`。也就是说**这一页不是新加一个功能，是把同一条命令多接了一条腿**：
  * 状态栏那一格的实现在 `doc-status-bar.ts`，两边读的数都出自这里的 `WordCountReadout`。
+ * 快捷键两条按法都接了：包里的 `shortcut cmd="WordCount"` 同时给着 `Ctrl+Shift+G` 与 `Meta+Shift+G`
+ * （`res/wpscommon.kuip:1170–1171`，1359–1360 又原样重复一组），实现在 `renderer.ts` 那条窗口级 keydown 分发里，
+ * 只有文字页认，且**不带 Shift 的 ⌘G 不算**这条命令。
  *
  * 数不是这里数的，是 `WordDocument.wordCounts()` 数出来的（口径与取舍都写在那一处）；这个文件只把它们排成
  * 一行行的读数。`字数` 那行报的是 `中文字符和朝鲜语单词 + 非中文单词`，与 Word 一族那三行的连法相同。

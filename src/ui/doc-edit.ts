@@ -1484,15 +1484,17 @@ export class DocEditor {
    * 「定位」（⌘G 与状态栏 页码／页数／节 那三格，WPS 的 `KxLegacyTriggerCommand id="GoTo"`，`doc-goto.ts` 头注有
    * 实据）：先量一次当前页（`caretPage()`，与状态栏同一份），再开对话框。纸没画上、或页高量不出来时**不开**——
    * 一个没有页数的定位对话框只能骗人。光标不在纸面上时种子取第 1 页／第 1 节：状态栏那种情形保留上一次读数，
-   * 编辑器没有那一份存档，这里不假装有。`target` 是打开时预选的目标（页／节／行／书签／批注／表格／图形），由点哪一格决定；
+   * 编辑器没有那一份存档，这里不假装有。`target` 是打开时预选的目标（页／节／行／书签／批注／表格／图形／标题），由点哪一格决定；
    * ⌘G 走默认的「页」。打开这一刻顺手把书签名单（`bookmarks()`）、批注条数（`doc.comments` 的条数，与
    * 纸上编号同一份数组）与总行数/光标行号（`caretLineNumber`，绝对行号）量一份交给对话框——都是这一刻的
    * 模型读数，对话框是模态的，期间模型不会变；批注号的种子从光标所在的那条读（`commentIdsAtCaret` 给的 id
    * 反查下标 + 1），落点不指着任何一条时归 1；行号的种子是光标所在那一行的绝对行号，光标不在纸面上时归 1；
    * 表格张数与表格号的种子（`tableCount()`／`tableNumberAtCaret()`）都是这一刻从模型数的，光标不在任何
-   * 表格里时归 1；图形个数（`graphicCount()`）同理，图形没有「光标所在的那一枚」，种子永远归 1。
+   * 表格里时归 1；图形个数（`graphicCount()`）同理，图形没有「光标所在的那一枚」，种子永远归 1；
+   * 标题个数与标题号的种子（`headingCount()`／`headingNumberAtCaret()`）数的是导航窗格那趟大纲走查，
+   * 光标不在任何一枚标题里时归 1。
    */
-  showGoTo(target: "page" | "section" | "line" | "bookmark" | "comment" | "table" | "graphic" = "page"): void {
+  showGoTo(target: "page" | "section" | "line" | "bookmark" | "comment" | "table" | "graphic" | "heading" = "page"): void {
     const at = this.caretPage();
     const pages = at?.pages ?? this.layout()?.pages;
     if (pages === undefined) return;
@@ -1502,8 +1504,8 @@ export class DocEditor {
     const first = this.commentIdsAtCaret()[0];
     const at0 = first === undefined ? -1 : this.doc.comments.findIndex((c) => c.id === first);
     openGoTo(
-      { page: at?.page ?? 1, pages, section: cs?.section ?? 1, sections, line: cl?.line ?? 1, lines: this.layout()?.lines ?? 0, bookmarks: this.bookmarks().map((b) => b.name), comments: this.doc.comments.length, comment: at0 >= 0 ? at0 + 1 : 1, table: this.tableNumberAtCaret() ?? 1, tables: this.tableCount(), graphic: 1, graphics: this.graphicCount(), target },
-      { page: (n) => this.goToPage(n), section: (n) => this.goToSection(n), line: (n) => this.goToLine(n), bookmark: (name) => this.goToBookmark(name), comment: (n) => this.goToComment(n), table: (n) => this.goToTable(n), graphic: (n) => this.goToGraphic(n) },
+      { page: at?.page ?? 1, pages, section: cs?.section ?? 1, sections, line: cl?.line ?? 1, lines: this.layout()?.lines ?? 0, bookmarks: this.bookmarks().map((b) => b.name), comments: this.doc.comments.length, comment: at0 >= 0 ? at0 + 1 : 1, table: this.tableNumberAtCaret() ?? 1, tables: this.tableCount(), graphic: 1, graphics: this.graphicCount(), heading: this.headingNumberAtCaret() ?? 1, headings: this.headingCount(), target },
+      { page: (n) => this.goToPage(n), section: (n) => this.goToSection(n), line: (n) => this.goToLine(n), bookmark: (name) => this.goToBookmark(name), comment: (n) => this.goToComment(n), table: (n) => this.goToTable(n), graphic: (n) => this.goToGraphic(n), heading: (n) => this.goToHeading(n) },
     );
   }
 
@@ -1637,6 +1639,16 @@ export class DocEditor {
     return n;
   }
 
+  /**
+   * 本文的标题个数：导航窗格那份名单的长度（`outlineEntries()`——模型里带大纲级别的段落，表内也算）。
+   * 这里不多走一趟：窗格列的就是纸上的标记，数与纸同一份读数的来源（`outlineMarks()` 与名单一一对号，
+   * 见 `revealOutline` 那段注）。WPS 真机数不数表内标题**未取证**；这里钉的是自己那条回路：对话框那格的
+   * 「本文共 N 个标题」与 `goToHeading` 的第 n 枚出自同一份大纲走查。
+   */
+  headingCount(): number {
+    return this.outlineEntries().length;
+  }
+
   /** 第 `n` 张表的引用与模型坐标前缀（`tableCount` 数的那一趟里的第 n 张）；数不到返回 undefined。 */
   private nthTable(n: number): { table: Table; prefix: number[] } | undefined {
     if (!Number.isInteger(n) || n < 1) return undefined;
@@ -1751,6 +1763,32 @@ export class DocEditor {
     if (!block) return false;
     const offset = [...img.parentNode.childNodes].indexOf(img);
     return this.landAt({ node: img.parentNode, offset, block });
+  }
+
+  /**
+   * 光标所在标题的号（按 `outlineEntries` 数出来的那个号）：从 `caretPath` 的模型路径取光标所在的那一段落
+   * 元素，看它是不是纸上的大纲标记（`data-outline`——`render.ts` 给解析得出级别的段落盖上的一枚），是就回到
+   * 它在 `outlineMarks()` 里的下标 + 1。光标不在任何一枚标题里返回 undefined（对话框的种子归 1）。号与落点
+   * 出自同一份大纲读数——`outlineMarks()` 与 `outlineEntries()` 一一对号，这里是第三处读者，没有第二份算法。
+   */
+  private headingNumberAtCaret(): number | undefined {
+    const at = this.caretPath();
+    if (!at) return undefined;
+    const el = this.elementAt(at.path);
+    if (!el || !el.hasAttribute("data-outline")) return undefined;
+    const index = this.outlineMarks().indexOf(el as HTMLElement);
+    return index >= 0 ? index + 1 : undefined;
+  }
+
+  /**
+   * 定位到第 `n` 枚标题：落点走导航窗格那条「定位」——`revealOutline` 按下标点，选中标题文字、光标停在
+   * **标题末尾**、纸上那枚标记打上高亮并滚进视野。号码越界、纸上那枚标记找不回来都返回 false——对话框的
+   * 1..N 来自同一刻的 `headingCount()`，这是第二道闸门。Word 真机 `GoTo` 的落点在标题**开头**、数不数表内
+   * 标题**未取证**；这里钉的是自己那条回路：落点与导航窗格点一行是同一条路，末尾也是窗格那条路的末尾。
+   */
+  goToHeading(n: number): boolean {
+    if (!Number.isInteger(n) || n < 1) return false;
+    return this.revealOutline(n - 1);
   }
 
   /**

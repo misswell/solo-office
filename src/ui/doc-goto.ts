@@ -8,14 +8,15 @@
  * "Go To" dialog.」）的 detail 都写着「Click to open "Go To" dialog.」：本页与 `doc-status-bar.ts` 的三格、
  * 快捷键，是同一条命令的四种长相——与「字数统计」那三处（ribbon／状态栏／快捷键）同一形状。
  *
- * **现在有「页」「节」「行」「书签」「批注」「表格」「图形」七个目标**：kuip 的浏览器一族（533 行 `KxWpsBrowserCmdTriggerCommand
+ * **现在有「页」「节」「行」「书签」「批注」「表格」「图形」「标题」八个目标**：kuip 的浏览器一族（533 行 `KxWpsBrowserCmdTriggerCommand
  * id="BrowseGoTo"`）与 Word 的「定位目标」列表里还有 脚注/公式 等目标；模型里这一刻既落得了点、
- * 又有回路的只有这七个——包里那条 API 就是 `doc.GoTo(wdGoToPage, wdGoToAbsolute, page).Start`
+ * 又有回路的只有这八个——包里那条 API 就是 `doc.GoTo(wdGoToPage, wdGoToAbsolute, page).Start`
  * （`office6/addons/kwpsapiex/wps.js`，`wdGoToSection` 一族同理）。列表里只摆点得动的目标名：剩下的等
- * 各自的回路接上再进列表。七个目标的种子与合法范围都由打开这一刻的读数给出——页数来自 `caretPage`
+ * 各自的回路接上再进列表。八个目标的种子与合法范围都由打开这一刻的读数给出——页数来自 `caretPage`
  * 的测量，节数来自 `sectionEndsOf` 数的文件声明边界（口径见 `doc-layout.ts` 文件头），行数与光标行号来自
  * 同一趟铺排（`measurePageLayout` 的 `lines` 与 `lineNumberAt`），批注条数来自 `doc.comments` 的条数，
- * 表格张数与图形个数来自同一趟模型走查（`tableCount`／`graphicCount`）。
+ * 表格张数与图形个数来自同一趟模型走查（`tableCount`／`graphicCount`），标题个数与光标所在标题号来自
+ * 导航窗格那趟大纲走查（`outlineEntries` 的长度与 `outlineMarks()` 里那枚标记的下标）。
  *
  * 「书签」这一格的候选是**名字下拉**，名单来自 `DocEditor.bookmarks()`（`w:bookmarkStart` 的 `w:name`，
  * 按文档顺序、同名取第一枚）。含 `_Toc`／`_GoBack` 这类机器书签的名字**不过滤**：那一批 86 份 WPS 写的件
@@ -49,22 +50,31 @@
  * 浮动形状、落点在图形前还是别处**未取证**；这里钉的是自己那条回路：号与落点出自同一趟模型走查
  * （`DocEditor.goToGraphic`）。
  *
+ * 「标题」这一格的号按**大纲顺序**数（`DocEditor.outlineEntries`：模型里带大纲级别的段落，头条即 1 号），
+ * 表内（含嵌套表）的标题也算——与「表格」「图形」同一趟走查的读者顺序。落点走导航窗格那条「定位」
+ * （`DocEditor.revealOutline`）：选中标题文字、光标停在**标题末尾**（窗格那条回路就是末尾——继续往下写
+ * 是最常见的意思），纸上那枚标题打上高亮、滚进视野。种子是**光标所在的那枚标题**的号（光标停在标题段落
+ * 里就给那一枚，停在正文给 1）——「标题」与「书签/图形」不同，光标真的「在」某一枚里。Word 真机这一格
+ * 叫「标题」、`GoTo` 落点在标题开头、数不数表内标题**未取证**；这里钉的是自己那条回路：号与落点出自
+ * 同一趟大纲走查，和导航窗格同一份读数。
+ *
  * 中文界面里这一家的字面（标题、目标名、标签、按钮）**未取证**（`.qm` 那堵墙，与 `doc-word-count.ts`
  * 头注记的是同一件）；这里按 Word 一族的通用叫法写。对话框的形状（模态与否、「定位」之后关不关）真机上
  * **未取证**：本片与「字数统计」用同一套写法——模态、Esc 关，按「定位」把落点交出去就收摊。这一页不改件，
- * 所以不走 `changed()`；落光标由 `goToPage`/`goToSection`/`goToLine`/`goToBookmark`/`goToComment`/`goToTable`/`goToGraphic` 负责，
+ * 所以不走 `changed()`；落光标由 `goToPage`/`goToSection`/`goToLine`/`goToBookmark`/`goToComment`/`goToTable`/`goToGraphic`/`goToHeading` 负责，
  * 回来时状态栏自己会重读（走 `selectionchange`）。**取消/关闭之后光标要回到开窗前的位置**：数字框一聚焦
  * 浏览器就把文档选区带进对话框，关窗后它会落去 BODY（隔离探针实测，见 `openGoTo` 里那段注）——开窗前存
  * 一份 Range，收尾时放回去；真机上 WPS 取消「定位」后光标在原处是常理，但我们这一手的实测只在无头
  * Chrome 里做过，Electron 真机**未取证**。
  *
- * 目标的合法范围由对话框自己先挡一道（页/节/行/批注/表格/图形越界、非整数不关窗，就地给一句说明；书签名单
- * 为空、批注一条没有、一行内容都没有、一张表格/一个图形都没有也不关窗），`goToPage`/`goToSection`/`goToLine`/
- * `goToBookmark`/`goToComment`/`goToTable`/`goToGraphic` 那层再挡一道——两道都不是猜：页数/节数/行数是打开
- * 这一刻量出来的「共 N 页/节/行」，书签名单与批注条数、表格张数、图形个数是同一刻从模型数出来的。
+ * 目标的合法范围由对话框自己先挡一道（页/节/行/批注/表格/图形/标题越界、非整数不关窗，就地给一句说明；
+ * 书签名单为空、批注一条没有、一行内容都没有、一张表格/一个图形/一枚标题都没有也不关窗），
+ * `goToPage`/`goToSection`/`goToLine`/`goToBookmark`/`goToComment`/`goToTable`/`goToGraphic`/`goToHeading`
+ * 那层再挡一道——两道都不是猜：页数/节数/行数是打开这一刻量出来的「共 N 页/节/行」，书签名单与批注条数、
+ * 表格张数、图形个数、标题个数是同一刻从模型数出来的。
  */
-/** 「定位目标」这一格的七个目标：页、节、行、书签、批注、表格、图形。 */
-type Target = "page" | "section" | "line" | "bookmark" | "comment" | "table" | "graphic";
+/** 「定位目标」这一格的八个目标：页、节、行、书签、批注、表格、图形、标题。 */
+type Target = "page" | "section" | "line" | "bookmark" | "comment" | "table" | "graphic" | "heading";
 
 const STYLE_ID = "solo-goto-styles";
 
@@ -103,30 +113,31 @@ function noneText(target: Target): string | undefined {
   if (target === "line") return "本文没有内容行。";
   if (target === "table") return "本文没有表格。";
   if (target === "graphic") return "本文没有图形。";
+  if (target === "heading") return "本文没有标题。";
   return undefined;
 }
 
 /**
- * 打开「定位」。`seed` 是打开这一刻的种子与范围：`page`/`section`/`line`/`comment`/`table` 是光标所在的
- * 页号/节号/行号/批注号/表格号（`graphic` 没有「光标所在的」一枚，永远给 1），`pages`/`sections`/`lines`/
- * `comments`/`tables`/`graphics` 是量出来或数出来的共几页/几节/几行/几条批注/几张表格/几个图形（合法范围
- * 的来源），`bookmarks` 是书签名字按文档顺序的名单（「书签」目标的候选），`target` 是预选的目标（点状态栏
- * 哪一格就开哪个）。`goTo` 是各目标合法的落点
- * （`DocEditor.goToPage`/`goToSection`/`goToLine`/`goToBookmark`/`goToComment`/`goToTable`/`goToGraphic`）。
+ * 打开「定位」。`seed` 是打开这一刻的种子与范围：`page`/`section`/`line`/`comment`/`table`/`heading` 是光标
+ * 所在的页号/节号/行号/批注号/表格号/标题号（`graphic` 没有「光标所在的」一枚，永远给 1），`pages`/`sections`/
+ * `lines`/`comments`/`tables`/`graphics`/`headings` 是量出来或数出来的共几页/几节/几行/几条批注/几张表格/
+ * 几个图形/几枚标题（合法范围的来源），`bookmarks` 是书签名字按文档顺序的名单（「书签」目标的候选），
+ * `target` 是预选的目标（点状态栏哪一格就开哪个）。`goTo` 是各目标合法的落点
+ * （`DocEditor.goToPage`/`goToSection`/`goToLine`/`goToBookmark`/`goToComment`/`goToTable`/`goToGraphic`/`goToHeading`）。
  * 一次只挂一个，再点一次换掉旧的。
  */
 export function openGoTo(
-  seed: { page: number; pages: number; section: number; sections: number; line: number; lines: number; bookmarks: readonly string[]; comment: number; comments: number; table: number; tables: number; graphic: number; graphics: number; target: Target },
-  goTo: { page: (n: number) => void; section: (n: number) => void; line: (n: number) => void; bookmark: (name: string) => void; comment: (n: number) => void; table: (n: number) => void; graphic: (n: number) => void },
+  seed: { page: number; pages: number; section: number; sections: number; line: number; lines: number; bookmarks: readonly string[]; comment: number; comments: number; table: number; tables: number; graphic: number; graphics: number; heading: number; headings: number; target: Target },
+  goTo: { page: (n: number) => void; section: (n: number) => void; line: (n: number) => void; bookmark: (name: string) => void; comment: (n: number) => void; table: (n: number) => void; graphic: (n: number) => void; heading: (n: number) => void },
 ): void {
   document.querySelectorAll<HTMLDialogElement>(".solo-goto-dialog").forEach((old) => {
     if (old.open) old.close();
     old.remove();
   });
   injectStyles();
-  const cur = { page: seed.page, section: seed.section, line: seed.line, comment: seed.comment, table: seed.table, graphic: seed.graphic };
-  const most = { page: seed.pages, section: seed.sections, line: seed.lines, comment: seed.comments, table: seed.tables, graphic: seed.graphics };
-  const unit = { page: "页", section: "节", line: "行", comment: "批注", table: "表格", graphic: "图形" };
+  const cur = { page: seed.page, section: seed.section, line: seed.line, comment: seed.comment, table: seed.table, graphic: seed.graphic, heading: seed.heading };
+  const most = { page: seed.pages, section: seed.sections, line: seed.lines, comment: seed.comments, table: seed.tables, graphic: seed.graphics, heading: seed.headings };
+  const unit = { page: "页", section: "节", line: "行", comment: "批注", table: "表格", graphic: "图形", heading: "标题" };
   const dialog = document.createElement("dialog");
   dialog.className = "solo-goto-dialog";
   dialog.setAttribute("aria-label", "定位");
@@ -135,7 +146,7 @@ export function openGoTo(
   // 真闸门是下面 submit 里那行检查。
   dialog.innerHTML =
     `<form novalidate><header><h2>定位</h2><button type="button" class="solo-goto-close" aria-label="关闭">×</button></header>
-    <div class="solo-goto-row"><label for="solo-goto-target">定位目标</label><select id="solo-goto-target"><option value="page">页</option><option value="section">节</option><option value="line">行</option><option value="bookmark">书签</option><option value="comment">批注</option><option value="table">表格</option><option value="graphic">图形</option></select></div>
+    <div class="solo-goto-row"><label for="solo-goto-target">定位目标</label><select id="solo-goto-target"><option value="page">页</option><option value="section">节</option><option value="line">行</option><option value="bookmark">书签</option><option value="comment">批注</option><option value="table">表格</option><option value="graphic">图形</option><option value="heading">标题</option></select></div>
     <div class="solo-goto-row solo-goto-number"><label for="solo-goto-value">输入页号</label><input id="solo-goto-value" type="number" min="1" step="1"></div>
     <div class="solo-goto-row solo-goto-name" hidden><label for="solo-goto-bookmark">输入书签名</label><select id="solo-goto-bookmark"></select></div>
     <p class="solo-goto-note"></p>
@@ -167,8 +178,8 @@ export function openGoTo(
     input.min = "1";
     input.max = String(most[target]);
     input.value = String(cur[target]);
-    // 批注的量词是「条」、表格是「张」、图形是「个」不是目标名；一条没有／一行内容都没有／一张表格、一个图形
-    // 都没有的件说得出来，与空书签名单同一条路（submit 里也挡）。
+    // 批注的量词是「条」、表格是「张」、图形/标题是「个/枚」不是目标名；一条没有／一行内容都没有／一张表格、
+    // 一个图形、一枚标题都没有的件说得出来，与空书签名单同一条路（submit 里也挡）。
     const none = noneText(target);
     note.textContent =
       none && most[target] === 0
@@ -179,7 +190,9 @@ export function openGoTo(
             ? `本文共 ${most.table} 张表格。`
             : target === "graphic"
               ? `本文共 ${most.graphic} 个图形。`
-              : `本文共 ${most[target]} ${unit[target]}。`;
+              : target === "heading"
+                ? `本文共 ${most.heading} 个标题。`
+                : `本文共 ${most[target]} ${unit[target]}。`;
   };
   // 数字框一聚焦，浏览器就把**文档选区**带进对话框（实测 headless Chrome：开→对话框里，关+摘除→BODY；
   // 焦点落在按钮/下拉上时不动选区——隔离探针 `.scratch/sel-close-probe.html` 的矩阵）。关窗之后光标该回到

@@ -8,6 +8,7 @@ import { IMAGE_EXT_BY_MIME } from "../core/media.js";
 import { CARRY_CLASS, CARRY_STYLE, PAGE_BORDER_CLASS, RUN_CARRY_CLASS, highlightColor, renderWord } from "../core/render.js";
 import { flatOf, inlineLength, isMark, keepRunIdentity } from "../core/run-identity.js";
 import { CommentPanel } from "./doc-comments.js";
+import { measurePageLayout, type PageMeasure } from "./doc-layout.js";
 import { ReviewPanel } from "./doc-review.js";
 import { OutlinePanel } from "./doc-outline.js";
 import { openPageSetup as showPageSetupDialog } from "./doc-page-setup.js";
@@ -1318,12 +1319,21 @@ export class DocEditor {
 
   /**
    * The numbers 「字数统计」 reports, read off the model as it stands right now. Both faces of the command
-   * (the dialog and the 状态栏那一格) go through here, so they cannot disagree, and neither one reports a
-   * 页数: that is a layout answer — WPS itself computes it with `ComputeStatistics(wdStatisticPages)` — and
-   * this page draws the whole body on one continuous sheet.
+   * (the dialog and the 状态栏那一格) go through here, so they cannot disagree. 页数／行数 不在这一份里：那是
+   * 排版之后的答案（WPS 自己也是用 `ComputeStatistics(wdStatisticPages)` 那一族问的），走 `layout()`。
    */
   counts(): WordCountReadout {
     return this.doc.wordCounts();
+  }
+
+  /**
+   * 「字数统计」里 页数／行数 那两行的来路：把这张连续的纸按节的页高与上下边距量一遍，行盒从**画出来的盒子**里读
+   * （口径、以及它为什么不能当成 WPS 引擎那个数，都写在 `doc-layout.ts` 文件头）。纸没画上、或节说的页高连边距
+   * 都不够留时返回 `undefined`——那一行整个不报，而不是报一个量不出来的数。
+   */
+  layout(): PageMeasure | undefined {
+    if (!this.page) return undefined;
+    return measurePageLayout(this.page, this.doc.sections[0] ?? DEFAULT_SECTION);
   }
 
   /**
@@ -1351,7 +1361,7 @@ export class DocEditor {
 
   /** Ribbon command: 「字数统计」. Reading a count changes nothing, so this takes no undo step and does not call `changed()`. */
   showWordCount(): void {
-    openWordCount(this.counts(), this.selectionCounts());
+    openWordCount(this.counts(), this.selectionCounts(), this.layout());
   }
 
   /**

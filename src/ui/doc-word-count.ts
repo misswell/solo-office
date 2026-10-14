@@ -5,20 +5,23 @@
  * `KxWpsStatusWordCountInfoCommand`（`aid="792"`、`minimumWidth="75"`，detail 说的是「点一下开字数统计对话框」），
  * 以及状态栏右键菜单里的 `WordCountStatusBar`（那一串 15 项就是各格的开关）——后三处都在
  * `res/wpscommon.kuip` / `res/wpsentries.kuip`。也就是说**这一页不是新加一个功能，是把同一条命令多接了一条腿**：
- * 状态栏那一格的实现在 `doc-status-bar.ts`，两边读的数都出自这里的 `WordCountReadout`。
+ * 状态栏那一格的实现在 `doc-status-bar.ts`，两边读的字数都出自这里的 `WordCountReadout`，页数与行数都出自
+ * `doc-layout.ts` 的那一次测量。
  * 快捷键两条按法都接了：包里的 `shortcut cmd="WordCount"` 同时给着 `Ctrl+Shift+G` 与 `Meta+Shift+G`
  * （`res/wpscommon.kuip:1170–1171`，1359–1360 又原样重复一组），实现在 `renderer.ts` 那条窗口级 keydown 分发里，
  * 只有文字页认，且**不带 Shift 的 ⌘G 不算**这条命令。
  *
- * 数不是这里数的，是 `WordDocument.wordCounts()` 数出来的（口径与取舍都写在那一处）；这个文件只把它们排成
+ * 字数不是这里数的，是 `WordDocument.wordCounts()` 数出来的（口径与取舍都写在那一处）；这个文件只把它们排成
  * 一行行的读数。`字数` 那行报的是 `中文字符和朝鲜语单词 + 非中文单词`，与 Word 一族那三行的连法相同。
  *
- * 「行数」与「页数」这两行**不报**：它们要的是排版之后的结果。包里的 JS API 自己就这么分类——
- * `office6/addons/kwpsapiex/wps.js` 的 `getDocumentWordCount()` 把 `words`、`characters`、
- * `charactersWithSpaces`、`paragraphs`、`lines`、`pages` 全都交给 `doc.ComputeStatistics(wdStatistic…)`，
- * 而 `lines`/`pages` 一行在哪里断由字体度量和栏宽决定，模型里没有这个数，编一个出来就是假读数。
- * 这一页目前把整篇画在一张连续的纸上（`render.ts` 只出一个 `.page`），照画报「页数 1」对一个四十段的件
- * 是错的数，所以宁可少一行。「所选文字」那一栏同理：有选区时 WPS 会另报选中部分的字数，本轮只数全文。
+ * 「行数」与「页数」那两行要的是排版之后的结果，模型里没有这个数：包里的 JS API 自己就把它们和字数分在同一族里
+ * （`office6/addons/kwpsapiex/wps.js` 的 `getDocumentWordCount()` 把 `words`、`characters`、
+ * `charactersWithSpaces`、`paragraphs`、`lines`、`pages` 全都交给 `doc.ComputeStatistics(wdStatistic…)`）。
+ * 第 66 轮那版因此**没有**这两行——那时候纸上只画一张连续的 `.page`，照画报「页数 1」对一个四十段的件是假读数。
+ * 现在这两行由 `doc-layout.ts` **量**出来（量的就是这张连续的纸按节的页高切成几张、行盒有几枚），所以报的是
+ * 「本程序量出来的」，不是 WPS 引擎那一族数：逐页是否相同**未取证**，口径写在 `doc-layout.ts` 文件头。
+ * 「所选文字」那一节仍然只有四行：一节选区的页数/行数要把选区映射进行盒，本轮没做，所以那一节整个不报这两行，
+ * 而不是把整篇的数抄过去。
  *
  * 对话框标题那句「字数统计」在包里能找到（`office6/addons/kwpsapiex/wps.js`），但**各行标签的中文原话取不到**：
  * `.qm` 是编译过的翻译，本轮把两种编码都扫了一遍——`en_US/wps.qm` 里能按 UTF-16 搜到「Word Count」，
@@ -31,6 +34,8 @@
  * 渐变画到标题行里（拍干净截图时看到的，同一件事还压着页面设置／编辑图表／筛选那三张卡片）。
  * 对话框挂在 `document.body` 上，不是编辑器的宿主里——`render()` 会把宿主整个换掉。
  */
+import type { PageMeasure } from "./doc-layout.js";
+
 export type WordCountReadout = {
   paragraphs: number;
   characters: number;
@@ -82,8 +87,11 @@ function injectStyles(): void {
  * 再交给 `ComputeStatistics(wdStatistic…)`），把选区当目标传进去就是选中部分的数——所以这一节**不是猜的行为**，
  * 是包里的函数签名允许的。**「所选文字」这四个字与这一节的行序仍是未取证**（同 §48 那堵 `.qm` 墙），
  * 按 Word 一族的通用叫法写。没有选区（折叠光标）时这一节整个不出现，而不是报一排 0。
+ *
+ * `layout` 是那一次排版测量（`doc-layout.ts`）：给了就在整篇那一节最前面多排 页数／行数 两行，没给（纸没画上、
+ * 或节说的页高连边距都不够留）就**少这两行**——不是排 0。选区那一节不带这两行：那是要把选区映射进行盒的另一条口径。
  */
-export function openWordCount(counts: WordCountReadout, selection?: WordCountReadout): void {
+export function openWordCount(counts: WordCountReadout, selection?: WordCountReadout, layout?: PageMeasure): void {
   document.querySelectorAll<HTMLDialogElement>(".solo-wc-dialog").forEach((old) => {
     old.close();
     old.remove();
@@ -96,8 +104,10 @@ export function openWordCount(counts: WordCountReadout, selection?: WordCountRea
     `<div${cls ? ` class="${cls}"` : ""}><dt>${label}</dt><dd>${value}</dd></div>`;
   // 「中文字符和朝鲜语单词／非中文单词」那两行是「字数」的**来路**，只在整篇那一节排一次：
   // Word 一族的那一节在选区块里就是少这几行。这一条是**推断**（真机的行序未取证），排多排少都不改数。
+  // 页数／行数排在整篇那一节的最前面，是因为它们问的是「这一件铺成几张纸」——真机逐行顺序仍是未取证。
   const rowsOf = (c: WordCountReadout, full = true): string =>
     `<div class="solo-wc-rows${full ? "" : " solo-wc-sel"}" role="status">
+    ${full && layout ? `${row("页数", layout.pages)}${row("行数", layout.lines)}` : ""}
     ${row("段落数", c.paragraphs)}
     ${row("字数", c.cjk + c.words, "solo-wc-total")}
     ${row("字符数（不计空格）", c.charactersNoSpace)}

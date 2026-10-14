@@ -7,8 +7,10 @@
  *
  * 这一条上只挂了**字数**那一格。状态栏里其余的读数——页码、页次、节、行、列——要的都不是模型里的数：
  * `kwpsapiex/wps.js` 那一份 API 把它们放在 `ComputeStatistics(wdStatisticPages / wdStatisticLines …)` 那一族里，
- * 也就是**排版之后**才知道的结果，而这一页目前把整篇画在一张连续的纸上（`render.ts` 只出一个 `.page`）。
- * 报一个「第 1 页 共 1 页」对一个四十段的件是假读数，所以宁可空着——与对话框里不报「行数」同一条理由。
+ * 也就是**排版之后**才知道的结果。那一族现在量得出来了（`doc-layout.ts` 把这张连续的纸按节的页高切成 N 张，
+ * 「字数统计」对话框里的 页数／行数 两行读的就是它），但**这一条上还没接**：那四格要的是光标**所在**的那一页
+ * 那一行，是把量出来的行盒接着映射到光标位的下一片，不是同一个数。报一个「第 1 页 共 1 页」对一个四十段的件
+ * 仍是假读数，所以宁可空着。
  *
  * 措辞仍是**未取证**：`.qm` 那堵墙与 `doc-word-count.ts` 头注记的是同一件（`zh_CN` 下按 UTF-8 与 UTF-16 两种
  * 编码都搜不到这些界面串），「字数：」按 Word 一族通用叫法写；`detail` 那句英文提示翻成的中文 tooltip 同理。
@@ -57,7 +59,7 @@ export class DocStatusBar {
 
   /**
    * 数是从这一个编辑器**现读**的：这一格报的数与对话框里那几行必须出自同一次计算，所以两边都走
-   * `editor.counts()`，不在构造时把数抄下来。
+   * `editor.counts()`（页数/行数那两行走 `editor.layout()`），不在构造时把数抄下来。
    */
   constructor(private readonly editor: DocEditor) {
     injectStyles();
@@ -67,7 +69,7 @@ export class DocStatusBar {
     this.wordItem.type = "button";
     this.wordItem.className = "solo-doc-status-words";
     this.wordItem.title = "字数。点击打开「字数统计」对话框";
-    this.wordItem.addEventListener("click", () => openWordCount(this.editor.counts(), this.editor.selectionCounts()));
+    this.wordItem.addEventListener("click", () => openWordCount(this.editor.counts(), this.editor.selectionCounts(), this.editor.layout()));
     this.root.append(this.wordItem);
     document.body.append(this.root);
     this.refresh();

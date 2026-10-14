@@ -1465,19 +1465,22 @@ export class DocEditor {
    * 「定位」（⌘G 与状态栏 页码／页数／节 那三格，WPS 的 `KxLegacyTriggerCommand id="GoTo"`，`doc-goto.ts` 头注有
    * 实据）：先量一次当前页（`caretPage()`，与状态栏同一份），再开对话框。纸没画上、或页高量不出来时**不开**——
    * 一个没有页数的定位对话框只能骗人。光标不在纸面上时种子取第 1 页／第 1 节：状态栏那种情形保留上一次读数，
-   * 编辑器没有那一份存档，这里不假装有。`target` 是打开时预选的目标（「页」或「节」），由点哪一格决定；
-   * ⌘G 走默认的「页」。打开这一刻顺手把书签名单量一份（`bookmarks()`）交给对话框——名单是这一刻的模型
-   * 读数，对话框是模态的，期间模型不会变。
+   * 编辑器没有那一份存档，这里不假装有。`target` 是打开时预选的目标（页／节／书签／批注），由点哪一格决定；
+   * ⌘G 走默认的「页」。打开这一刻顺手把书签名单（`bookmarks()`）与批注条数（`doc.comments` 的条数，与
+   * 纸上编号同一份数组）量一份交给对话框——都是这一刻的模型读数，对话框是模态的，期间模型不会变；批注号
+   * 的种子从光标所在的那条读（`commentIdsAtCaret` 给的 id 反查下标 + 1），落点不指着任何一条时归 1。
    */
-  showGoTo(target: "page" | "section" = "page"): void {
+  showGoTo(target: "page" | "section" | "bookmark" | "comment" = "page"): void {
     const at = this.caretPage();
     const pages = at?.pages ?? this.layout()?.pages;
     if (pages === undefined) return;
     const cs = this.caretSection();
     const sections = cs?.sections ?? sectionEndsOf(this.doc.blocks).length + 1;
+    const first = this.commentIdsAtCaret()[0];
+    const at0 = first === undefined ? -1 : this.doc.comments.findIndex((c) => c.id === first);
     openGoTo(
-      { page: at?.page ?? 1, pages, section: cs?.section ?? 1, sections, bookmarks: this.bookmarks().map((b) => b.name), target },
-      { page: (n) => this.goToPage(n), section: (n) => this.goToSection(n), bookmark: (name) => this.goToBookmark(name) },
+      { page: at?.page ?? 1, pages, section: cs?.section ?? 1, sections, bookmarks: this.bookmarks().map((b) => b.name), comments: this.doc.comments.length, comment: at0 >= 0 ? at0 + 1 : 1, target },
+      { page: (n) => this.goToPage(n), section: (n) => this.goToSection(n), bookmark: (name) => this.goToBookmark(name), comment: (n) => this.goToComment(n) },
     );
   }
 
@@ -1545,6 +1548,20 @@ export class DocEditor {
     while (block && block.parentElement !== this.page) block = block.parentElement;
     if (!block) return false;
     return this.landAt({ node: parent, offset: [...parent.childNodes].indexOf(span), block });
+  }
+
+  /**
+   * 定位到第 `n` 条批注：号码与纸上的批注编号**同源**——`render.ts` 那枚 `numbers` 映射就是 `this.doc.comments`
+   * 的下标 + 1（回复也占一个号，虽然它自己没有标记、纸上不显号），这里数的是同一个数组，「打哪个号」与
+   * 「纸上标着几号」不是两份算法。落点走审阅窗格那条「定位」`revealComment`：锚着文字的那条选中那段文字；
+   * 回复没有标记，跳到父批注那一段；一个标记都找不回来的（锚在页眉带里、标记被重整吞掉）落不了点、返回
+   * false。号码越界同样 false（对话框的 1..N 来自同一刻的 `doc.comments.length`，这是第二道闸门）。WPS
+   * 真机上「批注」目标数的是不是同一份下标、回复算不算一枚**未取证**。
+   */
+  goToComment(n: number): boolean {
+    if (!this.page) return false;
+    if (!Number.isInteger(n) || n < 1 || n > this.doc.comments.length) return false;
+    return this.revealComment(this.doc.comments[n - 1]!.id);
   }
 
   /** 落点动作：折叠 Range 落到 `anchor` 指出的文档位置，块滚进视野中上段，焦点收进纸张。 */

@@ -8,30 +8,40 @@
  * "Go To" dialog.」）的 detail 都写着「Click to open "Go To" dialog.」：本页与 `doc-status-bar.ts` 的三格、
  * 快捷键，是同一条命令的四种长相——与「字数统计」那三处（ribbon／状态栏／快捷键）同一形状。
  *
- * **现在有「页」「节」「书签」三个目标**：kuip 的浏览器一族（533 行 `KxWpsBrowserCmdTriggerCommand id="BrowseGoTo"`）
- * 与 Word 的「定位目标」列表里还有 行/批注/脚注/表格/图形/公式 等目标；模型里这一刻既落得了点、
- * 又有回路的只有这三个——包里那条 API 就是 `doc.GoTo(wdGoToPage, wdGoToAbsolute, page).Start`
+ * **现在有「页」「节」「书签」「批注」四个目标**：kuip 的浏览器一族（533 行 `KxWpsBrowserCmdTriggerCommand
+ * id="BrowseGoTo"`）与 Word 的「定位目标」列表里还有 行/脚注/表格/图形/公式 等目标；模型里这一刻既落得了点、
+ * 又有回路的只有这四个——包里那条 API 就是 `doc.GoTo(wdGoToPage, wdGoToAbsolute, page).Start`
  * （`office6/addons/kwpsapiex/wps.js`，`wdGoToSection` 一族同理）。列表里只摆点得动的目标名：剩下的等
- * 各自的回路接上再进列表。三个目标的种子与合法范围都由打开这一刻的读数给出——页数来自 `caretPage`
- * 的测量，节数来自 `sectionEndsOf` 数的文件声明边界（口径见 `doc-layout.ts` 文件头）。
+ * 各自的回路接上再进列表。四个目标的种子与合法范围都由打开这一刻的读数给出——页数来自 `caretPage`
+ * 的测量，节数来自 `sectionEndsOf` 数的文件声明边界（口径见 `doc-layout.ts` 文件头），批注条数来自
+ * `doc.comments` 的条数。
  *
  * 「书签」这一格的候选是**名字下拉**，名单来自 `DocEditor.bookmarks()`（`w:bookmarkStart` 的 `w:name`，
  * 按文档顺序、同名取第一枚）。含 `_Toc`／`_GoBack` 这类机器书签的名字**不过滤**：那一批 86 份 WPS 写的件
  * 里 86/86 都带 `_` 前缀的名字，而真机的「隐藏书签」开关**未取证**——过滤掉等于把列表做成空的。
  * 没有书签的文档，这一格按时说明并挡住「定位」；名单空与名字不存在是两码事，前者要说得出来。
  *
+ * 「批注」这一格的号码就是**纸上批注的编号**：`render.ts` 那枚 `numbers` 映射是 `doc.comments` 的下标 + 1
+ * （回复也算一枚，「2 号」可能不显在纸上——回复自己没有标记），这一格数的是同一个数组，「打哪个号落哪条」
+ * 与「纸上标着几号」不是两份算法。落点走审阅窗格那条「定位」（`DocEditor.revealComment`）：锚着文字的那条
+ * 选中那段文字；**回复跳到父批注那一段**（Word 把回复挂在父批注的段上）；一个标记都找不回来的（锚在页眉带
+ * 里、标记被重整吞掉）落不了点。kuip 的旁证是浏览器一族 530 行 `KxWpsBrowserTriggerCommand id="BrowseComment"
+ * mode="3" target="3" icon="bubble_kd" text="@Browse by Comment"`（531/533 是并排的 BrowseBookmark／
+ * BrowseGoTo）——「按批注浏览」真机上是独立一条命令。真机上这一格按什么顺序数、回复算不算一枚**未取证**；
+ * 这里钉的是自己那条回路：号码与纸上编号同源。一条批注都没有的件，这一格按时说明并挡住「定位」。
+ *
  * 中文界面里这一家的字面（标题、目标名、标签、按钮）**未取证**（`.qm` 那堵墙，与 `doc-word-count.ts`
  * 头注记的是同一件）；这里按 Word 一族的通用叫法写。对话框的形状（模态与否、「定位」之后关不关）真机上
  * **未取证**：本片与「字数统计」用同一套写法——模态、Esc 关，按「定位」把落点交出去就收摊。这一页不改件，
- * 所以不走 `changed()`；落光标由 `goToPage`/`goToSection`/`goToBookmark` 负责，回来时状态栏自己会重读
- * （走 `selectionchange`）。
+ * 所以不走 `changed()`；落光标由 `goToPage`/`goToSection`/`goToBookmark`/`goToComment` 负责，回来时状态栏
+ * 自己会重读（走 `selectionchange`）。
  *
- * 目标的合法范围由对话框自己先挡一道（页/节越界、非整数不关窗，就地给一句说明；书签名单为空不关窗），
- * `goToPage`/`goToSection`/`goToBookmark` 那层再挡一道——两道都不是猜：页数/节数是打开这一刻量出来的
- * 「共 N 页/节」，书签名单是同一刻从模型数出来的。
+ * 目标的合法范围由对话框自己先挡一道（页/节/批注越界、非整数不关窗，就地给一句说明；书签名单为空、
+ * 批注一条没有也不关窗），`goToPage`/`goToSection`/`goToBookmark`/`goToComment` 那层再挡一道——两道都
+ * 不是猜：页数/节数是打开这一刻量出来的「共 N 页/节」，书签名单与批注条数是同一刻从模型数出来的。
  */
-/** 「定位目标」这一格的三个目标：页、节、书签。 */
-type Target = "page" | "section" | "bookmark";
+/** 「定位目标」这一格的四个目标：页、节、书签、批注。 */
+type Target = "page" | "section" | "bookmark" | "comment";
 
 const STYLE_ID = "solo-goto-styles";
 
@@ -65,23 +75,23 @@ function injectStyles(): void {
 }
 
 /**
- * 打开「定位」。`seed` 是打开这一刻的种子与范围：`page`/`section` 是光标所在的页号/节号，`pages`/`sections`
- * 是量出来的共几页/几节（合法范围的来源），`bookmarks` 是书签名字按文档顺序的名单（「书签」目标的候选），
- * `target` 是预选的目标（点状态栏哪一格就开哪个）。`goTo` 是各目标合法的落点
- * （`DocEditor.goToPage`/`goToSection`/`goToBookmark`）。一次只挂一个，再点一次换掉旧的。
+ * 打开「定位」。`seed` 是打开这一刻的种子与范围：`page`/`section`/`comment` 是光标所在的页号/节号/批注号，
+ * `pages`/`sections`/`comments` 是量出来的共几页/几节/几条批注（合法范围的来源），`bookmarks` 是书签名字
+ * 按文档顺序的名单（「书签」目标的候选），`target` 是预选的目标（点状态栏哪一格就开哪个）。`goTo` 是各目标
+ * 合法的落点（`DocEditor.goToPage`/`goToSection`/`goToBookmark`/`goToComment`）。一次只挂一个，再点一次换掉旧的。
  */
 export function openGoTo(
-  seed: { page: number; pages: number; section: number; sections: number; bookmarks: readonly string[]; target: Target },
-  goTo: { page: (n: number) => void; section: (n: number) => void; bookmark: (name: string) => void },
+  seed: { page: number; pages: number; section: number; sections: number; bookmarks: readonly string[]; comment: number; comments: number; target: Target },
+  goTo: { page: (n: number) => void; section: (n: number) => void; bookmark: (name: string) => void; comment: (n: number) => void },
 ): void {
   document.querySelectorAll<HTMLDialogElement>(".solo-goto-dialog").forEach((old) => {
     if (old.open) old.close();
     old.remove();
   });
   injectStyles();
-  const cur = { page: seed.page, section: seed.section };
-  const most = { page: seed.pages, section: seed.sections };
-  const unit = { page: "页", section: "节" };
+  const cur = { page: seed.page, section: seed.section, comment: seed.comment };
+  const most = { page: seed.pages, section: seed.sections, comment: seed.comments };
+  const unit = { page: "页", section: "节", comment: "批注" };
   const dialog = document.createElement("dialog");
   dialog.className = "solo-goto-dialog";
   dialog.setAttribute("aria-label", "定位");
@@ -90,7 +100,7 @@ export function openGoTo(
   // 真闸门是下面 submit 里那行检查。
   dialog.innerHTML =
     `<form novalidate><header><h2>定位</h2><button type="button" class="solo-goto-close" aria-label="关闭">×</button></header>
-    <div class="solo-goto-row"><label for="solo-goto-target">定位目标</label><select id="solo-goto-target"><option value="page">页</option><option value="section">节</option><option value="bookmark">书签</option></select></div>
+    <div class="solo-goto-row"><label for="solo-goto-target">定位目标</label><select id="solo-goto-target"><option value="page">页</option><option value="section">节</option><option value="bookmark">书签</option><option value="comment">批注</option></select></div>
     <div class="solo-goto-row solo-goto-number"><label for="solo-goto-value">输入页号</label><input id="solo-goto-value" type="number" min="1" step="1"></div>
     <div class="solo-goto-row solo-goto-name" hidden><label for="solo-goto-bookmark">输入书签名</label><select id="solo-goto-bookmark"></select></div>
     <p class="solo-goto-note"></p>
@@ -106,9 +116,9 @@ export function openGoTo(
   const note = dialog.querySelector<HTMLParagraphElement>(".solo-goto-note")!;
   const error = dialog.querySelector<HTMLParagraphElement>(".solo-goto-error")!;
   for (const name of seed.bookmarks) pick.append(new Option(name, name));
-  // 换目标时那一格整体换一套：页/节走数字框，书签走名字下拉——下拉里只摆名单里的名字（`bookmarks()`
-  // 数的），「名字打错」这条路从根上不存在。数字不跨目标沿用——「5」从页挪到节没有意义，页/节各自从
-  // 打开这一刻的读数（光标所在页/节）重来；书签没有「光标所在的那一枚」，下拉从第一枚起。
+  // 换目标时那一格整体换一套：页/节/批注走数字框，书签走名字下拉——下拉里只摆名单里的名字（`bookmarks()`
+  // 数的），「名字打错」这条路从根上不存在。数字不跨目标沿用——「5」从页挪到节没有意义，页/节/批注各自从
+  // 打开这一刻的读数（光标所在页/节/批注）重来；书签没有「光标所在的那一枚」，下拉从第一枚起。
   const apply = (target: Target): void => {
     const named = target === "bookmark";
     numberRow.hidden = named;
@@ -122,7 +132,9 @@ export function openGoTo(
     input.min = "1";
     input.max = String(most[target]);
     input.value = String(cur[target]);
-    note.textContent = `本文共 ${most[target]} ${unit[target]}。`;
+    // 批注的量词是「条」不是「批注」；一条没有的件说得出来，与空书签名单同一条路（submit 里也挡）。
+    note.textContent =
+      target === "comment" ? (most.comment > 0 ? `本文共 ${most.comment} 条批注。` : "本文没有批注。") : `本文共 ${most[target]} ${unit[target]}。`;
   };
   const close = (): void => {
     dialog.close();
@@ -147,6 +159,13 @@ export function openGoTo(
       }
       close();
       goTo.bookmark(name);
+      return;
+    }
+    // 一条批注都没有：任何整数号都落不了，就地按「没有批注」挡——落到下面那条通用范围检查上会报一句
+    // 「请输入 1 到 0 之间的整数批注号。」，那句话对读者不成立。
+    if (target === "comment" && most.comment === 0) {
+      error.textContent = "本文没有批注。";
+      error.hidden = false;
       return;
     }
     const n = Number(input.value.trim());

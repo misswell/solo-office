@@ -8,11 +8,12 @@ import { IMAGE_EXT_BY_MIME } from "../core/media.js";
 import { CARRY_CLASS, CARRY_STYLE, PAGE_BORDER_CLASS, RUN_CARRY_CLASS, highlightColor, renderWord } from "../core/render.js";
 import { flatOf, inlineLength, isMark, keepRunIdentity } from "../core/run-identity.js";
 import { CommentPanel } from "./doc-comments.js";
-import { measurePageLayout, pageAtCaret, type PageMeasure, type PagePlacement } from "./doc-layout.js";
+import { measurePageLayout, pageAtCaret, pageCaretAnchor, type PageMeasure, type PagePlacement } from "./doc-layout.js";
 import { ReviewPanel } from "./doc-review.js";
 import { OutlinePanel } from "./doc-outline.js";
 import { openPageSetup as showPageSetupDialog } from "./doc-page-setup.js";
 import { openWordCount, type WordCountReadout } from "./doc-word-count.js";
+import { openGoTo } from "./doc-goto.js";
 
 /**
  * Word-like editing over the whole page: one `contenteditable` owns the body, so
@@ -1404,6 +1405,52 @@ export class DocEditor {
   /** Ribbon command: 「字数统计」. Reading a count changes nothing, so this takes no undo step and does not call `changed()`. */
   showWordCount(): void {
     openWordCount(this.counts(), this.selectionCounts(), this.layout());
+  }
+
+  /**
+   * 「定位」（⌘G 与状态栏 页码／页数 那两格，WPS 的 `KxLegacyTriggerCommand id="GoTo"`，`doc-goto.ts` 头注有实据）：
+   * 先量一次当前页（`caretPage()`，与状态栏同一份），再开对话框。纸没画上、或页高量不出来时**不开**——
+   * 一个没有页数的定位对话框只能骗人。光标不在纸面上时种子取第 1 页：状态栏那种情形保留上一次读数，
+   * 编辑器没有那一份存档，这里不假装有。
+   */
+  showGoTo(): void {
+    const at = this.caretPage();
+    const pages = at?.pages ?? this.layout()?.pages;
+    if (pages === undefined) return;
+    openGoTo(at?.page ?? 1, pages, (page) => this.goToPage(page));
+  }
+
+  /**
+   * 定位到第 `page` 页：`pageCaretAnchor` 直接给出这一页第一枚单位的文档位置，落光标（折叠 Range），
+   * 再把那一块滚进视野中上段。不经过视口取点：`caretRangeFromPoint` 只认视口里的点，「先滚后量」要求
+   * 滚动与量数同步，对不齐就会落到不知道哪里去；按「枚→块」的来路直接指出位置，与滚动、视口都无关。
+   * 先落光标再滚动：选区记的是文档位置，不跟着视口走。落完 `focus({ preventScroll: true })`（与
+   * `revealOutline` 同一条，别让聚焦又把刚滚好的视口挪走）。越界的页号在 `pageCaretAnchor` 那层就不给位置，
+   * 这里连选区都不动。
+   */
+  goToPage(page: number): boolean {
+    if (!this.page) return false;
+    const sec = this.doc.sections[0] ?? DEFAULT_SECTION;
+    const anchor = pageCaretAnchor(this.page, sec, page);
+    if (!anchor) return false;
+    const sel = document.getSelection();
+    if (!sel) return false;
+    const range = document.createRange();
+    range.setStart(anchor.node, anchor.offset);
+    range.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    // 滚动走最近的滚动祖先（外壳里是 `#view`），把这一块的上沿带到视口上三分之一处。
+    for (let p = anchor.block.parentElement; p; p = p.parentElement) {
+      const cs = getComputedStyle(p);
+      if (cs.overflowY === "auto" || cs.overflowY === "scroll") {
+        const box = p.getBoundingClientRect();
+        p.scrollBy(0, anchor.block.getBoundingClientRect().top - (box.top + p.clientHeight / 3));
+        break;
+      }
+    }
+    this.page.focus({ preventScroll: true });
+    return true;
   }
 
   /**

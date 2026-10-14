@@ -15,9 +15,10 @@
  *   ——**共 N 页**，N 与对话框的 页数 同一份测量；光标跑出纸面也照样量得出来。
  * - `KxWpsStatusWordCountInfoCommand`（上段那条）——**字数**，点开对话框。
  *
- * 这两格**不画成按钮**：kuip 的 detail 说它们点一下开「定位」对话框，而「定位」我们还没有。WPS 那两格的
- * 行为（点击、中文界面字面）都**未取证**（`.qm` 那堵墙与 `doc-word-count.ts` 头注记的是同一件），所以这里
- * 只报数，不挂一个点不开的命令。
+ * 三格都是**按钮**：kuip 的 detail 说页码/页数 点一下开「定位」对话框（`doc-goto.ts`，与 ⌘G 同一条命令
+ * `Id="GoTo"`），字数那一格是我们先接上的同形状。WPS 那两格点击的细节与中文界面字面都**未取证**
+ * （`.qm` 那堵墙与 `doc-word-count.ts` 头注记的是同一件），本片按 detail 接上这条腿：页号种子取
+ * 光标所在页，「定位」把落点交回 `DocEditor.goToPage`。
  *
  * 还没接的那几格：`KxWpsStatusSectionInfoCommand`（节）跟着多节排版那片走；`KxWpsStatusRowInfoCommand`／
  * `KxWpsStatusColumnInfoCommand`（行/列，kuip 里靠 `rightSibling`/`leftSibling` 配成一对）要的是「这一页里第几行 /
@@ -68,8 +69,8 @@ function injectStyles(): void {
 
 export class DocStatusBar {
   private readonly root: HTMLDivElement;
-  private readonly pageItem: HTMLSpanElement;
-  private readonly pagesItem: HTMLSpanElement;
+  private readonly pageItem: HTMLButtonElement;
+  private readonly pagesItem: HTMLButtonElement;
   private readonly wordItem: HTMLButtonElement;
   /** 光标跑出纸面那几格里，页码保留上一次的读数（口径见文件头）；页数不跟光标走，每回现量。 */
   private lastPage = 1;
@@ -82,10 +83,17 @@ export class DocStatusBar {
     injectStyles();
     this.root = document.createElement("div");
     this.root.className = "solo-doc-status";
-    this.pageItem = document.createElement("span");
+    this.pageItem = document.createElement("button");
+    this.pageItem.type = "button";
     this.pageItem.className = "solo-doc-status-loc";
-    this.pagesItem = document.createElement("span");
+    this.pageItem.title = "页码。点击打开「定位」对话框";
+    this.pagesItem = document.createElement("button");
+    this.pagesItem.type = "button";
     this.pagesItem.className = "solo-doc-status-loc";
+    this.pagesItem.title = "页数。点击打开「定位」对话框";
+    // 页码/页数 两格与 ⌘G 开的是同一个对话框，种子与范围都由编辑器现量（口径见 `doc-edit.ts` 的 `showGoTo`）。
+    this.pageItem.addEventListener("click", () => this.editor.showGoTo());
+    this.pagesItem.addEventListener("click", () => this.editor.showGoTo());
     this.wordItem = document.createElement("button");
     this.wordItem.type = "button";
     this.wordItem.className = "solo-doc-status-words";

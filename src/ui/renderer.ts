@@ -1649,6 +1649,14 @@ window.addEventListener("keydown", (e) => {
       editor?.showWordCount();
       return;
     }
+    // WPS 给这条命令的快捷键：`res/wpscommon.kuip:225` 的 `KxLegacyTriggerCommand id="GoTo"` 写着
+    // `hotKey="g"`、`shortcutHint="Ctrl+G"`，快捷键表 1127/1128（另一处 1316/1317 逐字重复一组）给了一对
+    // `Ctrl+G`／`Meta+G`——macOS 上就是 ⌘G。与上面那条并列、排它之后：带 Shift 的 g 归字数统计。
+    if (key === "g") {
+      ke.preventDefault();
+      editor?.showGoTo();
+      return;
+    }
   }
   if (current?.kind !== "xlsx" || ke.isComposing) return;
   if (key === "f") {

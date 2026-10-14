@@ -41,6 +41,12 @@
  *   差零点几像素且方向不定（实测 1123.47 对 1123.48/1123.5），正好落在相邻两枚相接的缝上——中线在行盒正中，
  *   离任何接缝都有半个行高。矩形落在纸面之上/之下时取它下面那一枚（纸面之下取最后一枚）——那是防呆，
  *   不是「按最近的算」。光标不在纸面上（点了面板、页眉带）这一层由调用方判掉，这里只管坐标。
+ * - **反过来问「第 N 页在哪」**走 `pageCaretAnchor()`：「定位」对话框（`doc-goto.ts`）给的是页号，回来的是
+ *   文档位置（折叠 Range 的起端），由调用方落光标、滚动。取的是**这一页上第一枚单位**的起点：不经过视口取点
+ *   （`caretRangeFromPoint` 只认视口里的点，先滚后量对不上就会落空，落空后光标落去不知道哪里），而是按
+ *   「单位→块」的同一趟来路直接指出位置，与滚动、视口都无关。整页只有 0 高记号的空页（断点画在流尾）
+ *   没有可落的位置：落在最后一枚有内容的单位的末尾——连续纸模型里最近的就是流尾，WPS 真机落去何处**未取证**。
+ *   越界的页号不猜，给 `undefined`。
  *
  * 因此这两行报的是「**本程序按画出来的行盒量出来的**页数/行数」。它与 WPS 自己的排版引擎不会逐页相同
  * （字体度量、行盒取整、页眉占位、孤行控制都不一样，这些也都**未取证**），所以这里不写「与 WPS 一致」。
@@ -72,6 +78,14 @@ export type PlacedUnit = LayoutUnit & { top: number };
 export type PagePlacement = {
   page: number;
   pages: number;
+};
+
+/** 「第 N 页在哪里」的答案：落光标的文档位置（折叠 Range 的起端），与它所在的块（滚动到它时用）。 */
+export type PageAnchor = {
+  node: Node;
+  offset: number;
+  /** 落点所在的块（页面的直接孩子）。空页的落点在最后一枚有内容的单位所在的块里。 */
+  block: HTMLElement;
 };
 
 /** 一张连续的纸量出来的结果。 */
@@ -209,11 +223,12 @@ export function contentTopOf(page: HTMLElement): number {
 }
 
 /**
- * 把这张连续的纸上画出来的东西读成一列单位（行盒与不可拆的块），按文档顺序，段间空白并进后一块第一枚。
- * 页面边框那一族是画在纸盒里的装饰，不是正文的一块（`doc-edit.ts` 读回模型时同样跳过它）。
+ * 纸上每一块（页面的直接孩子）量出来的单位，按文档顺序，段间空白并进后一块第一枚。页面边框那一族是画在
+ * 纸盒里的装饰，不是正文的一块（`doc-edit.ts` 读回模型时同样跳过它）。`layoutUnits`（枚的序号）与
+ * `pageCaretAnchor`（枚回到块里）共用这一趟，两处的铺法与条目一一对应。
  */
-export function layoutUnits(page: HTMLElement): PlacedUnit[] {
-  const out: PlacedUnit[] = [];
+function unitBlocksOf(page: HTMLElement): { el: HTMLElement; units: PlacedUnit[] }[] {
+  const out: { el: HTMLElement; units: PlacedUnit[] }[] = [];
   let cursor = contentTopOf(page);
   for (const child of [...page.children]) {
     const el = child as HTMLElement;
@@ -224,10 +239,15 @@ export function layoutUnits(page: HTMLElement): PlacedUnit[] {
     if (units.length && gap > 0) units[0] = { ...units[0]!, height: units[0]!.height + gap };
     else if (!units.length && gap > 0) units.push({ height: gap, forcePage: false, top: rect.top });
     if (units.length && breaksBefore(el)) units[0] = { ...units[0]!, forcePage: true };
-    out.push(...units);
+    out.push({ el, units });
     cursor = Math.max(cursor, rect.bottom);
   }
   return out;
+}
+
+/** 把这张连续的纸上画出来的东西读成一列单位（行盒与不可拆的块），按文档顺序。 */
+export function layoutUnits(page: HTMLElement): PlacedUnit[] {
+  return unitBlocksOf(page).flatMap((b) => b.units);
 }
 
 /**
@@ -305,4 +325,75 @@ export function pageAtCaret(page: HTMLElement, sec: Section, caretMid: number): 
   if (idx < 0) idx = units.length - 1;
   const places = placementsOf(units, contentHeightPx);
   return { page: places[idx]!, pages: places[places.length - 1]! };
+}
+
+/** 块里第一枚真文字的起点；一枚文字都没有（空段落）时退回块自己的开头——那里同样落得进光标。 */
+function headPositionOf(el: HTMLElement): { node: Node; offset: number } {
+  const first = document.createTreeWalker(el, NodeFilter.SHOW_TEXT).nextNode();
+  return first ? { node: first, offset: 0 } : { node: el, offset: 0 };
+}
+
+/** 块里最后一枚真文字的末尾（与 `headPositionOf` 对称；空页的落点用它）。 */
+function tailPositionOf(el: HTMLElement): { node: Node; offset: number } {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  let last: Node | null = null;
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) last = n;
+  return last ? { node: last, offset: (last.textContent ?? "").length } : { node: el, offset: el.childNodes.length };
+}
+
+/**
+ * 「第 `target` 页在哪里」的反向映射（`pageAtCaret` 反着走）：给出**这一页上第一枚单位**的落笔位置，
+ * 给「定位」对话框用（`doc-goto.ts` 的 `goToPage` 拿它落光标、滚动）。这一版不经过视口取点
+ * （`caretRangeFromPoint` 只认视口里的点，先滚后量对不上就会落空），而是按「枚→块」的同一趟来路直接
+ * 指出文档位置，与滚动、视口都无关。枚落在哪一截就落哪一截：表格取那一行，段内另起一页切出来的截
+ * 落在断点之后。整页只有 0 高记号的空页（断点画在流尾、后面什么都没有）没有可落的位置：落在最后一枚
+ * 有内容的单位的末尾——连续纸模型里最近的就是流尾，WPS 真机落去何处**未取证**。
+ * 越界的页号（<1、>pages、不是整数）不猜，返回 `undefined`，由调用方拒绝。
+ */
+export function pageCaretAnchor(page: HTMLElement, sec: Section, target: number): PageAnchor | undefined {
+  const contentHeightPx = contentHeightOf(page, sec);
+  if (contentHeightPx === undefined) return undefined;
+  const blocks = unitBlocksOf(page);
+  const units = blocks.flatMap((b) => b.units);
+  const places = placementsOf(units, contentHeightPx);
+  const pages = places.length ? places[places.length - 1]! : 1;
+  if (!Number.isInteger(target) || target < 1 || target > pages) return undefined;
+  let idx = -1;
+  for (let i = 0; i < units.length; i++) {
+    if (units[i]!.height > 0 && places[i] === target) {
+      idx = i;
+      break;
+    }
+  }
+  const atFlowEnd = idx < 0;
+  if (atFlowEnd) {
+    for (let i = units.length - 1; i >= 0; i--) {
+      if (units[i]!.height > 0) {
+        idx = i;
+        break;
+      }
+    }
+  }
+  if (idx < 0) return undefined;
+  let block: HTMLElement | undefined;
+  let segment = idx;
+  for (const b of blocks) {
+    if (segment < b.units.length) {
+      block = b.el;
+      break;
+    }
+    segment -= b.units.length;
+  }
+  if (!block) return undefined;
+  if (atFlowEnd) return { ...tailPositionOf(block), block };
+  if (block.tagName === "TABLE") {
+    // 表的一枚单位是一行；0 高的行 `unitsOfBlock` 已经撇掉，这里按同一口径取第 segment 行。
+    const row = [...(block as HTMLTableElement).rows].filter((r) => r.getBoundingClientRect().height > 0)[segment];
+    return row ? { ...headPositionOf(row), block } : undefined;
+  }
+  if (segment === 0) return { ...headPositionOf(block), block };
+  // 段内另起一页切出来的第 segment 截：落点就在第 segment 枚断点之后。
+  const br = [...block.querySelectorAll<HTMLBRElement>("br")].filter(forcesPage)[segment - 1];
+  if (!br?.parentElement) return undefined;
+  return { node: br.parentElement, offset: [...br.parentElement.childNodes].indexOf(br) + 1, block };
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { packPages, placementsOf, type LayoutUnit } from "../src/ui/doc-layout.js";
+import { packPages, placementsOf, rowInPage, type LayoutUnit } from "../src/ui/doc-layout.js";
 
 /**
  * 分页的那一半纯的：`packPages` 不认识 DOM，只把一列单位往固定高度的纸上铺。行盒怎么量出来的（以及它的口径）
@@ -105,5 +105,46 @@ describe("placementsOf", () => {
     const places = placementsOf(column(36, LINE), A4_BODY);
     expect(places[34]).toBe(1);
     expect(places[35]).toBe(2);
+  });
+});
+
+/**
+ * 行号那一份纯的：`rowInPage` 拿 `placementsOf` 的答案在同一页里数到第几枚。口径是**页内重数**——
+ * 一页的第一枚（有内容的）就是那一页的第 1 行，0 高的断点记号不占行。真机是否逐页重数**未取证**
+ * （状态栏的闸门 `.scratch/pagination-dom.ts` 第 11 节按这条口径钉）。
+ */
+describe("rowInPage", () => {
+  it("第 1 页里顺着数", () => {
+    const units = [u(10), u(10), u(10), u(10)];
+    const places = placementsOf(units, 25);
+    expect(places).toEqual([1, 1, 2, 2]);
+    expect(rowInPage(places, units, 0)).toBe(1);
+    expect(rowInPage(places, units, 1)).toBe(2);
+  });
+
+  it("换页归 1：第 2 页第一枚是那一页的第 1 行，不跟着上一页连数", () => {
+    const units = [u(10), u(10), u(10), u(10)];
+    const places = placementsOf(units, 25);
+    expect(rowInPage(places, units, 2)).toBe(1);
+    expect(rowInPage(places, units, 3)).toBe(2);
+  });
+
+  it("0 高的断点记号不占行", () => {
+    const units = [u(10), u(0, true), u(10)];
+    const places = placementsOf(units, 100);
+    expect(places).toEqual([1, 2, 2]);
+    expect(rowInPage(places, units, 2)).toBe(1);
+  });
+
+  it("取点走到记号上（防呆路径）算第 1 行，不报 0", () => {
+    const units = [u(10), u(0, true)];
+    const places = placementsOf(units, 100);
+    expect(rowInPage(places, units, 1)).toBe(1);
+  });
+
+  it("越界的序号不猜", () => {
+    expect(rowInPage([1], [u(10)], -1)).toBeUndefined();
+    expect(rowInPage([1], [u(10)], 1)).toBeUndefined();
+    expect(rowInPage([], [], 0)).toBeUndefined();
   });
 });

@@ -48,11 +48,16 @@
  *   没有可落的位置：落在最后一枚有内容的单位的末尾——连续纸模型里最近的就是流尾，WPS 真机落去何处**未取证**。
  *   越界的页号不猜，给 `undefined`。
  *
+ * - **光标那一行／那一列**（状态栏 `KxWpsStatusRowInfoCommand` 与 `KxWpsStatusColumnInfoCommand`，kuip 里靠
+ *   `rightSibling`/`leftSibling` 配成一对）走 `rowColumnAt()`：取点与「第 X 页」同一条中线（先找到枚、
+ *   翻出它那一页），行 = **这一页里这一枚排第几**（从这页第一枚有内容的单位数起，0 高的断点记号不数）；
+ *   列 = **字符在这一行里的第几个**，把本段文字按字符起点一枚一枚量行盒：同一行上各字符起点的上沿相同、
+ *   折行处整行高地下落一次，上沿对字符位置单调不减，二分行首；数的是 Unicode 码元（代理对算两个）。
+ *   列只对**段落**成立：表格与只读容器没有「本段文字」这回事，那两处只报行、列由状态栏保留上一次的读数。
+ *   行的口径（每页重数而不是全篇连数）与列在行尾空白上的计法对 WPS 真机都**未取证**。节那一格是下一片。
+ *
  * 因此这两行报的是「**本程序按画出来的行盒量出来的**页数/行数」。它与 WPS 自己的排版引擎不会逐页相同
  * （字体度量、行盒取整、页眉占位、孤行控制都不一样，这些也都**未取证**），所以这里不写「与 WPS 一致」。
- * 状态栏的 节／行／列 三格仍未接：行那一格（`KxWpsStatusRowInfoCommand`）要的是「这一页里的第几行」，
- * 用这套单位数得出，但 WPS 把它与「列」（`KxWpsStatusColumnInfoCommand`，字符在一行里的第几个）配对显示，
- * 列要的是字符级映射，是另一片；节则跟着多节排版那片走。
  */
 import { twipsToPx, type Section } from "../core/docx.js";
 import { CARRY_CLASS, PAGE_BORDER_CLASS } from "../core/render.js";
@@ -78,6 +83,13 @@ export type PlacedUnit = LayoutUnit & { top: number };
 export type PagePlacement = {
   page: number;
   pages: number;
+};
+
+/** 光标落在这一页的第几行；能数出字符级位置时还有它在这一行的第几个字（都从 1 起）。 */
+export type CaretLine = {
+  row: number;
+  /** 字符在这一行里的序号，1 起。表格/只读容器里没有「本段文字」，不给这个数。 */
+  column?: number;
 };
 
 /** 「第 N 页在哪里」的答案：落光标的文档位置（折叠 Range 的起端），与它所在的块（滚动到它时用）。 */
@@ -310,21 +322,149 @@ export function measurePageLayout(page: HTMLElement, sec: Section): PageMeasure 
 }
 
 /**
+ * `caretMid`（视口坐标，光标自己那枚矩形的**中线** = 上沿 + 高/2）落在第几枚。中线而不是上沿：相邻两枚
+ * 单位的声明区间首尾相接（见 `PlacedUnit`），而光标矩形的字体盒上沿与行盒跨度差零点几像素且方向不定，
+ * 正好落在缝上；中线在行盒正中，离接缝总有半个行高。中线落在纸面之上/之下时取下（或最后一）枚——
+ * 防呆，不是「按最近的算」。`pageAtCaret` 与 `rowColumnAt` 共用这一趟。
+ */
+function unitIndexAt(units: readonly PlacedUnit[], caretMid: number): number {
+  let idx = units.findIndex((u) => u.height > 0 && caretMid >= u.top && caretMid < u.top + u.height);
+  if (idx < 0) idx = units.findIndex((u) => u.top > caretMid);
+  if (idx < 0) idx = units.length - 1;
+  return idx;
+}
+
+/**
  * `caretMid`（视口坐标，光标自己那枚矩形的**中线** = 上沿 + 高/2）落在第几页。纸没画上或页高量不出来时
- * `undefined`——与 `measurePageLayout` 同一条守则。中线而不是上沿：相邻两枚单位的声明区间首尾相接
- * （见 `PlacedUnit`），而光标矩形的字体盒上沿与行盒跨度差零点几像素且方向不定，正好落在缝上；中线在行盒
- * 正中，离接缝总有半个行高。中线落在纸面之上/之下时取下（或最后一）枚——防呆，不是「按最近的算」。
+ * `undefined`——与 `measurePageLayout` 同一条守则。取点用中线而不是上沿的理由写在 `unitIndexAt` 上。
  */
 export function pageAtCaret(page: HTMLElement, sec: Section, caretMid: number): PagePlacement | undefined {
   const contentHeightPx = contentHeightOf(page, sec);
   if (contentHeightPx === undefined) return undefined;
   const units = layoutUnits(page);
   if (!units.length) return { page: 1, pages: 1 };
-  let idx = units.findIndex((u) => u.height > 0 && caretMid >= u.top && caretMid < u.top + u.height);
-  if (idx < 0) idx = units.findIndex((u) => u.top > caretMid);
-  if (idx < 0) idx = units.length - 1;
+  const idx = unitIndexAt(units, caretMid);
   const places = placementsOf(units, contentHeightPx);
   return { page: places[idx]!, pages: places[places.length - 1]! };
+}
+
+/**
+ * 纯的那一半：`places`（`placementsOf` 的答案）里第 `idx` 枚在**它那一页里**排第几（1 起）。
+ * 行按页重数（不是全篇连数）是本片的口径——WPS 那两格的 detail 是 "@Line Status Bar"／"@Column Status Bar"，
+ * 行与列配对显示，页内序数是配对得上的一种读法；真机逐页是否重数**未取证**。0 高的断点记号不占行，不数。
+ */
+export function rowInPage(places: readonly number[], units: readonly LayoutUnit[], idx: number): number | undefined {
+  if (idx < 0 || idx >= units.length) return undefined;
+  const page = places[idx]!;
+  let row = 0;
+  for (let j = 0; j <= idx; j++) {
+    if (places[j] === page && units[j]!.height > 0) row++;
+  }
+  // 取点走到 0 高的记号上时（中线落在所有内容之下的防呆路径）那一页的行算第 1 行，而不是第 0 行。
+  return Math.max(1, row);
+}
+
+/** 块里拉平的文字与每个文字节点的起点（按文档顺序）。列要在这条串上**按字符**量行盒。 */
+type FlatText = { len: number; starts: { node: Text; start: number }[] };
+
+function flattenText(el: HTMLElement): FlatText {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const starts: { node: Text; start: number }[] = [];
+  let len = 0;
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    const node = n as Text;
+    starts.push({ node, start: len });
+    len += node.data.length;
+  }
+  return { len, starts };
+}
+
+/** 拉平串里第 `at` 位（0..len）的文档位置；两节点相接处取后一个节点的开头（那是同一处位置）。 */
+function positionAt(flat: FlatText, at: number): { node: Node; offset: number } | undefined {
+  for (let i = flat.starts.length - 1; i >= 0; i--) {
+    const s = flat.starts[i]!;
+    if (at >= s.start) return { node: s.node, offset: Math.min(at - s.start, s.node.data.length) };
+  }
+  return undefined;
+}
+
+/** 这一处文档位置画出来的上沿（折叠 Range 自己那枚矩形；与光标取点是同一条路）。 */
+function topAtPoint(node: Node, offset: number): number | undefined {
+  const range = document.createRange();
+  try {
+    range.setStart(node, offset);
+    range.collapse(true);
+  } catch {
+    return undefined;
+  }
+  const own = range.getClientRects()[0];
+  if (own) return own.top;
+  const box = range.getBoundingClientRect();
+  return box.height || box.width || box.top || box.left ? box.top : undefined;
+}
+
+/** 光标在拉平串里的位置（0..len）。光标落在元素边界上（空段落、或两枚节点之间）也算得出。 */
+function flatOfCaret(block: HTMLElement, node: Node, offset: number): number | undefined {
+  if (!block.contains(node)) return undefined;
+  const range = document.createRange();
+  try {
+    range.setStart(block, 0);
+    range.setEnd(node, offset);
+  } catch {
+    return undefined;
+  }
+  return range.toString().length;
+}
+
+/**
+ * 光标字符位置 `at` 在这一行里排第几（1 起）。把每个字符起点的上沿排出来：同一行上各处上沿相同，
+ * 折行处整行高地下落一次，所以上沿对字符位置单调不减，二分找光标那一行的首字符，列 = 位置 − 首字符 + 1。
+ * 容差取半行高：行内因字号不一差几像素的不管，跨行至少差一整行高。量不出上沿时不猜，`undefined`。
+ */
+function columnOf(flat: FlatText, unit: PlacedUnit, at: number): number | undefined {
+  if (!flat.len) return 1;
+  let lo = 0;
+  let hi = flat.len;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    const pos = positionAt(flat, mid);
+    const top = pos ? topAtPoint(pos.node, pos.offset) : undefined;
+    if (top === undefined) return undefined;
+    if (top >= unit.top - unit.height / 2) hi = mid;
+    else lo = mid + 1;
+  }
+  return Math.max(1, at - lo + 1);
+}
+
+/**
+ * 光标落在这一页的第几行、这一行的第几个字（状态栏 `KxWpsStatusRowInfoCommand`／`KxWpsStatusColumnInfoCommand`）。
+ * 行与「第 X 页」出自同一趟取点与装箱；列只认**段落**（表格与只读容器没有「本段文字」，那两处只报行）。
+ * 光标与它所在的那一枚对不上时（中线防呆落到别的块上）列也不报数——宁可缺「列」这一格，不报一个算不出的数。
+ */
+export function rowColumnAt(page: HTMLElement, sec: Section, caret: { mid: number; node: Node; offset: number }): CaretLine | undefined {
+  const contentHeightPx = contentHeightOf(page, sec);
+  if (contentHeightPx === undefined) return undefined;
+  const blocks = unitBlocksOf(page);
+  const units = blocks.flatMap((b) => b.units);
+  if (!units.length) return { row: 1 };
+  const idx = unitIndexAt(units, caret.mid);
+  const row = rowInPage(placementsOf(units, contentHeightPx), units, idx);
+  if (row === undefined) return undefined;
+  let block: HTMLElement | undefined;
+  let segment = idx;
+  for (const b of blocks) {
+    if (segment < b.units.length) {
+      block = b.el;
+      break;
+    }
+    segment -= b.units.length;
+  }
+  if (!block || block.tagName === "TABLE" || block.classList.contains(CARRY_CLASS)) return { row };
+  const flat = flattenText(block);
+  const at = flatOfCaret(block, caret.node, caret.offset);
+  if (at === undefined || at > flat.len) return { row };
+  const column = columnOf(flat, units[idx]!, at);
+  return column === undefined ? { row } : { row, column };
 }
 
 /** 块里第一枚真文字的起点；一枚文字都没有（空段落）时退回块自己的开头——那里同样落得进光标。 */

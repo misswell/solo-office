@@ -8,7 +8,7 @@ import { IMAGE_EXT_BY_MIME } from "../core/media.js";
 import { CARRY_CLASS, CARRY_STYLE, PAGE_BORDER_CLASS, RUN_CARRY_CLASS, highlightColor, renderWord } from "../core/render.js";
 import { flatOf, inlineLength, isMark, keepRunIdentity } from "../core/run-identity.js";
 import { CommentPanel } from "./doc-comments.js";
-import { measurePageLayout, pageAtCaret, pageCaretAnchor, type PageMeasure, type PagePlacement } from "./doc-layout.js";
+import { measurePageLayout, pageAtCaret, pageCaretAnchor, rowColumnAt, type CaretLine, type PageMeasure, type PagePlacement } from "./doc-layout.js";
 import { ReviewPanel } from "./doc-review.js";
 import { OutlinePanel } from "./doc-outline.js";
 import { openPageSetup as showPageSetupDialog } from "./doc-page-setup.js";
@@ -1377,6 +1377,22 @@ export class DocEditor {
     const mid = caretMidOf(node, sel!.focusOffset);
     if (mid === undefined) return undefined;
     return pageAtCaret(this.page, this.doc.sections[0] ?? DEFAULT_SECTION, mid);
+  }
+
+  /**
+   * 状态栏 行／列 那两格（WPS 的 `KxWpsStatusRowInfoCommand` 与 `KxWpsStatusColumnInfoCommand`，kuip 里
+   * 靠 `rightSibling`/`leftSibling` 配对）：行是光标在**这一页里**排第几（口径见 `doc-layout.ts` 的
+   * `rowInPage`），列是它在这一行的第几个字（段落才数得出；表格/只读容器不给列）。
+   * 取点、判「光标在不在纸面上」与 `caretPage()` 同一条：两格与页码必须出自同一处光标。
+   */
+  caretLine(): CaretLine | undefined {
+    if (!this.page) return undefined;
+    const sel = document.getSelection();
+    const node = sel?.focusNode ?? null;
+    if (!node || !this.page.contains(node)) return undefined;
+    const mid = caretMidOf(node, sel!.focusOffset);
+    if (mid === undefined) return undefined;
+    return rowColumnAt(this.page, this.doc.sections[0] ?? DEFAULT_SECTION, { mid, node, offset: sel!.focusOffset });
   }
 
   /**

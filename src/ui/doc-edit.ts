@@ -1484,15 +1484,15 @@ export class DocEditor {
    * 「定位」（⌘G 与状态栏 页码／页数／节 那三格，WPS 的 `KxLegacyTriggerCommand id="GoTo"`，`doc-goto.ts` 头注有
    * 实据）：先量一次当前页（`caretPage()`，与状态栏同一份），再开对话框。纸没画上、或页高量不出来时**不开**——
    * 一个没有页数的定位对话框只能骗人。光标不在纸面上时种子取第 1 页／第 1 节：状态栏那种情形保留上一次读数，
-   * 编辑器没有那一份存档，这里不假装有。`target` 是打开时预选的目标（页／节／行／书签／批注／表格），由点哪一格决定；
+   * 编辑器没有那一份存档，这里不假装有。`target` 是打开时预选的目标（页／节／行／书签／批注／表格／图形），由点哪一格决定；
    * ⌘G 走默认的「页」。打开这一刻顺手把书签名单（`bookmarks()`）、批注条数（`doc.comments` 的条数，与
    * 纸上编号同一份数组）与总行数/光标行号（`caretLineNumber`，绝对行号）量一份交给对话框——都是这一刻的
    * 模型读数，对话框是模态的，期间模型不会变；批注号的种子从光标所在的那条读（`commentIdsAtCaret` 给的 id
    * 反查下标 + 1），落点不指着任何一条时归 1；行号的种子是光标所在那一行的绝对行号，光标不在纸面上时归 1；
    * 表格张数与表格号的种子（`tableCount()`／`tableNumberAtCaret()`）都是这一刻从模型数的，光标不在任何
-   * 表格里时归 1。
+   * 表格里时归 1；图形个数（`graphicCount()`）同理，图形没有「光标所在的那一枚」，种子永远归 1。
    */
-  showGoTo(target: "page" | "section" | "line" | "bookmark" | "comment" | "table" = "page"): void {
+  showGoTo(target: "page" | "section" | "line" | "bookmark" | "comment" | "table" | "graphic" = "page"): void {
     const at = this.caretPage();
     const pages = at?.pages ?? this.layout()?.pages;
     if (pages === undefined) return;
@@ -1502,8 +1502,8 @@ export class DocEditor {
     const first = this.commentIdsAtCaret()[0];
     const at0 = first === undefined ? -1 : this.doc.comments.findIndex((c) => c.id === first);
     openGoTo(
-      { page: at?.page ?? 1, pages, section: cs?.section ?? 1, sections, line: cl?.line ?? 1, lines: this.layout()?.lines ?? 0, bookmarks: this.bookmarks().map((b) => b.name), comments: this.doc.comments.length, comment: at0 >= 0 ? at0 + 1 : 1, table: this.tableNumberAtCaret() ?? 1, tables: this.tableCount(), target },
-      { page: (n) => this.goToPage(n), section: (n) => this.goToSection(n), line: (n) => this.goToLine(n), bookmark: (name) => this.goToBookmark(name), comment: (n) => this.goToComment(n), table: (n) => this.goToTable(n) },
+      { page: at?.page ?? 1, pages, section: cs?.section ?? 1, sections, line: cl?.line ?? 1, lines: this.layout()?.lines ?? 0, bookmarks: this.bookmarks().map((b) => b.name), comments: this.doc.comments.length, comment: at0 >= 0 ? at0 + 1 : 1, table: this.tableNumberAtCaret() ?? 1, tables: this.tableCount(), graphic: 1, graphics: this.graphicCount(), target },
+      { page: (n) => this.goToPage(n), section: (n) => this.goToSection(n), line: (n) => this.goToLine(n), bookmark: (name) => this.goToBookmark(name), comment: (n) => this.goToComment(n), table: (n) => this.goToTable(n), graphic: (n) => this.goToGraphic(n) },
     );
   }
 
@@ -1619,6 +1619,24 @@ export class DocEditor {
     return n;
   }
 
+  /**
+   * 本文的图形个数：数的是**行内图片**（`Inline.image`）——正文块与表内按文档顺序数，嵌套表也算（与 `tableCount`
+   * 同一趟走查的口径；`imagePaths` 给纸上每枚 `<img>` 盖 `data-path` 用的正是这个序）。浮动形状不进这一数：模型里
+   * 还没有它们的位置，WPS 真机把浮动形状算不算一枚图形**未取证**；这里钉的是自己那条回路：对话框那格的「本文共
+   * N 个图形」与 `goToGraphic` 的第 n 个出自同一趟走查。
+   */
+  graphicCount(): number {
+    let n = 0;
+    const walk = (blocks: Block[]): void => {
+      for (const b of blocks) {
+        if (b.kind === "table") b.rows.forEach((row) => row.forEach((c) => walk(c.paragraphs)));
+        else if (b.kind === "paragraph") for (const inline of b.inlines) if (inline.image) n += 1;
+      }
+    };
+    walk(this.doc.blocks);
+    return n;
+  }
+
   /** 第 `n` 张表的引用与模型坐标前缀（`tableCount` 数的那一趟里的第 n 张）；数不到返回 undefined。 */
   private nthTable(n: number): { table: Table; prefix: number[] } | undefined {
     if (!Number.isInteger(n) || n < 1) return undefined;
@@ -1685,6 +1703,54 @@ export class DocEditor {
     if (!block) return false;
     const at = positions(el)[0] ?? { node: el, offset: 0 };
     return this.landAt({ node: at.node, offset: at.offset, block });
+  }
+
+  /**
+   * 定位到第 `n` 个图形：按 `graphicCount` 的同一趟走查找到第 n 枚行内图片——它的段落路径与它在那一段落里的
+   * 次序 `k`。先按模型路径拿到纸上的段落元素，再取这一段里第 `k` 枚 `<img>`（段落元素里的 `<img>` 只有这一段
+   * 自己的图片，格子里的嵌套表是兄弟元素、不在里面）。落点是那枚图片**前面那一处**：折叠 Range 落到 `img` 的
+   * 父节点（那个段落元素）里 `img` 之前的下标上——图片是行内的一员，光标进不了它里面，只能落在它旁边。号码
+   * 越界、落点找不回纸上都返回 false——对话框的 1..N 来自同一刻的 `graphicCount()`，这是第二道闸门。WPS 真机
+   * 落点在图形前还是别处**未取证**。
+   */
+  goToGraphic(n: number): boolean {
+    if (!this.page) return false;
+    if (!Number.isInteger(n) || n < 1) return false;
+    let left = n;
+    let found: { path: number[]; k: number } | undefined;
+    const walk = (blocks: Block[], prefix: number[]): void => {
+      for (let i = 0; i < blocks.length && !found; i += 1) {
+        const b = blocks[i]!;
+        if (b.kind === "table") {
+          for (let r = 0; r < b.rows.length && !found; r += 1) {
+            const row = b.rows[r]!;
+            for (let c = 0; c < row.length && !found; c += 1) walk(row[c]!.paragraphs, [...prefix, i, r, c]);
+          }
+        } else if (b.kind === "paragraph") {
+          let k = 0;
+          for (const inline of b.inlines) {
+            if (!inline.image) continue;
+            left -= 1;
+            if (left === 0) {
+              found = { path: [...prefix, i], k };
+              break;
+            }
+            k += 1;
+          }
+        }
+      }
+    };
+    walk(this.doc.blocks, []);
+    if (!found) return false;
+    const el = this.elementAt(found.path);
+    if (!el) return false;
+    const img = el.querySelectorAll("img")[found.k];
+    if (!img || !img.parentNode) return false;
+    let block: HTMLElement | null = el instanceof HTMLElement ? el : el.parentElement;
+    while (block && block.parentElement !== this.page) block = block.parentElement;
+    if (!block) return false;
+    const offset = [...img.parentNode.childNodes].indexOf(img);
+    return this.landAt({ node: img.parentNode, offset, block });
   }
 
   /**

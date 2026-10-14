@@ -1484,13 +1484,15 @@ export class DocEditor {
    * 「定位」（⌘G 与状态栏 页码／页数／节 那三格，WPS 的 `KxLegacyTriggerCommand id="GoTo"`，`doc-goto.ts` 头注有
    * 实据）：先量一次当前页（`caretPage()`，与状态栏同一份），再开对话框。纸没画上、或页高量不出来时**不开**——
    * 一个没有页数的定位对话框只能骗人。光标不在纸面上时种子取第 1 页／第 1 节：状态栏那种情形保留上一次读数，
-   * 编辑器没有那一份存档，这里不假装有。`target` 是打开时预选的目标（页／节／行／书签／批注），由点哪一格决定；
+   * 编辑器没有那一份存档，这里不假装有。`target` 是打开时预选的目标（页／节／行／书签／批注／表格），由点哪一格决定；
    * ⌘G 走默认的「页」。打开这一刻顺手把书签名单（`bookmarks()`）、批注条数（`doc.comments` 的条数，与
    * 纸上编号同一份数组）与总行数/光标行号（`caretLineNumber`，绝对行号）量一份交给对话框——都是这一刻的
    * 模型读数，对话框是模态的，期间模型不会变；批注号的种子从光标所在的那条读（`commentIdsAtCaret` 给的 id
-   * 反查下标 + 1），落点不指着任何一条时归 1；行号的种子是光标所在那一行的绝对行号，光标不在纸面上时归 1。
+   * 反查下标 + 1），落点不指着任何一条时归 1；行号的种子是光标所在那一行的绝对行号，光标不在纸面上时归 1；
+   * 表格张数与表格号的种子（`tableCount()`／`tableNumberAtCaret()`）都是这一刻从模型数的，光标不在任何
+   * 表格里时归 1。
    */
-  showGoTo(target: "page" | "section" | "line" | "bookmark" | "comment" = "page"): void {
+  showGoTo(target: "page" | "section" | "line" | "bookmark" | "comment" | "table" = "page"): void {
     const at = this.caretPage();
     const pages = at?.pages ?? this.layout()?.pages;
     if (pages === undefined) return;
@@ -1500,8 +1502,8 @@ export class DocEditor {
     const first = this.commentIdsAtCaret()[0];
     const at0 = first === undefined ? -1 : this.doc.comments.findIndex((c) => c.id === first);
     openGoTo(
-      { page: at?.page ?? 1, pages, section: cs?.section ?? 1, sections, line: cl?.line ?? 1, lines: this.layout()?.lines ?? 0, bookmarks: this.bookmarks().map((b) => b.name), comments: this.doc.comments.length, comment: at0 >= 0 ? at0 + 1 : 1, target },
-      { page: (n) => this.goToPage(n), section: (n) => this.goToSection(n), line: (n) => this.goToLine(n), bookmark: (name) => this.goToBookmark(name), comment: (n) => this.goToComment(n) },
+      { page: at?.page ?? 1, pages, section: cs?.section ?? 1, sections, line: cl?.line ?? 1, lines: this.layout()?.lines ?? 0, bookmarks: this.bookmarks().map((b) => b.name), comments: this.doc.comments.length, comment: at0 >= 0 ? at0 + 1 : 1, table: this.tableNumberAtCaret() ?? 1, tables: this.tableCount(), target },
+      { page: (n) => this.goToPage(n), section: (n) => this.goToSection(n), line: (n) => this.goToLine(n), bookmark: (name) => this.goToBookmark(name), comment: (n) => this.goToComment(n), table: (n) => this.goToTable(n) },
     );
   }
 
@@ -1596,6 +1598,127 @@ export class DocEditor {
     if (!this.page) return false;
     if (!Number.isInteger(n) || n < 1 || n > this.doc.comments.length) return false;
     return this.revealComment(this.doc.comments[n - 1]!.id);
+  }
+
+  /**
+   * 本文的表格张数：正文块与表内按**文档顺序**数，嵌套表也算一张——父表计入它自己的位置，其格里的表紧随
+   * 其后（与「书签」名单的递归同一条：表内按行→格→段；口径见 `doc-goto.ts` 头注「表格」那一段）。WPS 真机
+   * 数不数嵌套表**未取证**；这里钉的是自己那条回路：对话框那格的「本文共 N 张表格」与 `goToTable` 的第 n 张
+   * 出自同一趟走查。
+   */
+  tableCount(): number {
+    let n = 0;
+    const walk = (blocks: Block[]): void => {
+      for (const b of blocks) {
+        if (b.kind !== "table") continue;
+        n += 1;
+        for (const row of b.rows) for (const cell of row) walk(cell.paragraphs);
+      }
+    };
+    walk(this.doc.blocks);
+    return n;
+  }
+
+  /** 第 `n` 张表的引用与模型坐标前缀（`tableCount` 数的那一趟里的第 n 张）；数不到返回 undefined。 */
+  private nthTable(n: number): { table: Table; prefix: number[] } | undefined {
+    if (!Number.isInteger(n) || n < 1) return undefined;
+    let left = n;
+    let found: { table: Table; prefix: number[] } | undefined;
+    const walk = (blocks: Block[], prefix: number[]): void => {
+      for (let i = 0; i < blocks.length && !found; i += 1) {
+        const b = blocks[i]!;
+        if (b.kind !== "table") continue;
+        left -= 1;
+        if (left === 0) {
+          found = { table: b, prefix: [...prefix, i] };
+          return;
+        }
+        for (let r = 0; r < b.rows.length && !found; r += 1) {
+          const row = b.rows[r]!;
+          for (let c = 0; c < row.length && !found; c += 1) walk(row[c]!.paragraphs, [...prefix, i, r, c]);
+        }
+      }
+    };
+    walk(this.doc.blocks, []);
+    return found;
+  }
+
+  /**
+   * 一张表里第一个落得下的位置：按行→格→块找头一段落，落点是它的头一个字符前（`offset: 0`）。格子头一层的块里
+   * 又有表的，就再往里一层——与「表格」目标的落点约定同一条（`doc-goto.ts` 头注）。整张表一个段落都没有才数
+   * 不出来（模型上不该有，写出侧也会补 `w:p`）。
+   */
+  private firstSpotIn(table: Table, prefix: number[]): DocPath | undefined {
+    for (let r = 0; r < table.rows.length; r += 1) {
+      const row = table.rows[r]!;
+      for (let c = 0; c < row.length; c += 1) {
+        const blocks = row[c]!.paragraphs;
+        for (let i = 0; i < blocks.length; i += 1) {
+          const b = blocks[i]!;
+          if (b.kind === "paragraph") return { path: [...prefix, r, c, i], offset: 0 };
+          if (b.kind !== "table") continue;
+          const deeper = this.firstSpotIn(b, [...prefix, r, c, i]);
+          if (deeper) return deeper;
+        }
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * 定位到第 `n` 张表：光标落在 `firstSpotIn` 指出那个位置的头一个模型字符上——先按模型路径拿到纸上的元素，
+   * 再取它上面第 0 个落点（空段落一个字符都没有时落在元素自身开头），滚动的那一块取它在纸上的顶层祖先
+   * （表就是那张顶层的表），与 `goToBookmark`／`goToPage` 共用 `landAt`。号码越界、落点找不回纸上（表格刚被
+   * 重整之类）都返回 false——对话框的 1..N 来自同一刻的 `tableCount()`，这是第二道闸门。WPS 真机数不数
+   * 嵌套表、落点在格首还是别处**未取证**。
+   */
+  goToTable(n: number): boolean {
+    if (!this.page) return false;
+    const hit = this.nthTable(n);
+    if (!hit) return false;
+    const spot = this.firstSpotIn(hit.table, hit.prefix);
+    if (!spot) return false;
+    const el = this.elementAt(spot.path);
+    if (!el) return false;
+    let block: HTMLElement | null = el instanceof HTMLElement ? el : el.parentElement;
+    while (block && block.parentElement !== this.page) block = block.parentElement;
+    if (!block) return false;
+    const at = positions(el)[0] ?? { node: el, offset: 0 };
+    return this.landAt({ node: at.node, offset: at.offset, block });
+  }
+
+  /**
+   * 光标所在表格的号（按 `tableCount` 数出来的那个号）：从 `caretPath` 的模型路径取**最内层**包着光标的
+   * 那张表的前缀——光标在格子的段落里时是它直接所在的那张表，路径再深一层（格子里的表）时是那张嵌套表。
+   * 光标不在任何表格里返回 undefined（对话框的种子归 1）。号与落点出自同一趟模型走查，不是第二份算法。
+   */
+  private tableNumberAtCaret(): number | undefined {
+    const at = this.caretPath();
+    if (!at || at.path.length < 4) return undefined;
+    const target = at.path.slice(0, at.path.length - 3).join();
+    let n = 0;
+    let hit: number | undefined;
+    const walk = (blocks: Block[], prefix: number[]): boolean => {
+      for (let i = 0; i < blocks.length; i += 1) {
+        const b = blocks[i]!;
+        if (b.kind !== "table") continue;
+        const here = [...prefix, i];
+        n += 1;
+        if (here.join() === target) {
+          hit = n;
+          return true;
+        }
+        for (let r = 0; r < b.rows.length; r += 1) {
+          const row = b.rows[r]!;
+          for (let c = 0; c < row.length; c += 1) {
+            if (walk(row[c]!.paragraphs, [...here, r, c])) return true;
+          }
+        }
+      }
+      return false;
+    };
+    walk(this.doc.blocks, []);
+    return hit;
   }
 
   /** 落点动作：折叠 Range 落到 `anchor` 指出的文档位置，块滚进视野中上段，焦点收进纸张。 */

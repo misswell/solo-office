@@ -32,7 +32,9 @@
       }
 
       /* ---- top bar ---- */
-      header {
+      /* `body >` 不是多余：模块自己注入的浮层（对话框、审阅窗格）里也有 `<header>`，
+         裸元素选择器会把这条深色顶栏画到别人卡片上。这条规则说的是窗口顶上那一格。 */
+      body > header {
         display: flex;
         align-items: center;
         gap: 14px;

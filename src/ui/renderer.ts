@@ -9,6 +9,7 @@ import { isError } from "../core/formula.js";
 import { rangeSpec, rect, refOf, type Rect } from "../core/sheet-ops.js";
 import { SheetView } from "./sheet-view.js";
 import { DocEditor, type DocPath, type RevisionView } from "./doc-edit.js";
+import { DocStatusBar } from "./doc-status-bar.js";
 import { DeckEditor, type PresetGeometry } from "./deck-edit.js";
 import { DeckShow } from "./deck-show.js";
 import { dataUrl, IMAGE_MIME_BY_EXT } from "../core/media.js";
@@ -51,6 +52,11 @@ type Opened =
 let current: Opened | null = null;
 let grid: SheetView | null = null;
 let editor: DocEditor | null = null;
+/**
+ * The 文字页脚的状态栏. It reports the open document's counts, so it travels with the editor: every path that
+ * drops `editor` takes this down too, and it never lands on a spreadsheet's or a deck's page.
+ */
+let docStatus: DocStatusBar | null = null;
 let deck: DeckEditor | null = null;
 /** Non-null while a slideshow covers the screen; global keys yield to it. */
 let shower: DeckShow | null = null;
@@ -98,6 +104,7 @@ function fail(heading: string, detail: string): void {
   current = null;
   grid = null;
   editor = null;
+  dropDocStatusBar();
   deck = null;
   saveBtn.disabled = true;
   sheetUI(false);
@@ -115,9 +122,16 @@ const sheetUI = (on: boolean, barOn = on): void => {
   sheetbar.style.display = on && barOn ? "flex" : "none";
 };
 
+/** The 状态栏 reads the open document, so wherever the editor pointer is dropped the bar goes with it. */
+function dropDocStatusBar(): void {
+  docStatus?.detach();
+  docStatus = null;
+}
+
 function mount(): void {
   if (!current) return emptyState();
   editor = null;
+  dropDocStatusBar();
   deck = null;
   if (current.kind === "xlsx") return mountSheet(current);
   grid = null;
@@ -141,6 +155,7 @@ function emptyHtml(headingHtml: string, detailHtml: string): string {
 function emptyState(): void {
   grid = null;
   editor = null;
+  dropDocStatusBar();
   deck = null;
   sheetUI(false);
   view.innerHTML = emptyHtml("打开或新建文档", `拖进来，或者按 <kbd>⌘O</kbd> 打开 XLSX / DOCX / PPTX`);
@@ -510,7 +525,7 @@ function buildDocRibbon(): void {
     editor?.rejectRevisions();
     syncDocRibbon();
   });
-  button(review, "wordCount", "字数统计", "字数统计：报出页数、段落数、字数与字符数", () => editor?.showWordCount());
+  button(review, "wordCount", "字数统计", "字数统计：报出段落数、字数与字符数", () => editor?.showWordCount());
   chooser(
     review,
     "revView",
@@ -1330,10 +1345,14 @@ function mountDoc(app: Extract<Opened, { kind: "docx" }>): void {
       dirty = true;
       title.textContent = app.name + " ●";
       syncDocRibbon();
+      // `changed` is the one signal that the document's content moved — typing, undo, a ribbon command all end
+      // here — so it is where the 状态栏那一格 is re-read. 光标移动不算，走 `moved`，那时数没变。
+      docStatus?.refresh();
     },
     // 选区移动不是编辑，走不到 `changed`：光标从粗字挪到不粗的字上，ribbon 得跟着改口。
     moved: () => syncDocRibbon(),
   });
+  docStatus = new DocStatusBar(editor);
   // The ribbon reads the editor, so it is built after one exists.
   buildRibbon("docx");
   syncDocRibbon();

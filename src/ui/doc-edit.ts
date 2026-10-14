@@ -1178,6 +1178,31 @@ export class DocEditor {
     return start && end ? { start, end } : null;
   }
 
+  /**
+   * 段落级那三条命令（左中右与两端对齐、项目符号／编号、增加／减少缩进量）要改的段落：折叠光标就只光标那一段，
+   * 有选区就是选区盖住的**每一段**。跨段的取材与 `applyStyle` 改文字格式时是同一句 `rangeEnds()`、同一条走法
+   * （首段、末段、顶层两者之间的那些块），所以「这一段被加粗了却没被居中」这种分裂不可能出现。
+   */
+  private selectionParagraphs(): Paragraph[] {
+    const ends = this.rangeEnds();
+    if (!ends) {
+      const at = this.caretPath();
+      const only = at ? this.paragraphAt(at.path) : undefined;
+      return only ? [only] : [];
+    }
+    const first = this.paragraphAt(ends.start.path);
+    if (ends.start.path.join() === ends.end.path.join()) return first ? [first] : [];
+    const out: Paragraph[] = [];
+    if (first) out.push(first);
+    for (let i = ends.start.path[0] + 1; i < ends.end.path[0]; i += 1) {
+      const block = this.doc.blocks[i];
+      if (block?.kind === "paragraph") out.push(block);
+    }
+    const last = this.paragraphAt(ends.end.path);
+    if (last && last !== first) out.push(last);
+    return out;
+  }
+
   setCaret(caret: DocPath): void {
     const el = this.elementAt(caret.path);
     if (!el) return;
@@ -1916,32 +1941,35 @@ export class DocEditor {
 
   /** Paragraph-level properties go straight from the toolbar into the model. */
   setParagraph(patch: { align?: string; list?: "bullet" | "number" | "none" }): void {
-    const path = this.caretPath()?.path;
-    const paragraph = path ? this.paragraphAt(path) : undefined;
-    if (!paragraph) return;
+    const targets = this.selectionParagraphs();
+    if (!targets.length) return;
     this.snapshot(this.caretPath());
-    const was = paraStyleOf(paragraph);
-    // `syncParaSlots` replaces the array, so this reference keeps the set as the paragraph came in with it.
-    const wasSlots = paragraph.pPrSlots;
-    if (patch.align !== undefined) paragraph.align = patch.align || undefined;
-    if (patch.list !== undefined) {
-      if (patch.list === "none") {
-        // 取消编号是文件自己写的形状：语料里 517 段带着 `w:numPr` 而 `w:numId w:val="0"`。清空字段在这里不够，
-        // 因为编号现在会从样式链上借来（48 段就是这么进列表的）——只有写下那个 0 才盖得住样式的那一条。
-        // 本来就不在列表里的段落什么都不写。
-        if (paragraph.numPr && paragraph.numPr.numId !== 0) paragraph.numPr = { numId: 0, ilvl: paragraph.numPr.ilvl };
-      } else {
-        // WPS lets this click through on a page that has no numbering part at all, so the definition is the
-        // document's own when it names the shape and the model's when it does not (`ensureListNumbering`).
-        paragraph.numPr = { numId: this.doc.ensureListNumbering(patch.list), ilvl: paragraph.numPr?.ilvl ?? 0 };
+    // 一次点击只讨一个 numId：选中五段按「项目符号」是**一个**列表接着排，不是五段各自起一个新的列表。
+    const numId = patch.list && patch.list !== "none" ? this.doc.ensureListNumbering(patch.list) : undefined;
+    for (const paragraph of targets) {
+      const was = paraStyleOf(paragraph);
+      // `syncParaSlots` replaces the array, so this reference keeps the set as the paragraph came in with it.
+      const wasSlots = paragraph.pPrSlots;
+      if (patch.align !== undefined) paragraph.align = patch.align || undefined;
+      if (patch.list !== undefined) {
+        if (patch.list === "none") {
+          // 取消编号是文件自己写的形状：语料里 517 段带着 `w:numPr` 而 `w:numId w:val="0"`。清空字段在这里不够，
+          // 因为编号现在会从样式链上借来（48 段就是这么进列表的）——只有写下那个 0 才盖得住样式的那一条。
+          // 本来就不在列表里的段落什么都不写。
+          if (paragraph.numPr && paragraph.numPr.numId !== 0) paragraph.numPr = { numId: 0, ilvl: paragraph.numPr.ilvl };
+        } else if (numId !== undefined) {
+          // WPS lets this click through on a page that has no numbering part at all, so the definition is the
+          // document's own when it names the shape and the model's when it does not (`ensureListNumbering`).
+          paragraph.numPr = { numId, ilvl: paragraph.numPr?.ilvl ?? 0 };
+        }
       }
-    }
-    // The paragraph's `w:pPr` travels as text, so the child these two buttons own moves with them.
-    syncParaSlots(paragraph);
-    // An alignment click on a paragraph that already sits there changes nothing, and a change that is
-    // nothing should not be put in front of a reviewer.
-    if (this.trackRevisions && JSON.stringify(was) !== JSON.stringify(paraStyleOf(paragraph))) {
-      paragraph.revFormat = this.signParagraphRevision(paragraph, was, wasSlots);
+      // The paragraph's `w:pPr` travels as text, so the child these two buttons own moves with them.
+      syncParaSlots(paragraph);
+      // An alignment click on a paragraph that already sits there changes nothing, and a change that is
+      // nothing should not be put in front of a reviewer.
+      if (this.trackRevisions && JSON.stringify(was) !== JSON.stringify(paraStyleOf(paragraph))) {
+        paragraph.revFormat = this.signParagraphRevision(paragraph, was, wasSlots);
+      }
     }
     const caret = this.caretPath();
     this.render();
@@ -1983,19 +2011,22 @@ export class DocEditor {
    * 按件自己的写法决定（取证见那里）；已经在边上时它返回 `undefined`，这一击就不进撤销栈。
    */
   shiftParagraphIndent(dir: 1 | -1): boolean {
-    const path = this.caretPath()?.path;
-    const paragraph = path ? this.paragraphAt(path) : undefined;
-    if (!paragraph) return false;
-    const next = this.doc.nextIndent(paragraph, dir);
-    if (!next) return false;
+    const targets = this.selectionParagraphs();
+    // 每一段按**它自己**的写法走一档（`nextIndent` 认件里是 `w:left` 还是 `w:leftChars`）；已经在边上的那一段
+    // 整段不动，全都在边上时这一击不进撤销栈——与只有一段时同一个判定。
+    if (!targets.some((p) => this.doc.nextIndent(p, dir))) return false;
     this.snapshot(this.caretPath());
-    const was = paraStyleOf(paragraph);
-    const wasSlots = paragraph.pPrSlots;
-    paragraph.indentLeft = next.indentLeft;
-    if (next.indentLeftChars !== undefined) paragraph.indentLeftChars = next.indentLeftChars;
-    syncParaSlots(paragraph);
-    if (this.trackRevisions && JSON.stringify(was) !== JSON.stringify(paraStyleOf(paragraph))) {
-      paragraph.revFormat = this.signParagraphRevision(paragraph, was, wasSlots);
+    for (const paragraph of targets) {
+      const next = this.doc.nextIndent(paragraph, dir);
+      if (!next) continue;
+      const was = paraStyleOf(paragraph);
+      const wasSlots = paragraph.pPrSlots;
+      paragraph.indentLeft = next.indentLeft;
+      if (next.indentLeftChars !== undefined) paragraph.indentLeftChars = next.indentLeftChars;
+      syncParaSlots(paragraph);
+      if (this.trackRevisions && JSON.stringify(was) !== JSON.stringify(paraStyleOf(paragraph))) {
+        paragraph.revFormat = this.signParagraphRevision(paragraph, was, wasSlots);
+      }
     }
     const caret = this.caretPath();
     this.render();

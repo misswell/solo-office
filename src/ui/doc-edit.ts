@@ -1,14 +1,14 @@
 import type { Block, Carried, CarriedInline, FormatRevision, HfSegment, Inline, ParaStyle, PageGeometry, PageSetup, Paragraph, ParagraphFormatRevision, PropSlot, Revision, RevisionEntry, RowInfo, RunStyle, Table, TableCell, WordDocument } from "../core/docx.js";
 import type { CommentAnchor, DocComment } from "../core/comments.js";
 import { bodyShape, commentTexts } from "../core/comments.js";
-import { DEFAULT_SECTION, RUN_STYLE_KEYS, countTexts, ownParaStyle, ownRunStyle, paraStyleOf, paragraphTextsOf, runStyleOf, stampNow, syncParaSlots, twipsToPx } from "../core/docx.js";
+import { DEFAULT_SECTION, RUN_STYLE_KEYS, countTexts, ownParaStyle, ownRunStyle, paraStyleOf, paragraphTextsOf, runStyleOf, sectionEndsOf, stampNow, syncParaSlots, twipsToPx } from "../core/docx.js";
 import type { CellWhere, TableEdit } from "../core/doc-table-ops.js";
 import { cellRangeFor, cellRect, cellsInRect, cellsInSweep, deleteColumnHere, deleteRowHere, gridColumns, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, splitHere, splitTableAt } from "../core/doc-table-ops.js";
 import { IMAGE_EXT_BY_MIME } from "../core/media.js";
 import { CARRY_CLASS, CARRY_STYLE, PAGE_BORDER_CLASS, RUN_CARRY_CLASS, highlightColor, renderWord } from "../core/render.js";
 import { flatOf, inlineLength, isMark, keepRunIdentity } from "../core/run-identity.js";
 import { CommentPanel } from "./doc-comments.js";
-import { measurePageLayout, pageAtCaret, pageCaretAnchor, rowColumnAt, type CaretLine, type PageMeasure, type PagePlacement } from "./doc-layout.js";
+import { measurePageLayout, pageAtCaret, pageCaretAnchor, rowColumnAt, sectionCaretAnchor, type CaretLine, type PageAnchor, type PageMeasure, type PagePlacement } from "./doc-layout.js";
 import { ReviewPanel } from "./doc-review.js";
 import { OutlinePanel } from "./doc-outline.js";
 import { openPageSetup as showPageSetupDialog } from "./doc-page-setup.js";
@@ -1396,6 +1396,27 @@ export class DocEditor {
   }
 
   /**
+   * 状态栏 节 那一格（WPS 的 `KxWpsStatusSectionInfoCommand`）：光标在第几节、一共几节。与 页码/行/列 那几格不同，
+   * 这一对**不量几何**——节的边界是文件自己声明的（`w:pPr/w:sectPr` 的段落结束它那一节，`sectionEndsOf` 从模型
+   * 数出来），块 `b` 属于第 `1 + #{e < b}` 节：带断点的段落自己属于**它结束的那一节**。节首一块的头是
+   * `sectionCaretAnchor`（「第 N 节在哪里」问的是同一张表）。
+   *
+   * 光标不在纸面上时返回 `undefined`，与 `caretPage()` 同一条口径（由状态栏保留上一次读数）。
+   */
+  caretSection(): { section: number; sections: number } | undefined {
+    if (!this.page) return undefined;
+    const sel = document.getSelection();
+    const node = sel?.focusNode ?? null;
+    if (!node || !this.page.contains(node)) return undefined;
+    const at = this.pathOf(node, sel!.focusOffset);
+    if (!at) return undefined;
+    const ends = sectionEndsOf(this.doc.blocks);
+    const b = at.path[0]!;
+    if (b >= this.doc.blocks.length) return undefined;
+    return { section: 1 + ends.filter((e) => e < b).length, sections: ends.length + 1 };
+  }
+
+  /**
    * 选区里那几段被切出来的文字，按 `counts()` **同一份口径**数（`countTexts` 只有一个实现，不会两处算法）。
    * 起止用的是页面上真选区映射进模型的那两条路径（`rangeEnds()`，与格式命令改选区时同一条寻址），所以「选中」
    * 在模型里说的位置与在页面上说的是同一处。跨段时两端各取自己那半段，中间那些块整段计入（表格连格子里的段落下钻）。
@@ -1424,16 +1445,22 @@ export class DocEditor {
   }
 
   /**
-   * 「定位」（⌘G 与状态栏 页码／页数 那两格，WPS 的 `KxLegacyTriggerCommand id="GoTo"`，`doc-goto.ts` 头注有实据）：
-   * 先量一次当前页（`caretPage()`，与状态栏同一份），再开对话框。纸没画上、或页高量不出来时**不开**——
-   * 一个没有页数的定位对话框只能骗人。光标不在纸面上时种子取第 1 页：状态栏那种情形保留上一次读数，
-   * 编辑器没有那一份存档，这里不假装有。
+   * 「定位」（⌘G 与状态栏 页码／页数／节 那三格，WPS 的 `KxLegacyTriggerCommand id="GoTo"`，`doc-goto.ts` 头注有
+   * 实据）：先量一次当前页（`caretPage()`，与状态栏同一份），再开对话框。纸没画上、或页高量不出来时**不开**——
+   * 一个没有页数的定位对话框只能骗人。光标不在纸面上时种子取第 1 页／第 1 节：状态栏那种情形保留上一次读数，
+   * 编辑器没有那一份存档，这里不假装有。`target` 是打开时预选的目标（「页」或「节」），由点哪一格决定；
+   * ⌘G 走默认的「页」。
    */
-  showGoTo(): void {
+  showGoTo(target: "page" | "section" = "page"): void {
     const at = this.caretPage();
     const pages = at?.pages ?? this.layout()?.pages;
     if (pages === undefined) return;
-    openGoTo(at?.page ?? 1, pages, (page) => this.goToPage(page));
+    const cs = this.caretSection();
+    const sections = cs?.sections ?? sectionEndsOf(this.doc.blocks).length + 1;
+    openGoTo(
+      { page: at?.page ?? 1, pages, section: cs?.section ?? 1, sections, target },
+      { page: (n) => this.goToPage(n), section: (n) => this.goToSection(n) },
+    );
   }
 
   /**
@@ -1448,7 +1475,22 @@ export class DocEditor {
     if (!this.page) return false;
     const sec = this.doc.sections[0] ?? DEFAULT_SECTION;
     const anchor = pageCaretAnchor(this.page, sec, page);
-    if (!anchor) return false;
+    return anchor ? this.landAt(anchor) : false;
+  }
+
+  /**
+   * 定位到第 `section` 节：落点是**节首一块的头**（`sectionCaretAnchor`，节的边界从模型数出来，见
+   * `sectionEndsOf`）。落光标与滚动同 `goToPage`——两条命令共用一个落点动作 `landAt`，不许两处各写一份。
+   */
+  goToSection(section: number): boolean {
+    if (!this.page) return false;
+    const ends = sectionEndsOf(this.doc.blocks);
+    const anchor = sectionCaretAnchor(this.page, ends, ends.length + 1, section);
+    return anchor ? this.landAt(anchor) : false;
+  }
+
+  /** 落点动作：折叠 Range 落到 `anchor` 指出的文档位置，块滚进视野中上段，焦点收进纸张。 */
+  private landAt(anchor: PageAnchor): boolean {
     const sel = document.getSelection();
     if (!sel) return false;
     const range = document.createRange();
@@ -1465,7 +1507,7 @@ export class DocEditor {
         break;
       }
     }
-    this.page.focus({ preventScroll: true });
+    this.page!.focus({ preventScroll: true });
     return true;
   }
 

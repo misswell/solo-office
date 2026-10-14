@@ -4645,6 +4645,22 @@ function linkLook(inline: Inline): void {
 }
 
 /**
+ * 节的边界，从模型这一侧数出来：一个段落带上 `w:pPr/w:sectPr`，它就是它所**结束**的那一节（`sectionChain`
+ * 干的是同一件事，只不过那边读的是字节）。返回这些段落在 `blocks` 里的下标，按文档顺序。
+ *
+ * 由此两条：块 `b` 属于第 `1 + #{e < b}` 节——带断点的段落自己属于它结束的那一节；第 N 节（N>1）的第一块
+ * 是 `ends[N−2] + 1`。正文最后那个 `w:sectPr` 不进 `blocks`（`blockChildren` 把它挡掉），它永远是最后一节
+ * 的收尾，所以节数 = `ends.length + 1`。
+ */
+export function sectionEndsOf(blocks: readonly Block[]): number[] {
+  const ends: number[] = [];
+  blocks.forEach((b, i) => {
+    if (b.kind === "paragraph" && b.pPrSlots?.some((s) => s.tag === "sectPr")) ends.push(i);
+  });
+  return ends;
+}
+
+/**
  * A section's page box, read off its `sectPr` bytes. Word's own defaults for anything the section does not
  * say: A4 (11906×16838 twips) and a 1-inch margin all round.
  */

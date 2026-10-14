@@ -54,7 +54,13 @@
  *   列 = **字符在这一行里的第几个**，把本段文字按字符起点一枚一枚量行盒：同一行上各字符起点的上沿相同、
  *   折行处整行高地下落一次，上沿对字符位置单调不减，二分行首；数的是 Unicode 码元（代理对算两个）。
  *   列只对**段落**成立：表格与只读容器没有「本段文字」这回事，那两处只报行、列由状态栏保留上一次的读数。
- *   行的口径（每页重数而不是全篇连数）与列在行尾空白上的计法对 WPS 真机都**未取证**。节那一格是下一片。
+ *   行的口径（每页重数而不是全篇连数）与列在行尾空白上的计法对 WPS 真机都**未取证**。
+ *
+ * - **光标在第几节／第 N 节在哪里**（状态栏 `KxWpsStatusSectionInfoCommand`，detail「@Page Section. Click to
+ *   Open "Go To" dialog.」，`KxWpsPagePositionInfoCommand` 那条同理）是这一页里**唯一不量几何**的一对：
+ *   节的边界是文件自己声明的（`w:pPr/w:sectPr` 的段落结束它那一节），从模型数（`sectionEndsOf`），落点走
+ *   `sectionCaretAnchor`（节首一块的头）。纸仍只画第一节那张——多节换纸是下一片，所以「第 X 节」与画出来的
+ *   纸宽纸高可能对不上，这是读数与渲染之间的已知差。该格的中文字面与真机点开的种子**未取证**。
  *
  * 因此这两行报的是「**本程序按画出来的行盒量出来的**页数/行数」。它与 WPS 自己的排版引擎不会逐页相同
  * （字体度量、行盒取整、页眉占位、孤行控制都不一样，这些也都**未取证**），所以这里不写「与 WPS 一致」。
@@ -92,7 +98,7 @@ export type CaretLine = {
   column?: number;
 };
 
-/** 「第 N 页在哪里」的答案：落光标的文档位置（折叠 Range 的起端），与它所在的块（滚动到它时用）。 */
+/** 「第 N 页／第 N 节在哪里」的答案：落光标的文档位置（折叠 Range 的起端），与它所在的块（滚动到它时用）。 */
 export type PageAnchor = {
   node: Node;
   offset: number;
@@ -536,4 +542,23 @@ export function pageCaretAnchor(page: HTMLElement, sec: Section, target: number)
   const br = [...block.querySelectorAll<HTMLBRElement>("br")].filter(forcesPage)[segment - 1];
   if (!br?.parentElement) return undefined;
   return { node: br.parentElement, offset: [...br.parentElement.childNodes].indexOf(br) + 1, block };
+}
+
+/**
+ * 「第 `target` 节在哪里」（`pageCaretAnchor` 的姊妹）：`ends` 是节尾段落（带 `w:pPr/w:sectPr` 的段落）
+ * 在块里的下标、`total` 是节数——两者都由模型那侧数出来（`docx.ts` 的 `sectionEndsOf` 与 `ends.length + 1`，
+ * 与状态栏「节」格同一份）。返回这一节**第一块**的落笔位置：第一枚真文字（`headPositionOf`），表格取第一行
+ * （`pageCaretAnchor` 同一口径）。块的编号就是 `.page` 孩子的编号——`render.ts` 把页面边框排在最后，正是
+ * 为了这个编号不挪位。这里**不量**任何几何：节的边界是文件声明的，与铺排没关系。越界的节号不猜，`undefined`。
+ */
+export function sectionCaretAnchor(page: HTMLElement, ends: readonly number[], total: number, target: number): PageAnchor | undefined {
+  if (!Number.isInteger(target) || target < 1 || target > total) return undefined;
+  if (target > 1 && ends[target - 2] === undefined) return undefined;
+  const block = page.children[target === 1 ? 0 : ends[target - 2]! + 1] as HTMLElement | undefined;
+  if (!block || block.classList.contains(PAGE_BORDER_CLASS)) return undefined;
+  if (block.tagName === "TABLE") {
+    const row = [...(block as HTMLTableElement).rows][0];
+    return row ? { ...headPositionOf(row), block } : undefined;
+  }
+  return { ...headPositionOf(block), block };
 }

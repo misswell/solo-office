@@ -4,7 +4,7 @@
  * `charactersWithSpaces`、`paragraphs`、`lines`、`pages` 全都交给 `doc.ComputeStatistics(wdStatistic…)`，
  * 而 `lines`/`pages` 那两问要的是字体度量与栏宽决定出来的行盒——第 66 轮做「字数统计」时正因为这个把这两行删了
  * （那时候它们没有受众：`render.ts` 只出一张连续的纸，照画报「页数 1」对一个四十段的件是假读数）。
- * 这一页把那个受众补上：**量的还是这张连续的纸**，按节的 `w:pgSz`/`w:pgMar` 把它切成 N 张，
+ * 这一页把那个受众补上：**量的还是这张连续的纸**，按**每一节自己的** `w:pgSz`/`w:pgMar` 一节一张地切，
  * 于是对话框那两行与状态栏那几格读的是同一个量出来的数。纸本身仍画成一张连续的（切成 N 张盒子是下一片）。
  *
  * 量的口径都在这里，别处不另定一份：
@@ -20,9 +20,12 @@
  *   before/after 在 CSS 里合成后的那一截）并进下一段第一枚单位里，所以流的总高与纸上画的一致。
  * - 段落只在**它自己的行盒之间**断开跨页；表格按**整行**铺（一行算一行，格子里换了几行不改这个数），
  *   只读容器（`.doc-carry`）整块算一枚。`w:cantSplit` 这一版没读，所以「这行不许拆」的文件与没写的同样铺。
- * - 另起一页的来路是**画在纸上的记号**：`br[data-brk]` 里那句源文本的 `w:type` 为 `page`，以及
- *   `render.ts` 由 `w:pageBreakBefore` 写出的 `page-break-before:always`。断点后面没有内容时仍然多算一页
- *   （那一页是空的）——断点说的是「从这里另起一页」，不是「后面有东西才另起」。
+ * - 另起一页的来路有三条，都是**声明**不是几何：`br[data-brk]` 里那句源文本的 `w:type` 为 `page`、
+ *   `render.ts` 由 `w:pageBreakBefore` 写出的 `page-break-before:always`，以及**节界**——带
+ *   `w:pPr/w:sectPr` 的段落结束它那一节，下一节从新的一页起。`w:type` 这一版没读：语料那侧的 31 枚
+ *   段级 `w:sectPr` 全部没写它（`.scratch/sect-audience.mjs`），也就是 §17.6.22 的缺省 `nextPage`；
+ *   写了 `continuous` 的件真机上不在此处另起一页，本版会多算一页（未建模、未取证）。断点后面没有内容时
+ *   仍然多算一页（那一页是空的）——断点说的是「从这里另起一页」，不是「后面有东西才另起」。
  * - **段尾断点多画出来的那几行空白既不计行也不占高**：断点落在段落末尾时浏览器给那一段多画空行，但**最后一条不画**
  *   （`.scratch/br-height-dom.ts` 一枚一枚按出来：1 枚→1.00 行、2 枚→2.00、3 枚→3.00、4 枚→4.00、5 枚→5.00，
  *   也就是 N 枚多画 N−1 条）。这一截空白落在段落的盒子高度里、不落在任何一枚行盒上（`Range.getClientRects()`
@@ -33,8 +36,12 @@
  * - **分栏符是一条推导**：这一版模型没有 `w:cols` 字段，画出来就是一栏；一栏的下一栏起点就是下一页同一处，
  *   所以 `w:type="column"` 也按另起一页铺。语料那侧的量是「86 份 WPS 写出的件里 115 枚 `w:cols` 全部
  *   `w:num="1"`」（`.scratch/br-audience.mjs`），单栏是这些件的常态；WPS 真机上分栏符怎么翻页**未取证**。
- * - 一节一节地量**没做**：`render.ts` 只按 `sections[0]` 那张纸画，所以后面几节换了纸大小，也仍是按第一节的
- *   页高铺的。多节的排版是另一片。
+ * - **多节按各自节说的纸高量**：块 `b` 属于第 `#{e < b}` 节（`e` 是 `sectionEndsOf` 数出的节尾段落下标，
+ *   0 起），每一节用它**自己那一节**的页高 − 上下边距当容量（第一节那张仍走纸上画出来的 padding，因为它
+ *   就是纸上那张；其余各节按节自己的声明算，那儿没有画出来的东西可读），节界必另起一页。**纸宽没有重排**：
+ *   `render.ts` 只画一张连续的纸，行盒全是按第一节的宽度折的，所以横版那几节的真实折行与真机多半不同
+ *   （一个节的宽与高都换的件是语料里的多数：86 份里 18 份多节、14 份各节纸张组合不同，未取证差多少）；
+ *   把连续纸切成 N 个 `.page` 盒子（下一片）时这一处连着改。
  * - **光标落在第几页**（状态栏「第 X 页」，WPS 叫 `KxWpsStatusPageNumberInfoCommand`）走 `pageAtCaret()`：
  *   取光标处（折叠 Range）自己画出来的那枚矩形，用它的**中线**在量好的单位里找落点，再用与 `packPages`
  *   同一趟装箱得出那一枚在第几页。中线而不是上沿：光标矩形的上沿是**字体盒**的上沿，与单位那条**行盒跨度**
@@ -59,13 +66,14 @@
  * - **光标在第几节／第 N 节在哪里**（状态栏 `KxWpsStatusSectionInfoCommand`，detail「@Page Section. Click to
  *   Open "Go To" dialog.」，`KxWpsPagePositionInfoCommand` 那条同理）是这一页里**唯一不量几何**的一对：
  *   节的边界是文件自己声明的（`w:pPr/w:sectPr` 的段落结束它那一节），从模型数（`sectionEndsOf`），落点走
- *   `sectionCaretAnchor`（节首一块的头）。纸仍只画第一节那张——多节换纸是下一片，所以「第 X 节」与画出来的
- *   纸宽纸高可能对不上，这是读数与渲染之间的已知差。该格的中文字面与真机点开的种子**未取证**。
+ *   `sectionCaretAnchor`（节首一块的头）。页数那侧已经一节按一张纸地量了（见上一条），但**画出来**的纸
+ *   仍只有第一节那张——「第 X 节」与纸盒的宽高可能对不上，这是读数与渲染之间的已知差。该格的中文字面与
+ *   真机点开的种子**未取证**。
  *
  * 因此这两行报的是「**本程序按画出来的行盒量出来的**页数/行数」。它与 WPS 自己的排版引擎不会逐页相同
  * （字体度量、行盒取整、页眉占位、孤行控制都不一样，这些也都**未取证**），所以这里不写「与 WPS 一致」。
  */
-import { twipsToPx, type Section } from "../core/docx.js";
+import { DEFAULT_SECTION, sectionEndsOf, twipsToPx, type Section, type WordDocument } from "../core/docx.js";
 import { CARRY_CLASS, PAGE_BORDER_CLASS } from "../core/render.js";
 
 /**
@@ -269,16 +277,37 @@ export function layoutUnits(page: HTMLElement): PlacedUnit[] {
 }
 
 /**
- * 纯的那一半：一列单位在 `contentHeightPx` 高的纸上各落在第几页（与 `units` 一一对应）。
- * 断点必另起一页（哪怕当前这页还空着，那正是连按两次分页符的样子）；放不下的那一行整行挪到下一页，
- * 比一页还高的一枚只占一页——纸上它溢出去，但不会多算出一页来。
+ * 多节铺排的一「张」纸：某一节自己的正文容量，px。
  */
-export function placementsOf(units: readonly LayoutUnit[], contentHeightPx: number): number[] {
-  if (!(contentHeightPx > 0)) return units.map(() => 1);
+export type Sheet = { contentHeightPx: number };
+
+/** 一节自己的纸的容量：节说的页高 − 节说的上下边距。量不出正数就不给（与 `contentHeightOf` 同一条守则）。 */
+export function sheetOf(section: Section): Sheet | undefined {
+  const h = twipsToPx(section.pageHeightTwips - section.margins.top - section.margins.bottom);
+  return h > 0 ? { contentHeightPx: h } : undefined;
+}
+
+/**
+ * 纯的那一半（多节版）：一列单位在 `unitSections[i]` 说的那一节的纸上各落在第几页（与 `units` 一一对应）。
+ * 每一节内的铺法与「单节」完全是同一套；**节界必另起一页**（断点是声明，哪怕上一节那一页还空着），
+ * 从下一节的第一枚起换用那一节的容量。单节件就是 `sheets` 一张的特例——两处的答案必须逐枚相同。
+ */
+export function placementsAcrossSections(units: readonly LayoutUnit[], unitSections: readonly number[], sheets: readonly Sheet[]): number[] {
   const pages: number[] = [];
   let page = 1;
   let used = 0;
-  for (const u of units) {
+  let cur = -1;
+  for (let i = 0; i < units.length; i++) {
+    const s = unitSections[i] ?? 0;
+    const contentHeightPx = sheets[s]!.contentHeightPx;
+    if (s !== cur) {
+      if (cur >= 0) {
+        page++;
+        used = 0;
+      }
+      cur = s;
+    }
+    const u = units[i]!;
     if (u.forcePage) {
       page++;
       used = 0;
@@ -292,6 +321,21 @@ export function placementsOf(units: readonly LayoutUnit[], contentHeightPx: numb
     pages.push(page);
   }
   return pages;
+}
+
+/**
+ * 纯的那一半（单节）：一列单位在 `contentHeightPx` 高的纸上各落在第几页（与 `units` 一一对应）。
+ * 断点必另起一页（哪怕当前这页还空着，那正是连按两次分页符的样子）；放不下的那一行整行挪到下一页，
+ * 比一页还高的一枚只占一页——纸上它溢出去，但不会多算出一页来。多节件写 `placementsAcrossSections`，
+ * 这里是它「只有一张纸」的特例，铺法只有那一份。
+ */
+export function placementsOf(units: readonly LayoutUnit[], contentHeightPx: number): number[] {
+  if (!(contentHeightPx > 0)) return units.map(() => 1);
+  return placementsAcrossSections(
+    units,
+    units.map(() => 0),
+    [{ contentHeightPx }],
+  );
 }
 
 /** 这一列单位铺出几页。空的一列仍是一张纸。 */
@@ -312,18 +356,59 @@ function contentHeightOf(page: HTMLElement, sec: Section): number | undefined {
   return contentHeightPx > 0 ? contentHeightPx : undefined;
 }
 
+/** 一趟铺排要用的全部中间量：画出来的块与单位、每一枚单位落在第几页、总页数，以及画出来的那张纸的高度。 */
+type PagePlan = {
+  blocks: { el: HTMLElement; units: PlacedUnit[] }[];
+  units: PlacedUnit[];
+  places: number[];
+  pages: number;
+  /** 画出来的那张纸（第一节）的正文高度，px——`PageMeasure.contentHeightPx` 报的就是它。 */
+  contentHeightPx: number;
+};
+
 /**
- * 量这一张纸。纸没画上（没布局、高度为 0）或节说的页高连边距都不够留时返回 `undefined`：
- * 读数宁可少那一行，也不报一个量不出来的数。
+ * 一趟量到底：块→单位→节→页，四个读数口（页数/行数、光标第几页、行/列、第 N 页在哪）共用这一份。
+ * 每枚单位的节号从模型数（`sectionEndsOf`，块 `b` 属于第 `#{e < b}` 节），每节的纸：第一节按纸上
+ * 画出来的 padding（`contentHeightOf`），其余各节按节自己的声明（`sheetOf`）。纸没画上、或哪一节
+ * 的容量算不出正数就整趟不给——读数宁可少一行，也不报一个量不出来的数。
  */
-export function measurePageLayout(page: HTMLElement, sec: Section): PageMeasure | undefined {
-  const contentHeightPx = contentHeightOf(page, sec);
+function planOf(page: HTMLElement, doc: WordDocument): PagePlan | undefined {
+  const sections = doc.sections.length ? doc.sections : [DEFAULT_SECTION];
+  const contentHeightPx = contentHeightOf(page, sections[0]!);
   if (contentHeightPx === undefined) return undefined;
-  const units = layoutUnits(page);
+  const sheets: Sheet[] = [{ contentHeightPx }];
+  for (const s of sections.slice(1)) {
+    const sheet = sheetOf(s);
+    if (!sheet) return undefined;
+    sheets.push(sheet);
+  }
+  const ends = sectionEndsOf(doc.blocks);
+  const blocks = unitBlocksOf(page);
+  const units: PlacedUnit[] = [];
+  const unitSections: number[] = [];
+  let passed = 0;
+  blocks.forEach((b, bi) => {
+    while (passed < ends.length && ends[passed]! < bi) passed++;
+    for (const u of b.units) {
+      units.push(u);
+      unitSections.push(passed);
+    }
+  });
+  const places = placementsAcrossSections(units, unitSections, sheets);
+  return { blocks, units, places, pages: places.length ? places[places.length - 1]! : 1, contentHeightPx };
+}
+
+/**
+ * 量这一张纸。纸没画上（没布局、高度为 0）或哪一节说的页高连边距都不够留时返回 `undefined`：
+ * 读数宁可少那一行，也不报一个量不出来的数。`lines` 是全部节加起来的内容行数；`pages` 一节一张地数。
+ */
+export function measurePageLayout(page: HTMLElement, doc: WordDocument): PageMeasure | undefined {
+  const plan = planOf(page, doc);
+  if (!plan) return undefined;
   return {
-    contentHeightPx,
-    lines: units.filter((u) => u.height > 0).length,
-    pages: packPages(units, contentHeightPx),
+    contentHeightPx: plan.contentHeightPx,
+    lines: plan.units.filter((u) => u.height > 0).length,
+    pages: plan.pages,
   };
 }
 
@@ -344,14 +429,12 @@ function unitIndexAt(units: readonly PlacedUnit[], caretMid: number): number {
  * `caretMid`（视口坐标，光标自己那枚矩形的**中线** = 上沿 + 高/2）落在第几页。纸没画上或页高量不出来时
  * `undefined`——与 `measurePageLayout` 同一条守则。取点用中线而不是上沿的理由写在 `unitIndexAt` 上。
  */
-export function pageAtCaret(page: HTMLElement, sec: Section, caretMid: number): PagePlacement | undefined {
-  const contentHeightPx = contentHeightOf(page, sec);
-  if (contentHeightPx === undefined) return undefined;
-  const units = layoutUnits(page);
-  if (!units.length) return { page: 1, pages: 1 };
-  const idx = unitIndexAt(units, caretMid);
-  const places = placementsOf(units, contentHeightPx);
-  return { page: places[idx]!, pages: places[places.length - 1]! };
+export function pageAtCaret(page: HTMLElement, doc: WordDocument, caretMid: number): PagePlacement | undefined {
+  const plan = planOf(page, doc);
+  if (!plan) return undefined;
+  if (!plan.units.length) return { page: 1, pages: 1 };
+  const idx = unitIndexAt(plan.units, caretMid);
+  return { page: plan.places[idx]!, pages: plan.pages };
 }
 
 /**
@@ -447,14 +530,13 @@ function columnOf(flat: FlatText, unit: PlacedUnit, at: number): number | undefi
  * 行与「第 X 页」出自同一趟取点与装箱；列只认**段落**（表格与只读容器没有「本段文字」，那两处只报行）。
  * 光标与它所在的那一枚对不上时（中线防呆落到别的块上）列也不报数——宁可缺「列」这一格，不报一个算不出的数。
  */
-export function rowColumnAt(page: HTMLElement, sec: Section, caret: { mid: number; node: Node; offset: number }): CaretLine | undefined {
-  const contentHeightPx = contentHeightOf(page, sec);
-  if (contentHeightPx === undefined) return undefined;
-  const blocks = unitBlocksOf(page);
-  const units = blocks.flatMap((b) => b.units);
+export function rowColumnAt(page: HTMLElement, doc: WordDocument, caret: { mid: number; node: Node; offset: number }): CaretLine | undefined {
+  const plan = planOf(page, doc);
+  if (!plan) return undefined;
+  const { blocks, units } = plan;
   if (!units.length) return { row: 1 };
   const idx = unitIndexAt(units, caret.mid);
-  const row = rowInPage(placementsOf(units, contentHeightPx), units, idx);
+  const row = rowInPage(plan.places, units, idx);
   if (row === undefined) return undefined;
   let block: HTMLElement | undefined;
   let segment = idx;
@@ -491,18 +573,17 @@ function tailPositionOf(el: HTMLElement): { node: Node; offset: number } {
  * 「第 `target` 页在哪里」的反向映射（`pageAtCaret` 反着走）：给出**这一页上第一枚单位**的落笔位置，
  * 给「定位」对话框用（`doc-goto.ts` 的 `goToPage` 拿它落光标、滚动）。这一版不经过视口取点
  * （`caretRangeFromPoint` 只认视口里的点，先滚后量对不上就会落空），而是按「枚→块」的同一趟来路直接
- * 指出文档位置，与滚动、视口都无关。枚落在哪一截就落哪一截：表格取那一行，段内另起一页切出来的截
- * 落在断点之后。整页只有 0 高记号的空页（断点画在流尾、后面什么都没有）没有可落的位置：落在最后一枚
- * 有内容的单位的末尾——连续纸模型里最近的就是流尾，WPS 真机落去何处**未取证**。
+ * 指出文档位置，与滚动、视口都无关——页从哪儿切来与 `pageAtCaret` 同一份（`planOf`，多节各按自己的
+ * 页高切）。枚落在哪一截就落哪一截：表格取那一行，段内另起一页切出来的截落在断点之后。整页只有 0 高
+ * 记号的空页（断点画在流尾、后面什么都没有）没有可落的位置：落在最后一枚有内容的单位的末尾——连续纸
+ * 模型里最近的就是流尾，WPS 真机落去何处**未取证**。
  * 越界的页号（<1、>pages、不是整数）不猜，返回 `undefined`，由调用方拒绝。
  */
-export function pageCaretAnchor(page: HTMLElement, sec: Section, target: number): PageAnchor | undefined {
-  const contentHeightPx = contentHeightOf(page, sec);
-  if (contentHeightPx === undefined) return undefined;
-  const blocks = unitBlocksOf(page);
-  const units = blocks.flatMap((b) => b.units);
-  const places = placementsOf(units, contentHeightPx);
-  const pages = places.length ? places[places.length - 1]! : 1;
+export function pageCaretAnchor(page: HTMLElement, doc: WordDocument, target: number): PageAnchor | undefined {
+  const plan = planOf(page, doc);
+  if (!plan) return undefined;
+  const { blocks, units, places } = plan;
+  const pages = plan.pages;
   if (!Number.isInteger(target) || target < 1 || target > pages) return undefined;
   let idx = -1;
   for (let i = 0; i < units.length; i++) {

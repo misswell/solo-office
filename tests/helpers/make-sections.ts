@@ -11,11 +11,15 @@ const CT_STY = "application/vnd.openxmlformats-officedocument.wordprocessingml.s
 const STYLES = `<w:styles xmlns:w="${NS_W}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri"/><w:sz w:val="22"/></w:rPr></w:rPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style></w:styles>`;
 
 /**
- * A `w:sectPr` with A4 portrait and the margins the corpus writes: the geometry every part of the fixture
- * declares. It is the same blob for the break paragraphs and the body, because the fixtures here are about
- * **which paragraphs the boundaries hang off**, not about per-section paper (that slice has not landed).
+ * A `w:sectPr` in the shape the corpus writes: paper size plus the four body margins, spelled in the order the
+ * 86 real files spell them. `sectPr(11906, 16838)` is the A4 portrait blob the fixtures used to repeat.
  */
-export const SECT_PR = `<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800"/></w:sectPr>`;
+export function sectPr(pgW: number, pgH: number, marTop = 1440, marBottom = 1440, marLeft = 1800, marRight = 1800): string {
+  return `<w:sectPr><w:pgSz w:w="${pgW}" w:h="${pgH}"/><w:pgMar w:top="${marTop}" w:right="${marRight}" w:bottom="${marBottom}" w:left="${marLeft}"/></w:sectPr>`;
+}
+
+/** The A4 portrait geometry, byte for byte what the fixtures spelled before there was more than one paper. */
+export const SECT_PR = sectPr(11906, 16838);
 
 /** One paragraph. `pPr` is the caller's own `w:pPr` children; `text` omitted means the paragraph has no run at all. */
 export interface SectionPara {
@@ -28,13 +32,14 @@ export interface SectionPara {
  * `w:pPr` carries a `w:sectPr` ends the section it sits in (§17.3.1.33: `w:sectPr` is a `CT_PPr` child), and the
  * body's own direct `w:sectPr` child closes the last section — it never appears among the blocks. The caller
  * passes the break paragraphs as `SectionPara`s with `pPr: SECT_PR` so the boundary is in the blocks, exactly
- * where the model has to count it from.
+ * where the model has to count it from. `bodySectPr` swaps the last section's paper for the fixtures about
+ * per-section geometry; the break paragraphs state their paper in their own `pPr`, so it stays the caller's.
  */
-export function makeSectionsDocx(blocks: readonly SectionPara[]): Uint8Array {
+export function makeSectionsDocx(blocks: readonly SectionPara[], options: { bodySectPr?: string } = {}): Uint8Array {
   const body =
     blocks
       .map((b) => `<w:p>${b.pPr ? `<w:pPr>${b.pPr}</w:pPr>` : ""}${b.text === undefined ? "" : `<w:r><w:t>${b.text}</w:t></w:r>`}</w:p>`)
-      .join("\n") + SECT_PR;
+      .join("\n") + (options.bodySectPr ?? SECT_PR);
   return zipSync(
     {
       "[Content_Types].xml": strToU8(

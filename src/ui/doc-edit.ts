@@ -1352,13 +1352,13 @@ export class DocEditor {
   }
 
   /**
-   * 「字数统计」里 页数／行数 那两行的来路：把这张连续的纸按节的页高与上下边距量一遍，行盒从**画出来的盒子**里读
-   * （口径、以及它为什么不能当成 WPS 引擎那个数，都写在 `doc-layout.ts` 文件头）。纸没画上、或节说的页高连边距
+   * 「字数统计」里 页数／行数 那两行的来路：把这张连续的纸按**每一节自己的**页高与上下边距量一遍，行盒从**画出来的盒子**里读
+   * （口径、以及它为什么不能当成 WPS 引擎那个数，都写在 `doc-layout.ts` 文件头）。纸没画上、或某一节说的页高连边距
    * 都不够留时返回 `undefined`——那一行整个不报，而不是报一个量不出来的数。
    */
   layout(): PageMeasure | undefined {
     if (!this.page) return undefined;
-    return measurePageLayout(this.page, this.doc.sections[0] ?? DEFAULT_SECTION);
+    return measurePageLayout(this.page, this.doc);
   }
 
   /**
@@ -1376,7 +1376,7 @@ export class DocEditor {
     if (!node || !this.page.contains(node)) return undefined;
     const mid = caretMidOf(node, sel!.focusOffset);
     if (mid === undefined) return undefined;
-    return pageAtCaret(this.page, this.doc.sections[0] ?? DEFAULT_SECTION, mid);
+    return pageAtCaret(this.page, this.doc, mid);
   }
 
   /**
@@ -1392,7 +1392,7 @@ export class DocEditor {
     if (!node || !this.page.contains(node)) return undefined;
     const mid = caretMidOf(node, sel!.focusOffset);
     if (mid === undefined) return undefined;
-    return rowColumnAt(this.page, this.doc.sections[0] ?? DEFAULT_SECTION, { mid, node, offset: sel!.focusOffset });
+    return rowColumnAt(this.page, this.doc, { mid, node, offset: sel!.focusOffset });
   }
 
   /**
@@ -1473,8 +1473,7 @@ export class DocEditor {
    */
   goToPage(page: number): boolean {
     if (!this.page) return false;
-    const sec = this.doc.sections[0] ?? DEFAULT_SECTION;
-    const anchor = pageCaretAnchor(this.page, sec, page);
+    const anchor = pageCaretAnchor(this.page, this.doc, page);
     return anchor ? this.landAt(anchor) : false;
   }
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { packPages, placementsOf, rowInPage, type LayoutUnit } from "../src/ui/doc-layout.js";
+import { packPages, placementsAcrossSections, placementsOf, rowInPage, sheetOf, type LayoutUnit } from "../src/ui/doc-layout.js";
+import { DEFAULT_SECTION, type Section } from "../src/core/docx.js";
 
 /**
  * 分页的那一半纯的：`packPages` 不认识 DOM，只把一列单位往固定高度的纸上铺。行盒怎么量出来的（以及它的口径）
@@ -105,6 +106,76 @@ describe("placementsOf", () => {
     const places = placementsOf(column(36, LINE), A4_BODY);
     expect(places[34]).toBe(1);
     expect(places[35]).toBe(2);
+  });
+});
+
+/**
+ * 一节自己的纸那一份：`sheetOf` 从节的声明算容量 = 页高 − 上下边距（缇 ÷ 15），与「第一节按纸上
+ * 画出来的 padding 量」是两副来路——第一节的纸上还叠着编辑器的内边距，其余各节的纸**没画出来**，
+ * 只能按声明算（`doc-layout.ts` 文件头；`.scratch/pagination-dom.ts` 第 13 节钉换纸的那条路）。
+ */
+describe("sheetOf", () => {
+  it("A4 默认（16838 − 1440 − 1440 缇）就是 930.53px，与页面上量的正文高同一个数", () => {
+    expect(sheetOf(DEFAULT_SECTION)?.contentHeightPx).toBeCloseTo(A4_BODY, 9);
+  });
+
+  it("节说了自己的纸与边距就按它算", () => {
+    const short: Section = { ...DEFAULT_SECTION, pageHeightTwips: 6000 };
+    expect(sheetOf(short)?.contentHeightPx).toBeCloseTo((6000 - 2880) / 15, 9);
+    const roomy: Section = { ...DEFAULT_SECTION, margins: { ...DEFAULT_SECTION.margins, top: 720, bottom: 720 } };
+    expect(sheetOf(roomy)?.contentHeightPx).toBeCloseTo((16838 - 1440) / 15, 9);
+  });
+
+  it("页高连上下边距都不够留的节不给纸，不加一个编出来的数", () => {
+    expect(sheetOf({ ...DEFAULT_SECTION, pageHeightTwips: 2880 })).toBeUndefined();
+    expect(sheetOf({ ...DEFAULT_SECTION, pageHeightTwips: 1000 })).toBeUndefined();
+  });
+});
+
+/**
+ * 多节铺排那一份：每一节内的铺法与单节逐枚相同（单节件就是一张纸的特例，下面有对拍），
+ * 节界必另起一页（哪怕上一节那页还空着——断点是声明），从新节第一枚起换新节的容量。
+ */
+describe("placementsAcrossSections", () => {
+  it("单节件与 placementsOf 逐枚相同（同一套铺法，只差几张纸）", () => {
+    const units = [u(50), u(50), u(50), u(0, true), u(50)];
+    const secs = units.map(() => 0);
+    expect(placementsAcrossSections(units, secs, [{ contentHeightPx: 100 }])).toEqual(placementsOf(units, 100));
+    expect(placementsAcrossSections(column(36, LINE), column(36, LINE).map(() => 0), [{ contentHeightPx: A4_BODY }])).toEqual(
+      placementsOf(column(36, LINE), A4_BODY),
+    );
+  });
+
+  it("节界必另起一页，哪怕上一节那页还空着", () => {
+    const units = [u(10), u(10)];
+    expect(placementsAcrossSections(units, [0, 1], [{ contentHeightPx: 100 }, { contentHeightPx: 100 }])).toEqual([1, 2]);
+    // 上一节只留了一枚 0 高的记号：那一页还是被抬走了，断点是声明。
+    expect(placementsAcrossSections([u(0), u(10)], [0, 1], [{ contentHeightPx: 100 }, { contentHeightPx: 100 }])).toEqual([1, 2]);
+    // 流从第 1 页开始：第一节之前没有内容时「另起一页」没有可抬的上一页，不前空出一页。
+    expect(placementsAcrossSections([u(10)], [1], [{ contentHeightPx: 100 }, { contentHeightPx: 100 }])).toEqual([1]);
+  });
+
+  it("新节的第一枚另起一页之后，与它同节的接着排", () => {
+    const units = [u(10), u(10), u(10), u(10)];
+    expect(placementsAcrossSections(units, [0, 0, 1, 1], [{ contentHeightPx: 100 }, { contentHeightPx: 100 }])).toEqual([1, 1, 2, 2]);
+  });
+
+  it("容量换着算：短纸上的两枚翻页，长纸上的同样两枚挤在一页", () => {
+    const units = [u(40), u(40)];
+    expect(placementsAcrossSections(units, [1, 1], [{ contentHeightPx: 100 }, { contentHeightPx: 50 }])).toEqual([1, 2]);
+    expect(placementsAcrossSections(units, [0, 0], [{ contentHeightPx: 100 }, { contentHeightPx: 50 }])).toEqual([1, 1]);
+  });
+
+  it("比新节一张纸还高的一枚只占一页（按新节的容量钳）", () => {
+    expect(placementsAcrossSections([u(1_000), u(10)], [1, 1], [{ contentHeightPx: 100 }, { contentHeightPx: 50 }])).toEqual([1, 2]);
+  });
+
+  it("节界与断点落在同一枚上时两次都发生（连按分页符一样的叠法）", () => {
+    expect(placementsAcrossSections([u(10), u(10, true)], [0, 1], [{ contentHeightPx: 100 }, { contentHeightPx: 100 }])).toEqual([1, 3]);
+  });
+
+  it("空的一列没有落页", () => {
+    expect(placementsAcrossSections([], [], [{ contentHeightPx: 100 }])).toEqual([]);
   });
 });
 

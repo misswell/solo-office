@@ -106,3 +106,40 @@ export function makePreservationDocx(): Uint8Array {
   };
   return zipSync(files, { level: 6 });
 }
+
+/**
+ * The `w:br` family on its own, with a table next to it: `w:type` `page` / `column`+`w:clear="none"` /
+ * `textWrapping`+`w:clear="all"`, each spelled once, plus one cell whose paragraph holds plain text. A reader
+ * that only knows "is this a break?" cannot tell the three apart, and a drawer that draws them all as `<br>`
+ * hands the editor a page the model cannot read back — so a keystroke in that paragraph re-spells a page break
+ * as a line break.
+ *
+ * This one carries no media, which is the point of it being separate: the DOM gates import the fixture library
+ * and run where there is no `Buffer`, so a package built with base64 media cannot be assembled there.
+ */
+export function makeBrFamilyDocx(): Uint8Array {
+  const document =
+    `<w:document xmlns:mc="${NS_MC}" xmlns:w14="${NS_W14}" xmlns:r="${NS_R}" xmlns:w="${NS_W}" xml:lang="zh-CN" mc:Ignorable="w14">` +
+    `<w:body>` +
+    `<w:p><w:r><w:t>正文</w:t></w:r><w:r><w:br w:type="page"/></w:r><w:r><w:t>下一页</w:t></w:r>` +
+    `<w:r><w:br w:type="column" w:clear="none"/></w:r><w:r><w:t>分栏后</w:t></w:r>` +
+    `<w:r><w:br w:type="textWrapping" w:clear="all"/></w:r><w:r><w:t>折行后</w:t></w:r></w:p>` +
+    `<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr><w:tblGrid><w:gridCol w:w="2400"/><w:gridCol w:w="2400"/></w:tblGrid>` +
+    `<w:tr><w:tc><w:p><w:r><w:t>甲</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>乙</w:t></w:r></w:p></w:tc></w:tr>` +
+    `</w:tbl>` +
+    `<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>` +
+    `</w:body></w:document>`;
+  return zipSync(
+    {
+      "[Content_Types].xml": strToU8(
+        DECL +
+          `<Types xmlns="${NS_CT}"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="${CT_W}.document.main+xml"/></Types>`,
+      ),
+      "_rels/.rels": strToU8(
+        DECL + `<Relationships xmlns="${NS_PKG}"><Relationship Id="rId1" Type="${NS_R}/officeDocument" Target="word/document.xml"/></Relationships>`,
+      ),
+      "word/document.xml": strToU8(DECL + document),
+    },
+    { level: 6 },
+  );
+}

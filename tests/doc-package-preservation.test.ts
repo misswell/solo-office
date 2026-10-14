@@ -16,7 +16,7 @@ import { OpcPackage } from "../src/core/opc.js";
 import { WordDocument } from "../src/core/docx.js";
 import { writeDocx } from "../src/core/write-docx.js";
 import type { Inline } from "../src/core/docx.js";
-import { makePreservationDocx } from "./helpers/make-preservation.js";
+import { makeBrFamilyDocx, makePreservationDocx } from "./helpers/make-preservation.js";
 
 /** One added paragraph: enough to make the document dirty, so the save rebuilds the body from the model. */
 function editAndSave(bytes: Uint8Array): Uint8Array {
@@ -111,6 +111,18 @@ describe("docx 编辑保存：断、书签与图形内层", () => {
     const doc = WordDocument.openBytes(editAndSave(makePreservationDocx()));
     const breaks = doc.blocks.flatMap((b) => (b.kind === "paragraph" ? b.inlines.filter((i) => i.break) : []));
     expect(breaks.map((i) => i.brXml)).toEqual(['<w:br w:type="page"/>', '<w:br w:type="column" w:clear="none"/>']);
+  });
+
+  it("keeps all three shapes of the w:br family through a rebuild", () => {
+    // The model only asks whether an inline is a break; the spelling is the file's. A writer that re-spells a
+    // break from the flag alone collapses the family to `<w:br/>`, which is a line break — the page break gone.
+    const after = bodyOf(editAndSave(makeBrFamilyDocx()));
+    const shapes = ['<w:br w:type="page"/>', '<w:br w:type="column" w:clear="none"/>', '<w:br w:type="textWrapping" w:clear="all"/>'];
+    for (const s of shapes) expect(countOf(after, s)).toBe(1);
+    expect(countOf(after, "<w:br/>")).toBe(0);
+    const doc = WordDocument.openBytes(editAndSave(makeBrFamilyDocx()));
+    const breaks = doc.blocks.flatMap((b) => (b.kind === "paragraph" ? b.inlines.filter((i) => i.break) : []));
+    expect(breaks.map((i) => i.brXml)).toEqual(shapes);
   });
 
   it("keeps a bookmark pair balanced when its end sits between two rows", () => {

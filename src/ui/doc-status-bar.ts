@@ -5,7 +5,7 @@
  * 就写在**同一个文件的 267 行**、同一个 `aid="792"`，而这一条里其余 62 项一个 `aid` 都没有。所以这一格不是
  * 另一个功能，是同一条命令的另一种长相：报一个数，点一下开同一个对话框。
  *
- * 这一条上挂着**七格**，顺序照 kuip 的子项次序（页码→页数→节→纵向位置→行→列→字数）：
+ * 这一条上挂着**八格**，顺序照 kuip 的子项次序（页码→页数→节→纵向位置→行→列→字数→单位）：
  *
  * - `KxWpsStatusPageNumberInfoCommand id="PageNumberInfoCommand"`，detail「Page Number. Click to open "Go To" dialog.」
  *   ——**第 X 页**，X 是光标（选区活动端）落在的那一页。量法与「字数统计」的 页数 同一套（`doc-layout.ts`
@@ -19,10 +19,11 @@
  *   文件头。光标不在纸面上时与页码同一口径保留上一次读数。点一下开「定位」对话框、预选「节」目标；
  *   真机字面与点开时预选什么**未取证**。
  * - `KxWpsPagePositionInfoCommand id="PagePositionInfoCommand"`（452 行，detail「@Vertical Page Position. Click to
- *   Open "Go To" dialog.」，夹在 节 与 行/列 之间）——**纵向位置**：光标那行离**纸沿**多远，报厘米两位小数。
+ *   Open "Go To" dialog.」，夹在 节 与 行/列 之间）——**纵向位置**：光标那行离**纸沿**多远，报当前
+ *   **测量单位**下的数（默认厘米两位小数；四种单位与各自小数的口径在 `doc-units.ts`）。
  *   量法在 `doc-layout.ts` 的 `pagePositionAt`（纸沿 = 本页第一枚内容的上沿 − 这一节的上边距；取点与「第 X 页」
  *   同一条中线）。这一格是**按钮**（detail 带 "Click to Open"），点开同一个「定位」对话框；预选哪个目标
- *   未取证，这一条走默认的「页」。真机字面、量的单位（厘米？）、小数位与光标不在纸面上时的表现**都未取证**。
+ *   未取证，这一条走默认的「页」。真机字面、真机默认哪种单位与几位小数、以及光标不在纸面上时的表现**都未取证**。
  * - `KxWpsStatusRowInfoCommand`（detail「@Line Status Bar」）与 `KxWpsStatusColumnInfoCommand`（detail
  *   「@Column Status Bar」，kuip 里靠它 `rightSibling` 与上一格 `leftSibling` 配成一对）——**行 X／列 X**：
  *   行是光标在**这一页里**排第几（每页重数，0 高的断点记号不数），列是它在这一行的第几个字。
@@ -31,13 +32,18 @@
  *   不是 button**：kuip 里这两条没有点击动作，没有可点开的东西。真机字面、每页是否重数行、行尾空白
  *   怎么计**都未取证**。
  * - `KxWpsStatusWordCountInfoCommand`（上段那条）——**字数**，点开对话框。
+ * - `KxWpsStatusUnitCommand`（459 行，detail「@Measurement unit. Click to open "Options" dialog.」，夹在
+ *   字数 与 编码 之间）——**测量单位**：这一格报选项里选的那一种（默认厘米），点一下开「选项」对话框
+ *   （`doc-options.ts`，这一版只摆了「测量单位」一组）。选择只活在这个窗口里；真机上这格显示什么字面、
+ *   选项里摆哪几种、默认哪种、存去哪里**都未取证**（口径见 `doc-units.ts` 头注）。
  *
- * 页码/页数/节/纵向位置/字数 五格是**按钮**：kuip 的 detail 说 页码/页数/节/纵向位置 点一下开「定位」对话框
- * （`doc-goto.ts`，与 ⌘G 同一条命令 `Id="GoTo"`；点节那一格预选「节」目标），字数那一格是我们先接上的同形状。
+ * 页码/页数/节/纵向位置/字数/测量单位 六格是**按钮**：kuip 的 detail 说 页码/页数/节/纵向位置 点一下开「定位」
+ * 对话框（`doc-goto.ts`，与 ⌘G 同一条命令 `Id="GoTo"`；点节那一格预选「节」目标），字数那一格是我们先接上的
+ * 同形状，单位那一格按 459 行的 detail 开「选项」对话框。
  * WPS 那几格点击的细节与中文界面字面都**未取证**（`.qm` 那堵墙与 `doc-word-count.ts` 头注记的是同一件），
  * 这里按 detail 接上这条腿：种子取光标所在页/节，「定位」把落点交回 `DocEditor.goToPage`／`goToSection`。
  *
- * 还没接的两格：`KxWpsStatusUnitCommand`（测量单位）与 `KxWpsTextEncodingListCommand`（编码）。
+ * 还没接的一格：`KxWpsTextEncodingListCommand`（编码）。
  *
  * 还有一条**没接**的腿：`res/wpsentries.kuip` 里 `idPath="Status bar Popup Menu.WordCountStatusBar"` 说明 WPS
  * 的状态栏可以右键弹出一串共 15 项的开关，逐格显示或隐藏。本轮不摆那个弹出菜单：逐格开关要先有「哪些格在
@@ -48,6 +54,8 @@
  * 页签同一种摆法；换开表格或演示时由外壳把它摘掉，不留到别人页脚上。
  */
 import type { DocEditor } from "./doc-edit.js";
+import { openOptions } from "./doc-options.js";
+import { currentUnit, formatLength, onUnitChange, unitDef } from "./doc-units.js";
 import { openWordCount } from "./doc-word-count.js";
 
 const STYLE_ID = "solo-doc-status-styles";
@@ -81,9 +89,6 @@ function injectStyles(): void {
   document.head.append(style);
 }
 
-/** 1 厘米 = 96/2.54 px（CSS 参考像素：1 英寸 = 96px = 2.54 厘米）。WPS 那一格报什么单位、几位小数**未取证**，这里报厘米、两位。 */
-const CM_PER_PX = 2.54 / 96;
-
 export class DocStatusBar {
   private readonly root: HTMLDivElement;
   private readonly pageItem: HTMLButtonElement;
@@ -93,6 +98,9 @@ export class DocStatusBar {
   private readonly lineItem: HTMLSpanElement;
   private readonly colItem: HTMLSpanElement;
   private readonly wordItem: HTMLButtonElement;
+  private readonly unitItem: HTMLButtonElement;
+  /** 换单位时状态栏要跟着重读：「纵向位置」那格的数与单位格自己的字面都变。 */
+  private readonly offUnit: () => void;
   /** 光标跑出纸面那几格里，页码保留上一次的读数（口径见文件头）；页数不跟光标走，每回现量。 */
   private lastPage = 1;
   /** 节与页码同一口径：光标不在纸面上时保留上一次的读数。 */
@@ -147,8 +155,14 @@ export class DocStatusBar {
     this.wordItem.className = "solo-doc-status-words";
     this.wordItem.title = "字数。点击打开「字数统计」对话框";
     this.wordItem.addEventListener("click", () => openWordCount(this.editor.counts(), this.editor.selectionCounts(), this.editor.layout()));
-    this.root.append(this.pageItem, this.pagesItem, this.sectionItem, this.posItem, this.lineItem, this.colItem, this.wordItem);
+    this.unitItem = document.createElement("button");
+    this.unitItem.type = "button";
+    this.unitItem.className = "solo-doc-status-unit";
+    this.unitItem.title = "测量单位。点击打开「选项」对话框";
+    this.unitItem.addEventListener("click", () => openOptions());
+    this.root.append(this.pageItem, this.pagesItem, this.sectionItem, this.posItem, this.lineItem, this.colItem, this.wordItem, this.unitItem);
     document.body.append(this.root);
+    this.offUnit = onUnitChange(() => this.refresh());
     this.refresh();
   }
 
@@ -165,7 +179,7 @@ export class DocStatusBar {
     const pp = this.editor.caretPosition();
     if (pp !== undefined) this.lastPos = pp;
     this.posItem.textContent =
-      total === undefined || this.lastPos === undefined ? "" : `纵向位置 ${(this.lastPos * CM_PER_PX).toFixed(2)} 厘米`;
+      total === undefined || this.lastPos === undefined ? "" : `纵向位置 ${formatLength(this.lastPos)}`;
     const rc = this.editor.caretLine();
     if (rc) {
       this.lastRow = rc.row;
@@ -175,9 +189,11 @@ export class DocStatusBar {
     this.colItem.textContent = total === undefined || this.lastCol === undefined ? "" : `列 ${this.lastCol}`;
     const c = this.editor.counts();
     this.wordItem.textContent = `字数：${c.cjk + c.words}`;
+    this.unitItem.textContent = unitDef(currentUnit()).name;
   }
 
   detach(): void {
+    this.offUnit();
     this.root.remove();
   }
 }

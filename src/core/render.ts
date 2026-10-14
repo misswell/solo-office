@@ -51,11 +51,16 @@ function fontStack(run: Pick<Inline, "font" | "fontEastAsia">): string {
   return parts.join(",");
 }
 
+/** The page marker for one `w:br`. `data-brk` carries the element source verbatim through an edit: without it
+ *  a re-typed paragraph comes back as a bare `<br>`, and the writer spells that as `<w:br/>` — losing
+ *  `w:type="page"`. `doc-edit` reads the attribute straight back into `Inline.brXml`. */
+export const breakHtml = (xml?: string): string => (xml ? `<br data-brk="${esc(xml)}">` : "<br>");
+
 export function renderInline(inline: Inline): string {
   if (inline.image) {
     return `<img src="${inline.image.src}" width="${Math.round(inline.image.width)}" height="${Math.round(inline.image.height)}" alt="${esc(inline.image.name)}">`;
   }
-  if (inline.break) return "<br>";
+  if (inline.break) return breakHtml(inline.brXml);
   if (inline.tab) return '<span class="tab"></span>';
   let css = "";
   if (inline.bold) css += "font-weight:600;";

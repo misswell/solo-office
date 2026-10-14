@@ -1617,6 +1617,13 @@ window.addEventListener("keydown", (e) => {
       openFind();
       return;
     }
+    // WPS 给这条命令的快捷键：`res/wpscommon.kuip:219` 写着 `shortcutHint="Ctrl+Enter"`，快捷键表在
+    // 1115/1116 与 1304/1305 各给了一对 `Ctrl+Return`／`Meta+Return`——macOS 上就是 ⌘↵。
+    if (key === "enter" && (ke.metaKey || ke.ctrlKey)) {
+      ke.preventDefault();
+      editor?.insertPageBreak();
+      return;
+    }
     // WPS 给这条命令的快捷键：`res/wpscommon.kuip:1170–1171`（另一处 1359–1360 同样一对）写着
     // `shortcut cmd="WordCount"` 的 `Ctrl+Shift+G` 与 `Meta+Shift+G`，macOS 上就是 ⌘⇧G。
     if (key === "g" && ke.shiftKey) {

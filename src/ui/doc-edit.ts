@@ -1068,7 +1068,10 @@ export class DocEditor {
         }
         const tag = child.tagName.toLowerCase();
         if (tag === "br") {
-          out.push({ ...ctx, text: "", break: true });
+          // Whatever the file wrote on the `w:br` comes back off the marker unchanged, so a keystroke in a
+          // page-break paragraph does not quietly turn it into a plain line break.
+          const brXml = child.getAttribute("data-brk") || undefined;
+          out.push({ ...ctx, text: "", break: true, ...(brXml ? { brXml } : {}) });
           continue;
         }
         if (tag === "img") {
@@ -1814,17 +1817,31 @@ export class DocEditor {
   }
 
   /**
-   * Starts a new page: an empty paragraph with `pageBreakBefore` right after the
-   * caret's block, and the caret inside it.
+   * WPS 的 `InsertPageBreak`（`office6/res/wpscommon.kuip:219`，`shortcutHint="Ctrl+Enter"`，快捷键表 1115/1116
+   * 与 1304/1305 给了 `Ctrl+Return`／`Meta+Return`）在**光标处**放一枚 `w:br w:type="page"`：段落还是那一段，
+   * 不因为要分页就多出一个空段落（从前这条 `splice` 的是「下一段带 `pageBreakBefore`」，那是另一条命令的形状）。`mutated()` 那一步会把 `data-brk` 里的原串读回 `brXml`，
+   * 之后这段里再怎么打字都还按 `w:type="page"` 写回文件。
    */
   insertPageBreak(): void {
-    const path = this.caretPath()?.path;
-    if (!path) return;
-    this.snapshot(this.caretPath());
-    const at = path[0];
-    this.doc.blocks.splice(at + 1, 0, { kind: "paragraph", inlines: [], pageBreakBefore: true });
-    this.render();
-    this.setCaret({ path: [at + 1], offset: 0 });
+    const page = this.page;
+    const at = this.caretPath();
+    if (!page || !at) return;
+    page.focus();
+    this.setCaret(at);
+    const sel = document.getSelection();
+    const range = sel && sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
+    if (!range || !page.contains(range.startContainer)) return;
+    this.snapshot(at);
+    // `execCommand("insertHTML")` 放不下这枚标记：光标在段落末尾时 Blink 会把那枚 `<br>` 当成换行处理，
+    // 段落被劈开而标记自己消失（实测段落 4 → 5、`w:br` 0 枚）。所以直接按 DOM 插，再让 `mutated()` 把它读回模型。
+    const br = document.createElement("br");
+    br.setAttribute("data-brk", '<w:br w:type="page"/>');
+    range.insertNode(br);
+    range.setStartAfter(br);
+    range.collapse(true);
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+    this.mutated();
     this.hooks.changed();
   }
 

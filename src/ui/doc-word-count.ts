@@ -58,6 +58,9 @@ const CSS = `
 .solo-wc-rows dd { font-variant-numeric: tabular-nums; }
 /* 「字数」是这一堆里用户来看的那个数，所以加粗；余下几行是它的来路。 */
 .solo-wc-total dd { font-weight: 600; }
+.solo-wc-sel-title { margin: 0; font-size: 12px; font-weight: 600; color: #4b5563; }
+/* 两节挨着排，中间那道线把「整篇」与「所选」分开——不写这行，光看数字分不清哪一节是谁。 */
+.solo-wc-sel { border-top: 1px solid #e5e9f2; padding-top: 8px; }
 .solo-wc-dialog footer { display: flex; gap: 8px; justify-content: flex-end; }
 .solo-wc-dialog footer button { padding: 5px 14px; border-radius: 7px; border: 1px solid #c9d3e6; background: #f5f7fb; cursor: pointer; font: inherit; }
 .solo-wc-dialog .solo-wc-apply { background: #2f6fed; border-color: #2f6fed; color: #fff; }
@@ -73,8 +76,14 @@ function injectStyles(): void {
 
 /**
  * 打开读数。这条命令不改件，所以「确定」与「关闭」都只是收摊；一次只挂一个，ribbon 上再点一次换掉旧的。
+ *
+ * 有选区时多挂一节「所选文字」：WPS 那一份统计接口本来就是**按目标对象**算的
+ * （`office6/addons/kwpsapiex/wps.js` 的 `getDocumentWordCount(target)` 里 `target || __target || Application.ActiveDocument`，
+ * 再交给 `ComputeStatistics(wdStatistic…)`），把选区当目标传进去就是选中部分的数——所以这一节**不是猜的行为**，
+ * 是包里的函数签名允许的。**「所选文字」这四个字与这一节的行序仍是未取证**（同 §48 那堵 `.qm` 墙），
+ * 按 Word 一族的通用叫法写。没有选区（折叠光标）时这一节整个不出现，而不是报一排 0。
  */
-export function openWordCount(counts: WordCountReadout): void {
+export function openWordCount(counts: WordCountReadout, selection?: WordCountReadout): void {
   document.querySelectorAll<HTMLDialogElement>(".solo-wc-dialog").forEach((old) => {
     old.close();
     old.remove();
@@ -85,16 +94,20 @@ export function openWordCount(counts: WordCountReadout): void {
   dialog.setAttribute("aria-label", "字数统计");
   const row = (label: string, value: number, cls = ""): string =>
     `<div${cls ? ` class="${cls}"` : ""}><dt>${label}</dt><dd>${value}</dd></div>`;
+  // 「中文字符和朝鲜语单词／非中文单词」那两行是「字数」的**来路**，只在整篇那一节排一次：
+  // Word 一族的那一节在选区块里就是少这几行。这一条是**推断**（真机的行序未取证），排多排少都不改数。
+  const rowsOf = (c: WordCountReadout, full = true): string =>
+    `<div class="solo-wc-rows${full ? "" : " solo-wc-sel"}" role="status">
+    ${row("段落数", c.paragraphs)}
+    ${row("字数", c.cjk + c.words, "solo-wc-total")}
+    ${row("字符数（不计空格）", c.charactersNoSpace)}
+    ${row("字符数（计空格）", c.characters)}
+    ${full ? `${row("中文字符和朝鲜语单词", c.cjk)}${row("非中文单词", c.words)}` : ""}
+    </div>`;
   dialog.innerHTML =
     `<form><header><h2>字数统计</h2><button type="button" class="solo-wc-close" aria-label="关闭">×</button></header>
-    <div class="solo-wc-rows" role="status">
-    ${row("段落数", counts.paragraphs)}
-    ${row("字数", counts.cjk + counts.words, "solo-wc-total")}
-    ${row("字符数（不计空格）", counts.charactersNoSpace)}
-    ${row("字符数（计空格）", counts.characters)}
-    ${row("中文字符和朝鲜语单词", counts.cjk)}
-    ${row("非中文单词", counts.words)}
-    </div>
+    ${rowsOf(counts)}
+    ${selection ? `<h3 class="solo-wc-sel-title">所选文字</h3>${rowsOf(selection, false)}` : ""}
     <footer><button type="button" class="solo-wc-cancel">关闭</button><button type="submit" class="solo-wc-apply">确定</button></footer></form>`;
 
   const close = (): void => {

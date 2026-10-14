@@ -2248,33 +2248,16 @@ export class WordDocument {
    *   而这里只认文字节点。`w:del` 里的删字仍带着 `text`，**算进字数**——这是本轮的取舍，与页面上画删除线
    *   却还留着它们同一套逻辑（未接受的修订还没消失）。
    */
-  wordCounts(): { paragraphs: number; characters: number; charactersNoSpace: number; cjk: number; words: number } {
-    let paragraphs = 0;
-    let characters = 0;
-    let charactersNoSpace = 0;
-    let cjk = 0;
-    let words = 0;
-    // 汉字（含扩充 A 与兼容区）、假名、谚文（含字母区与兼容 Jamo）。增补平面 B–F 用 \u{…} 写。
-    const CJK = /[\u3040-\u30ff\u3130-\u318f\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u1100-\u11ff\u{20000}-\u{2fa1f}]/gu;
-    const walk = (bs: readonly Block[]): void => {
-      for (const b of bs) {
-        if (b.kind === "table") {
-          for (const row of b.rows) for (const cell of row) walk(cell.paragraphs);
-          continue;
-        }
-        if (b.kind !== "paragraph") continue;
-        paragraphs++;
-        const text = b.inlines.map((i) => i.text ?? "").join("");
-        for (const ch of text) {
-          characters++;
-          if (!/\s/u.test(ch)) charactersNoSpace++;
-        }
-        cjk += text.match(CJK)?.length ?? 0;
-        for (const token of text.replace(CJK, " ").split(/\s+/)) if (/[\p{L}\p{N}]/u.test(token)) words++;
-      }
-    };
-    walk(this.blocks);
-    return { paragraphs, characters, charactersNoSpace, cjk, words };
+  wordCounts(): WordCounts {
+    return countTexts(this.bodyTexts());
+  }
+
+  /**
+   * 正文里那一段段的文字，一段一个元素（空段也占一个）：表格连同格子里的段落都算，页眉页脚／脚注尾注／文本框不算。
+   * 这是数的那张口的**取材**那一半——`wordCounts()` 数它，选区数的是它的切片。
+   */
+  bodyTexts(): string[] {
+    return paragraphTextsOf(this.blocks);
   }
 
   /**
@@ -4817,4 +4800,53 @@ function hex(v: unknown): string | undefined {
   if (/^[0-9A-Fa-f]{6}$/.test(v)) return "#" + v;
   if (/^[0-9A-Fa-f]{8}$/.test(v)) return "#" + v.slice(2);
   return undefined;
+}
+
+/** 「字数统计」报的那五个数：整篇与选区共用这一个形状。 */
+export type WordCounts = {
+  paragraphs: number;
+  characters: number;
+  charactersNoSpace: number;
+  cjk: number;
+  words: number;
+};
+
+/**
+ * 给定一段段文字，数出那五个数。口径（码点、`White_Space`、汉字／假名／谚文字位、`字数 = 中文字符 + 非中文单词`）
+ * 逐条解释在 `WordDocument.wordCounts()` 上面——那里说的是整篇，这里是**同一份口径换个取材**：
+ * 一个元素就是一段（空段落也占一个元素，所以段落数是 `texts.length`），选区传进来的是它自己那几段被切出来的片段。
+ */
+export function countTexts(texts: readonly string[]): WordCounts {
+  // 汉字（含扩充 A 与兼容区）、假名、谚文（含字母区与兼容 Jamo）。增补平面 B–F 用 \u{…} 写。
+  const CJK = /[\u3040-\u30ff\u3130-\u318f\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u1100-\u11ff\u{20000}-\u{2fa1f}]/gu;
+  let characters = 0;
+  let charactersNoSpace = 0;
+  let cjk = 0;
+  let words = 0;
+  for (const text of texts) {
+    for (const ch of text) {
+      characters++;
+      if (!/\s/u.test(ch)) charactersNoSpace++;
+    }
+    cjk += text.match(CJK)?.length ?? 0;
+    for (const token of text.replace(CJK, " ").split(/\s+/)) if (/[\p{L}\p{N}]/u.test(token)) words++;
+  }
+  return { paragraphs: texts.length, characters, charactersNoSpace, cjk, words };
+}
+
+/** 这些块里那一段段的文字，表格顺着 `w:tc` 递归下去；整篇传 `this.blocks`，选区中间那几块也可以单独传。 */
+export function paragraphTextsOf(blocks: readonly Block[]): string[] {
+  const out: string[] = [];
+  const walk = (bs: readonly Block[]): void => {
+    for (const b of bs) {
+      if (b.kind === "table") {
+        for (const row of b.rows) for (const cell of row) walk(cell.paragraphs);
+        continue;
+      }
+      if (b.kind !== "paragraph") continue;
+      out.push(b.inlines.map((i) => i.text ?? "").join(""));
+    }
+  };
+  walk(blocks);
+  return out;
 }

@@ -1,7 +1,7 @@
 import type { Block, Carried, CarriedInline, FormatRevision, HfSegment, Inline, ParaStyle, PageGeometry, PageSetup, Paragraph, ParagraphFormatRevision, PropSlot, Revision, RevisionEntry, RowInfo, RunStyle, Table, TableCell, WordDocument } from "../core/docx.js";
 import type { CommentAnchor, DocComment } from "../core/comments.js";
 import { bodyShape, commentTexts } from "../core/comments.js";
-import { DEFAULT_SECTION, RUN_STYLE_KEYS, ownParaStyle, ownRunStyle, paraStyleOf, runStyleOf, stampNow, syncParaSlots, twipsToPx } from "../core/docx.js";
+import { DEFAULT_SECTION, RUN_STYLE_KEYS, countTexts, ownParaStyle, ownRunStyle, paraStyleOf, paragraphTextsOf, runStyleOf, stampNow, syncParaSlots, twipsToPx } from "../core/docx.js";
 import type { CellWhere, TableEdit } from "../core/doc-table-ops.js";
 import { cellRangeFor, cellRect, cellsInRect, cellsInSweep, deleteColumnHere, deleteRowHere, gridColumns, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, splitHere, splitTableAt } from "../core/doc-table-ops.js";
 import { IMAGE_EXT_BY_MIME } from "../core/media.js";
@@ -1267,9 +1267,32 @@ export class DocEditor {
     return this.doc.wordCounts();
   }
 
+  /**
+   * 选区里那几段被切出来的文字，按 `counts()` **同一份口径**数（`countTexts` 只有一个实现，不会两处算法）。
+   * 起止用的是页面上真选区映射进模型的那两条路径（`rangeEnds()`，与格式命令改选区时同一条寻址），所以「选中」
+   * 在模型里说的位置与在页面上说的是同一处。跨段时两端各取自己那半段，中间那些块整段计入（表格连格子里的段落下钻）。
+   * 折叠光标返回 `undefined`：那时没有「所选文字」这一栏，而不是报一排 0。
+   */
+  selectionCounts(): WordCountReadout | undefined {
+    const ends = this.rangeEnds();
+    if (!ends) return undefined;
+    const slice = (path: number[], from: number, to: number): string[] => {
+      const p = this.paragraphAt(path);
+      if (!p) return [];
+      return [p.inlines.map((i) => i.text ?? "").join("").slice(from, to)];
+    };
+    if (ends.start.path.join() === ends.end.path.join()) {
+      return ends.start.offset === ends.end.offset ? undefined : countTexts(slice(ends.start.path, ends.start.offset, ends.end.offset));
+    }
+    // 中间那些块按顶层顺序走（与 `applyStyle` 改跨段选区那条同一口径）：起点与终点落在**同一张表**里时，
+    // 表内那几段中间段落不在这一步里——两端各算自己那半段。这条限制是照 `applyStyle` 抄的，两处一致比一处更聪明要重要。
+    const between = this.doc.blocks.slice(ends.start.path[0] + 1, ends.end.path[0]);
+    return countTexts([...slice(ends.start.path, ends.start.offset, Infinity), ...paragraphTextsOf(between), ...slice(ends.end.path, 0, ends.end.offset)]);
+  }
+
   /** Ribbon command: 「字数统计」. Reading a count changes nothing, so this takes no undo step and does not call `changed()`. */
   showWordCount(): void {
-    openWordCount(this.counts());
+    openWordCount(this.counts(), this.selectionCounts());
   }
 
   /**

@@ -67,7 +67,7 @@ export class DocStatusBar {
     this.wordItem.type = "button";
     this.wordItem.className = "solo-doc-status-words";
     this.wordItem.title = "字数。点击打开「字数统计」对话框";
-    this.wordItem.addEventListener("click", () => openWordCount(this.editor.counts()));
+    this.wordItem.addEventListener("click", () => openWordCount(this.editor.counts(), this.editor.selectionCounts()));
     this.root.append(this.wordItem);
     document.body.append(this.root);
     this.refresh();

@@ -109,10 +109,15 @@ export function makePreservationDocx(): Uint8Array {
 
 /**
  * The `w:br` family on its own, with a table next to it: `w:type` `page` / `column`+`w:clear="none"` /
- * `textWrapping`+`w:clear="all"`, each spelled once, plus one cell whose paragraph holds plain text. A reader
- * that only knows "is this a break?" cannot tell the three apart, and a drawer that draws them all as `<br>`
- * hands the editor a page the model cannot read back — so a keystroke in that paragraph re-spells a page break
- * as a line break.
+ * `textWrapping`+`w:clear="all"` / `textWrapping` with no `w:clear`, each spelled once, plus one cell whose
+ * paragraph holds plain text. A reader that only knows "is this a break?" cannot tell the four apart, and a
+ * drawer that draws them all as `<br>` hands the editor a page the model cannot read back — so a keystroke in
+ * that paragraph re-spells a page break as a line break.
+ *
+ * The four shapes are the shapes the local WPS corpus actually writes, counted over the 86 WPS-written .docx:
+ * 166 `w:br` in 42 of the 86 files — 132 `type="textWrapping"` with no `w:clear`, 25 `type="page"`, 9
+ * `type="textWrapping" w:clear="all"`, and no bare `<w:br/>`. `w:type="column"` is the one shape the corpus
+ * never states, so it is here as the spec's other member of the family rather than as a measured case.
  *
  * This one carries no media, which is the point of it being separate: the DOM gates import the fixture library
  * and run where there is no `Buffer`, so a package built with base64 media cannot be assembled there.
@@ -123,7 +128,8 @@ export function makeBrFamilyDocx(): Uint8Array {
     `<w:body>` +
     `<w:p><w:r><w:t>正文</w:t></w:r><w:r><w:br w:type="page"/></w:r><w:r><w:t>下一页</w:t></w:r>` +
     `<w:r><w:br w:type="column" w:clear="none"/></w:r><w:r><w:t>分栏后</w:t></w:r>` +
-    `<w:r><w:br w:type="textWrapping" w:clear="all"/></w:r><w:r><w:t>折行后</w:t></w:r></w:p>` +
+    `<w:r><w:br w:type="textWrapping" w:clear="all"/></w:r><w:r><w:t>折行后</w:t></w:r>` +
+    `<w:r><w:br w:type="textWrapping"/></w:r><w:r><w:t>软换行</w:t></w:r></w:p>` +
     `<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr><w:tblGrid><w:gridCol w:w="2400"/><w:gridCol w:w="2400"/></w:tblGrid>` +
     `<w:tr><w:tc><w:p><w:r><w:t>甲</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>乙</w:t></w:r></w:p></w:tc></w:tr>` +
     `</w:tbl>` +

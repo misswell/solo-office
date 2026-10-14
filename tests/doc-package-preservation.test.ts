@@ -113,11 +113,17 @@ describe("docx 编辑保存：断、书签与图形内层", () => {
     expect(breaks.map((i) => i.brXml)).toEqual(['<w:br w:type="page"/>', '<w:br w:type="column" w:clear="none"/>']);
   });
 
-  it("keeps all three shapes of the w:br family through a rebuild", () => {
+  it("keeps every shape of the w:br family through a rebuild", () => {
     // The model only asks whether an inline is a break; the spelling is the file's. A writer that re-spells a
     // break from the flag alone collapses the family to `<w:br/>`, which is a line break — the page break gone.
+    // These four spellings are what the 86 WPS-written .docx actually state (132 / 25 / 9 of them, no bare `<w:br/>`).
     const after = bodyOf(editAndSave(makeBrFamilyDocx()));
-    const shapes = ['<w:br w:type="page"/>', '<w:br w:type="column" w:clear="none"/>', '<w:br w:type="textWrapping" w:clear="all"/>'];
+    const shapes = [
+      '<w:br w:type="page"/>',
+      '<w:br w:type="column" w:clear="none"/>',
+      '<w:br w:type="textWrapping" w:clear="all"/>',
+      '<w:br w:type="textWrapping"/>',
+    ];
     for (const s of shapes) expect(countOf(after, s)).toBe(1);
     expect(countOf(after, "<w:br/>")).toBe(0);
     const doc = WordDocument.openBytes(editAndSave(makeBrFamilyDocx()));

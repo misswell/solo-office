@@ -1109,6 +1109,7 @@ export class DocEditor {
    */
   private pathOf(node: Node | null, offset: number): DocPath | null {
     if (!this.page || !node) return null;
+    if (node === this.page) return this.pathOfPageEdge(offset);
     let top: Node | null = node;
     while (top && top.parentElement !== this.page) top = top.parentElement;
     if (!top) return null;
@@ -1138,6 +1139,28 @@ export class DocEditor {
     }
     if (!cells.length || !holder) return null;
     return { path: [index, ...cells.reverse().flat()], offset: modelOffset(holder, node, offset) };
+  }
+
+  /**
+   * 端点落在编辑页本身上的那种选区：全选（⌘A）铺出来的 Range，起止容器就是这一张连续的纸，下标是块的下标，
+   * 不是某个段里的字符数。把它们折回首/末那个块的边界，全选才和拖出来的选区一样能寻址——格式命令与
+   * 「所选文字」都走 `rangeEnds()`，此前它们在全选时直接拿不到端点。
+   */
+  private pathOfPageEdge(offset: number): DocPath | null {
+    if (!this.page) return null;
+    const blocks = [...this.page.children];
+    if (!blocks.length) return null;
+    // 下标 k（k < 块数）指「第 k 块之前」，下标等于块数才指「最后一块之后」。
+    const atEnd = offset >= blocks.length;
+    const block = blocks[atEnd ? blocks.length - 1 : offset];
+    if (!block) return null;
+    const para = atEnd
+      ? [...block.querySelectorAll(".para")].pop() ?? (block.classList.contains("para") ? block : undefined)
+      : block.classList.contains("para")
+        ? block
+        : block.querySelector(".para");
+    if (!para) return null;
+    return this.pathOf(para, atEnd ? para.childNodes.length : 0);
   }
 
   caretPath(): DocPath | null {

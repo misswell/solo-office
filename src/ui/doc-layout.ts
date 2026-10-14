@@ -35,11 +35,18 @@
  *   `w:num="1"`」（`.scratch/br-audience.mjs`），单栏是这些件的常态；WPS 真机上分栏符怎么翻页**未取证**。
  * - 一节一节地量**没做**：`render.ts` 只按 `sections[0]` 那张纸画，所以后面几节换了纸大小，也仍是按第一节的
  *   页高铺的。多节的排版是另一片。
+ * - **光标落在第几页**（状态栏「第 X 页」，WPS 叫 `KxWpsStatusPageNumberInfoCommand`）走 `pageAtCaret()`：
+ *   取光标处（折叠 Range）自己画出来的那枚矩形，用它的**中线**在量好的单位里找落点，再用与 `packPages`
+ *   同一趟装箱得出那一枚在第几页。中线而不是上沿：光标矩形的上沿是**字体盒**的上沿，与单位那条**行盒跨度**
+ *   差零点几像素且方向不定（实测 1123.47 对 1123.48/1123.5），正好落在相邻两枚相接的缝上——中线在行盒正中，
+ *   离任何接缝都有半个行高。矩形落在纸面之上/之下时取它下面那一枚（纸面之下取最后一枚）——那是防呆，
+ *   不是「按最近的算」。光标不在纸面上（点了面板、页眉带）这一层由调用方判掉，这里只管坐标。
  *
  * 因此这两行报的是「**本程序按画出来的行盒量出来的**页数/行数」。它与 WPS 自己的排版引擎不会逐页相同
  * （字体度量、行盒取整、页眉占位、孤行控制都不一样，这些也都**未取证**），所以这里不写「与 WPS 一致」。
- * 状态栏的 页码/页次/行/列 四格仍未接：那几个数要的是**光标所在**那一页那一行，是把这套行盒接着映射到光标位的
- * 下一片（`doc-status-bar.ts` 头注记的是同一件）。
+ * 状态栏的 节／行／列 三格仍未接：行那一格（`KxWpsStatusRowInfoCommand`）要的是「这一页里的第几行」，
+ * 用这套单位数得出，但 WPS 把它与「列」（`KxWpsStatusColumnInfoCommand`，字符在一行里的第几个）配对显示，
+ * 列要的是字符级映射，是另一片；节则跟着多节排版那片走。
  */
 import { twipsToPx, type Section } from "../core/docx.js";
 import { CARRY_CLASS, PAGE_BORDER_CLASS } from "../core/render.js";
@@ -51,6 +58,20 @@ import { CARRY_CLASS, PAGE_BORDER_CLASS } from "../core/render.js";
 export type LayoutUnit = {
   height: number;
   forcePage: boolean;
+};
+
+/**
+ * 量出来的单位还带着它在纸上画出来的**上沿**（视口坐标，与 `getBoundingClientRect()` 同一套）；
+ * 光标→页的查找靠它。`height` 里并进来的段间空白落在**声明区间的末尾**（上沿取的是本行第一枚文字碎片的
+ * 上沿，并进来的空白是这一枚之后、下一枚之前的），所以相邻两枚的声明区间首尾相接——接缝上像素级的比较
+ * 分不出究竟在哪一枚里，查找要用光标矩形的**中线**（中线在行盒正中，离接缝有一整个半行高）。
+ */
+export type PlacedUnit = LayoutUnit & { top: number };
+
+/** 光标落在第几页；`pages` 是同一趟量出来的总页数。 */
+export type PagePlacement = {
+  page: number;
+  pages: number;
 };
 
 /** 一张连续的纸量出来的结果。 */
@@ -91,19 +112,19 @@ function lineHeightOf(el: HTMLElement): number {
 }
 
 /**
- * 一个范围里量出来的行盒高度：同一行上的碎片按 `top` 归成一堆。
+ * 一个范围里量出来的行盒：同一行上的碎片按 `top` 归成一堆。
  * 比的是**这一堆第一条**的 `top`：同行上字号不一的碎片最多差几像素，跨行至少差一整行高。
  */
-function lineBoxesOf(range: Range, lh: number): number[] {
+function lineBoxesOf(range: Range, lh: number): { top: number; height: number }[] {
   const rects = [...range.getClientRects()].filter((r) => r.height > 0);
   if (!rects.length) return [];
   rects.sort((a, b) => a.top - b.top || b.bottom - a.bottom);
-  const out: number[] = [];
+  const out: { top: number; height: number }[] = [];
   let top = rects[0]!.top;
   let bottom = rects[0]!.bottom;
   const tol = lh * 0.8;
   const flush = (): void => {
-    out.push(Math.max(lh, bottom - top));
+    out.push({ top, height: Math.max(lh, bottom - top) });
   };
   for (const r of rects.slice(1)) {
     if (r.top - top <= tol) {
@@ -129,10 +150,10 @@ function breaksBefore(el: HTMLElement): boolean {
  * 一块段落（或标题）里的单位：段里若有另起一页的断点，就按断点切成几截分别量，
  * 断点之后那一截的第一行带着 `forcePage`；那一截是空的（断点落在段尾）时记一枚 0 高的记号。
  */
-function unitsOfParagraph(el: HTMLElement): LayoutUnit[] {
+function unitsOfParagraph(el: HTMLElement): PlacedUnit[] {
   const lh = lineHeightOf(el);
   const breaks = [...el.querySelectorAll<HTMLBRElement>("br")].filter(forcesPage);
-  const out: LayoutUnit[] = [];
+  const out: PlacedUnit[] = [];
   for (let i = 0; i <= breaks.length; i++) {
     const range = document.createRange();
     if (i === 0) range.setStart(el, 0);
@@ -141,42 +162,59 @@ function unitsOfParagraph(el: HTMLElement): LayoutUnit[] {
     else range.setEndBefore(breaks[i]!);
     const boxes = lineBoxesOf(range, lh);
     if (i === 0) {
-      out.push(...boxes.map((height) => ({ height, forcePage: false })));
+      out.push(...boxes.map((b) => ({ height: b.height, forcePage: false, top: b.top })));
       continue;
     }
     // 断点之前那一截不因为后面有个断点而另起一页；断点之后那一截的第一行才是新页的开始。
-    if (!boxes.length) out.push({ height: 0, forcePage: true });
-    else out.push({ height: boxes[0]!, forcePage: true }, ...boxes.slice(1).map((height) => ({ height, forcePage: false })));
+    if (!boxes.length) {
+      const last = out[out.length - 1];
+      out.push({ height: 0, forcePage: true, top: last ? last.top + last.height : el.getBoundingClientRect().top });
+    } else {
+      out.push(
+        { height: boxes[0]!.height, forcePage: true, top: boxes[0]!.top },
+        ...boxes.slice(1).map((b) => ({ height: b.height, forcePage: false, top: b.top })),
+      );
+    }
   }
   return out;
 }
 
 /** 一块画出来的东西自己的上下沿（不含它与上一块之间那段空白）。 */
-function unitsOfBlock(el: HTMLElement): LayoutUnit[] {
+function unitsOfBlock(el: HTMLElement): PlacedUnit[] {
   if (el.tagName === "TABLE") {
     // `rows` 只给这张表自己的行：格子里的嵌套表属于那个表对象，不会被这里数两遍。
     return [...(el as HTMLTableElement).rows]
-      .map((r) => r.getBoundingClientRect().height)
-      .filter((h) => h > 0)
-      .map((height) => ({ height, forcePage: false }));
+      .map((r) => r.getBoundingClientRect())
+      .filter((b) => b.height > 0)
+      .map((b) => ({ height: b.height, forcePage: false, top: b.top }));
   }
   if (el.classList.contains(CARRY_CLASS)) {
-    return [{ height: el.getBoundingClientRect().height, forcePage: false }];
+    const b = el.getBoundingClientRect();
+    return [{ height: b.height, forcePage: false, top: b.top }];
   }
   const units = unitsOfParagraph(el);
-  return units.length ? units : [{ height: Math.max(1, el.getBoundingClientRect().height), forcePage: false }];
+  if (units.length) return units;
+  const b = el.getBoundingClientRect();
+  return [{ height: Math.max(1, b.height), forcePage: false, top: b.top }];
+}
+
+/**
+ * 正文的开始线：纸盒上沿 + 上边框 + 上边距（`--pad-t`）。这一段之前的空白不算进任何一块。
+ * 光标不在纸面上时（调用方判掉后）按这条线当作「文首」。
+ */
+export function contentTopOf(page: HTMLElement): number {
+  const box = page.getBoundingClientRect();
+  const cs = getComputedStyle(page);
+  return box.top + (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.paddingTop) || 0);
 }
 
 /**
  * 把这张连续的纸上画出来的东西读成一列单位（行盒与不可拆的块），按文档顺序，段间空白并进后一块第一枚。
  * 页面边框那一族是画在纸盒里的装饰，不是正文的一块（`doc-edit.ts` 读回模型时同样跳过它）。
  */
-export function layoutUnits(page: HTMLElement): LayoutUnit[] {
-  const out: LayoutUnit[] = [];
-  const box = page.getBoundingClientRect();
-  const cs = getComputedStyle(page);
-  // 正文的开始线：纸盒上沿 + 上边框 + 上边距（`--pad-t`）。这一段之前的空白不算进任何一块。
-  let cursor = box.top + (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.paddingTop) || 0);
+export function layoutUnits(page: HTMLElement): PlacedUnit[] {
+  const out: PlacedUnit[] = [];
+  let cursor = contentTopOf(page);
   for (const child of [...page.children]) {
     const el = child as HTMLElement;
     if (el.classList.contains(PAGE_BORDER_CLASS)) continue;
@@ -184,7 +222,7 @@ export function layoutUnits(page: HTMLElement): LayoutUnit[] {
     const gap = Math.max(0, rect.top - cursor);
     const units = unitsOfBlock(el);
     if (units.length && gap > 0) units[0] = { ...units[0]!, height: units[0]!.height + gap };
-    else if (!units.length && gap > 0) units.push({ height: gap, forcePage: false });
+    else if (!units.length && gap > 0) units.push({ height: gap, forcePage: false, top: rect.top });
     if (units.length && breaksBefore(el)) units[0] = { ...units[0]!, forcePage: true };
     out.push(...units);
     cursor = Math.max(cursor, rect.bottom);
@@ -193,27 +231,47 @@ export function layoutUnits(page: HTMLElement): LayoutUnit[] {
 }
 
 /**
- * 纯的那一半：一列单位在 `contentHeightPx` 高的纸上铺出几页。
+ * 纯的那一半：一列单位在 `contentHeightPx` 高的纸上各落在第几页（与 `units` 一一对应）。
  * 断点必另起一页（哪怕当前这页还空着，那正是连按两次分页符的样子）；放不下的那一行整行挪到下一页，
  * 比一页还高的一枚只占一页——纸上它溢出去，但不会多算出一页来。
  */
-export function packPages(units: readonly LayoutUnit[], contentHeightPx: number): number {
-  if (!(contentHeightPx > 0)) return 1;
-  let pages = 1;
+export function placementsOf(units: readonly LayoutUnit[], contentHeightPx: number): number[] {
+  if (!(contentHeightPx > 0)) return units.map(() => 1);
+  const pages: number[] = [];
+  let page = 1;
   let used = 0;
   for (const u of units) {
     if (u.forcePage) {
-      pages++;
+      page++;
       used = 0;
     }
     const h = Math.min(Math.max(u.height, 0), contentHeightPx);
     if (used > 0 && used + h > contentHeightPx + FIT_SLACK) {
-      pages++;
+      page++;
       used = 0;
     }
     used += h;
+    pages.push(page);
   }
   return pages;
+}
+
+/** 这一列单位铺出几页。空的一列仍是一张纸。 */
+export function packPages(units: readonly LayoutUnit[], contentHeightPx: number): number {
+  if (!(contentHeightPx > 0)) return 1;
+  const places = placementsOf(units, contentHeightPx);
+  return places.length ? Math.max(...places) : 1;
+}
+
+/** 一页能放正文的高度 = 节说的页高 − 纸上画出来的上下内边距（口径见文件头）。 */
+function contentHeightOf(page: HTMLElement, sec: Section): number | undefined {
+  if (!(page.getBoundingClientRect().height > 0)) return undefined;
+  const cs = getComputedStyle(page);
+  const padTop = parseFloat(cs.paddingTop);
+  const padBottom = parseFloat(cs.paddingBottom);
+  if (!Number.isFinite(padTop) || !Number.isFinite(padBottom)) return undefined;
+  const contentHeightPx = twipsToPx(sec.pageHeightTwips) - padTop - padBottom;
+  return contentHeightPx > 0 ? contentHeightPx : undefined;
 }
 
 /**
@@ -221,17 +279,30 @@ export function packPages(units: readonly LayoutUnit[], contentHeightPx: number)
  * 读数宁可少那一行，也不报一个量不出来的数。
  */
 export function measurePageLayout(page: HTMLElement, sec: Section): PageMeasure | undefined {
-  if (!(page.getBoundingClientRect().height > 0)) return undefined;
-  const cs = getComputedStyle(page);
-  const padTop = parseFloat(cs.paddingTop);
-  const padBottom = parseFloat(cs.paddingBottom);
-  if (!Number.isFinite(padTop) || !Number.isFinite(padBottom)) return undefined;
-  const contentHeightPx = twipsToPx(sec.pageHeightTwips) - padTop - padBottom;
-  if (!(contentHeightPx > 0)) return undefined;
+  const contentHeightPx = contentHeightOf(page, sec);
+  if (contentHeightPx === undefined) return undefined;
   const units = layoutUnits(page);
   return {
     contentHeightPx,
     lines: units.filter((u) => u.height > 0).length,
     pages: packPages(units, contentHeightPx),
   };
+}
+
+/**
+ * `caretMid`（视口坐标，光标自己那枚矩形的**中线** = 上沿 + 高/2）落在第几页。纸没画上或页高量不出来时
+ * `undefined`——与 `measurePageLayout` 同一条守则。中线而不是上沿：相邻两枚单位的声明区间首尾相接
+ * （见 `PlacedUnit`），而光标矩形的字体盒上沿与行盒跨度差零点几像素且方向不定，正好落在缝上；中线在行盒
+ * 正中，离接缝总有半个行高。中线落在纸面之上/之下时取下（或最后一）枚——防呆，不是「按最近的算」。
+ */
+export function pageAtCaret(page: HTMLElement, sec: Section, caretMid: number): PagePlacement | undefined {
+  const contentHeightPx = contentHeightOf(page, sec);
+  if (contentHeightPx === undefined) return undefined;
+  const units = layoutUnits(page);
+  if (!units.length) return { page: 1, pages: 1 };
+  let idx = units.findIndex((u) => u.height > 0 && caretMid >= u.top && caretMid < u.top + u.height);
+  if (idx < 0) idx = units.findIndex((u) => u.top > caretMid);
+  if (idx < 0) idx = units.length - 1;
+  const places = placementsOf(units, contentHeightPx);
+  return { page: places[idx]!, pages: places[places.length - 1]! };
 }

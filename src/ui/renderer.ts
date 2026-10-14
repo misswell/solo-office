@@ -1355,8 +1355,12 @@ function mountDoc(app: Extract<Opened, { kind: "docx" }>): void {
       // here — so it is where the 状态栏那一格 is re-read. 光标移动不算，走 `moved`，那时数没变。
       docStatus?.refresh();
     },
-    // 选区移动不是编辑，走不到 `changed`：光标从粗字挪到不粗的字上，ribbon 得跟着改口。
-    moved: () => syncDocRibbon(),
+    // 选区移动不是编辑，走不到 `changed`：光标从粗字挪到不粗的字上，ribbon 得跟着改口；
+    // 状态栏的 第 X 页 也是跟着光标走的，而字数在光标移动时并不变，所以这里只重读状态栏。
+    moved: () => {
+      syncDocRibbon();
+      docStatus?.refresh();
+    },
   });
   docStatus = new DocStatusBar(editor);
   // The ribbon reads the editor, so it is built after one exists.

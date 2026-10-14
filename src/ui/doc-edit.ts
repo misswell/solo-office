@@ -8,7 +8,7 @@ import { IMAGE_EXT_BY_MIME } from "../core/media.js";
 import { CARRY_CLASS, CARRY_STYLE, PAGE_BORDER_CLASS, RUN_CARRY_CLASS, highlightColor, renderWord } from "../core/render.js";
 import { flatOf, inlineLength, isMark, keepRunIdentity } from "../core/run-identity.js";
 import { CommentPanel } from "./doc-comments.js";
-import { measurePageLayout, type PageMeasure } from "./doc-layout.js";
+import { measurePageLayout, pageAtCaret, type PageMeasure, type PagePlacement } from "./doc-layout.js";
 import { ReviewPanel } from "./doc-review.js";
 import { OutlinePanel } from "./doc-outline.js";
 import { openPageSetup as showPageSetupDialog } from "./doc-page-setup.js";
@@ -282,6 +282,30 @@ const sameStyle = (a: Inline, b: Inline): boolean =>
 const cleanText = (text: string): string => text.replace(/\u00a0/g, " ");
 
 const charLength = (inlines: Inline[]): number => inlines.reduce((n, i) => n + inlineLength(i), 0);
+
+/**
+ * 光标（`node`/`offset` 处那枚**折叠** Range）画出来的矩形**中线**，px。
+ * Chrome 给折叠 Range 一枚零宽、整行高的矩形；中线而不是上沿是给 `pageAtCaret` 用的：光标矩形的上沿是字体盒
+ * 的上沿，与量出来的行盒跨度差零点几像素且方向不定，正好落在相邻两枚相接的缝上（`doc-layout.ts` 文件头）。
+ * 一枚矩形都拿不到时退回它的包围盒，包围盒也是空的话退回所在元素的盒子（这种退路上只有盒子中心可用）。
+ * 都拿不到时 `undefined`——那时状态栏宁可保留上一次的读数，也不报一个凭空算出来的页。
+ */
+function caretMidOf(node: Node, offset: number): number | undefined {
+  const range = document.createRange();
+  try {
+    range.setStart(node, offset);
+    range.collapse(true);
+  } catch {
+    return undefined;
+  }
+  const own = range.getClientRects()[0];
+  if (own) return own.top + own.height / 2;
+  const box = range.getBoundingClientRect();
+  if (box.width || box.height || box.top || box.left) return box.top + box.height / 2;
+  const el = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
+  const rect = el?.getBoundingClientRect();
+  return rect ? rect.top + rect.height / 2 : undefined;
+}
 
 function merge(inlines: Inline[]): Inline[] {
   const out: Inline[] = [];
@@ -1334,6 +1358,24 @@ export class DocEditor {
   layout(): PageMeasure | undefined {
     if (!this.page) return undefined;
     return measurePageLayout(this.page, this.doc.sections[0] ?? DEFAULT_SECTION);
+  }
+
+  /**
+   * 状态栏 页码／页数 那两格（WPS 的 `KxWpsStatusPageNumberInfoCommand` 与 `KxWpsStatusPageAreaInfoCommand`）：
+   * 光标（选区的活动端）落在第几页、一共几页。总页数与「字数统计」的 页数 出自同一趟 `pageAtCaret` 测量，
+   * 光标→页的走法写在 `doc-layout.ts` 文件头。
+   *
+   * 光标不在纸面上时返回 `undefined`——点了批注面板的输入框、点了页眉页脚带，活动端就不在正文里了；
+   * 那两格该保留上一次的读数（WPS 真机在那种时候怎么表现**未取证**），由状态栏自己决定，这里不替它编一个页号。
+   */
+  caretPage(): PagePlacement | undefined {
+    if (!this.page) return undefined;
+    const sel = document.getSelection();
+    const node = sel?.focusNode ?? null;
+    if (!node || !this.page.contains(node)) return undefined;
+    const mid = caretMidOf(node, sel!.focusOffset);
+    if (mid === undefined) return undefined;
+    return pageAtCaret(this.page, this.doc.sections[0] ?? DEFAULT_SECTION, mid);
   }
 
   /**

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { packPages, type LayoutUnit } from "../src/ui/doc-layout.js";
+import { packPages, placementsOf, type LayoutUnit } from "../src/ui/doc-layout.js";
 
 /**
  * 分页的那一半纯的：`packPages` 不认识 DOM，只把一列单位往固定高度的纸上铺。行盒怎么量出来的（以及它的口径）
@@ -69,5 +69,41 @@ describe("packPages", () => {
 
   it("负数与 0 高的普通单位不吃页", () => {
     expect(packPages([u(-500), u(0), u(A4_BODY)], A4_BODY)).toBe(1);
+  });
+});
+
+/**
+ * 逐枚落页那一份：`packPages` 报的是总数，状态栏的「第 X 页」要的是**某一枚**落在第几页，
+ * 两者必须出自同一趟走法（`packPages` 就是取的它的最后一枚），所以边界条件一起钉。
+ */
+describe("placementsOf", () => {
+  it("与 units 一一对应，最后一枚就是总页数", () => {
+    const units = [u(50), u(50), u(50)];
+    expect(placementsOf(units, 100)).toEqual([1, 1, 2]);
+    expect(placementsOf(units, 100).at(-1)).toBe(packPages(units, 100));
+  });
+
+  it("空的一列没有落页，但页数仍是 1", () => {
+    expect(placementsOf([], A4_BODY)).toEqual([]);
+    expect(packPages([], A4_BODY)).toBe(1);
+  });
+
+  it("断点把后面那一枚抬到下一页，它后面接着排", () => {
+    expect(placementsOf([u(50), u(0, true), u(50)], 100)).toEqual([1, 2, 2]);
+  });
+
+  it("比一页还高的一枚占一页，它后面那一枚从下一页开始", () => {
+    expect(placementsOf([u(1_000), u(10)], 100)).toEqual([1, 2]);
+  });
+
+  it("量不出纸高时全落在第 1 页", () => {
+    expect(placementsOf([u(50), u(50)], 0)).toEqual([1, 1]);
+    expect(placementsOf([u(50), u(0, true)], -1)).toEqual([1, 1]);
+  });
+
+  it("35 行的边界上，第 35 枚在第 1 页、第 36 枚落到第 2 页", () => {
+    const places = placementsOf(column(36, LINE), A4_BODY);
+    expect(places[34]).toBe(1);
+    expect(places[35]).toBe(2);
   });
 });

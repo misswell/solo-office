@@ -64,11 +64,17 @@
  *   行的口径（每页重数而不是全篇连数）与列在行尾空白上的计法对 WPS 真机都**未取证**。
  *
  * - **光标在第几节／第 N 节在哪里**（状态栏 `KxWpsStatusSectionInfoCommand`，detail「@Page Section. Click to
- *   Open "Go To" dialog.」，`KxWpsPagePositionInfoCommand` 那条同理）是这一页里**唯一不量几何**的一对：
+ *   Open "Go To" dialog.」）是这一页里**唯一不量几何**的一对：
  *   节的边界是文件自己声明的（`w:pPr/w:sectPr` 的段落结束它那一节），从模型数（`sectionEndsOf`），落点走
  *   `sectionCaretAnchor`（节首一块的头）。页数那侧已经一节按一张纸地量了（见上一条），但**画出来**的纸
  *   仍只有第一节那张——「第 X 节」与纸盒的宽高可能对不上，这是读数与渲染之间的已知差。该格的中文字面与
  *   真机点开的种子**未取证**。
+ *
+ * - **光标那行离纸沿多远**（状态栏「纵向位置」，`KxWpsPagePositionInfoCommand`，kuip 452 行）走
+ *   `pagePositionAt()`：与「第 X 页」同一条中线先定页，纸沿 = **本页第一枚内容的上沿 − 这一节的上边距**
+ *   （第 1 页那张与 `render.ts` 的 `--pad-t` 同源，第 2 页起在流里没有 DOM，但每页内容都从纸沿下
+ *   padTop 处起排，所以反推得出），光标行顶走 行/列 那一趟的**字符盒**上沿。真机量到哪条线、什么单位、
+ *   几位小数**未取证**。
  *
  * 因此这两行报的是「**本程序按画出来的行盒量出来的**页数/行数」。它与 WPS 自己的排版引擎不会逐页相同
  * （字体度量、行盒取整、页眉占位、孤行控制都不一样，这些也都**未取证**），所以这里不写「与 WPS 一致」。
@@ -360,6 +366,8 @@ function contentHeightOf(page: HTMLElement, sec: Section): number | undefined {
 type PagePlan = {
   blocks: { el: HTMLElement; units: PlacedUnit[] }[];
   units: PlacedUnit[];
+  /** 与 `units` 一一对应的节号（0 起）——「纵向位置」按它找这一节的上边距。 */
+  unitSections: number[];
   places: number[];
   pages: number;
   /** 画出来的那张纸（第一节）的正文高度，px——`PageMeasure.contentHeightPx` 报的就是它。 */
@@ -395,7 +403,7 @@ function planOf(page: HTMLElement, doc: WordDocument): PagePlan | undefined {
     }
   });
   const places = placementsAcrossSections(units, unitSections, sheets);
-  return { blocks, units, places, pages: places.length ? places[places.length - 1]! : 1, contentHeightPx };
+  return { blocks, units, unitSections, places, pages: places.length ? places[places.length - 1]! : 1, contentHeightPx };
 }
 
 /**
@@ -553,6 +561,30 @@ export function rowColumnAt(page: HTMLElement, doc: WordDocument, caret: { mid: 
   if (at === undefined || at > flat.len) return { row };
   const column = columnOf(flat, units[idx]!, at);
   return column === undefined ? { row } : { row, column };
+}
+
+/**
+ * 光标那行离**纸沿**的纵向距离，px——状态栏「纵向位置」那一格（WPS 的 `KxWpsPagePositionInfoCommand`，
+ * kuip 452 行，detail「@Vertical Page Position. Click to Open "Go To" dialog.」）。纸沿是这一页纸的上沿：
+ * 第 1 页在纸上画得出来（`contentTopOf`），第 2 页起在流里没有 DOM——但模型里每一页的内容都从纸沿下
+ * padTop 处起排（第 1 节与 `render.ts` 的 `--pad-t` 同源，其余各节按节自己的 `w:pgMar@w:top`），
+ * 所以反推得出来：纸沿 = **本页第一枚内容的上沿 − 这一节的上边距**。
+ * 光标行顶走 行/列 那一趟取点（折叠 Range 自己那枚矩形）；页的归属与「第 X 页」同一条中线（`unitIndexAt`）。
+ * 纸上没有内容、或光标行量不出矩形时不猜，`undefined`。取的是**字符盒**的上沿（不是行盒），与 行/列 的
+ * 列同一口径；WPS 真机从纸沿量到哪条线、什么单位、几位小数**都未取证**。
+ */
+export function pagePositionAt(page: HTMLElement, doc: WordDocument, caret: { mid: number; node: Node; offset: number }): number | undefined {
+  const plan = planOf(page, doc);
+  if (!plan) return undefined;
+  if (!plan.units.length) return undefined;
+  const idx = unitIndexAt(plan.units, caret.mid);
+  const first = plan.places.indexOf(plan.places[idx]!);
+  const top = topAtPoint(caret.node, caret.offset);
+  if (top === undefined) return undefined;
+  const sections = doc.sections.length ? doc.sections : [DEFAULT_SECTION];
+  const sec = sections[plan.unitSections[first]!];
+  if (!sec) return undefined;
+  return top - plan.units[first]!.top + twipsToPx(sec.margins.top);
 }
 
 /** 块里第一枚真文字的起点；一枚文字都没有（空段落）时退回块自己的开头——那里同样落得进光标。 */

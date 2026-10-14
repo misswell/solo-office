@@ -5,8 +5,7 @@
  * 就写在**同一个文件的 267 行**、同一个 `aid="792"`，而这一条里其余 62 项一个 `aid` 都没有。所以这一格不是
  * 另一个功能，是同一条命令的另一种长相：报一个数，点一下开同一个对话框。
  *
- * 这一条上挂着**六格**，顺序照 kuip 的子项次序（页码→页数→节→行→列→字数；纵向位置那一格夹在节与行
- * 之间，还没接，见下）：
+ * 这一条上挂着**七格**，顺序照 kuip 的子项次序（页码→页数→节→纵向位置→行→列→字数）：
  *
  * - `KxWpsStatusPageNumberInfoCommand id="PageNumberInfoCommand"`，detail「Page Number. Click to open "Go To" dialog.」
  *   ——**第 X 页**，X 是光标（选区活动端）落在的那一页。量法与「字数统计」的 页数 同一套（`doc-layout.ts`
@@ -19,6 +18,11 @@
  *   从模型数（`sectionEndsOf`），块进第几节、节首一块在哪（`sectionCaretAnchor`）的口径都写在 `doc-layout.ts`
  *   文件头。光标不在纸面上时与页码同一口径保留上一次读数。点一下开「定位」对话框、预选「节」目标；
  *   真机字面与点开时预选什么**未取证**。
+ * - `KxWpsPagePositionInfoCommand id="PagePositionInfoCommand"`（452 行，detail「@Vertical Page Position. Click to
+ *   Open "Go To" dialog.」，夹在 节 与 行/列 之间）——**纵向位置**：光标那行离**纸沿**多远，报厘米两位小数。
+ *   量法在 `doc-layout.ts` 的 `pagePositionAt`（纸沿 = 本页第一枚内容的上沿 − 这一节的上边距；取点与「第 X 页」
+ *   同一条中线）。这一格是**按钮**（detail 带 "Click to Open"），点开同一个「定位」对话框；预选哪个目标
+ *   未取证，这一条走默认的「页」。真机字面、量的单位（厘米？）、小数位与光标不在纸面上时的表现**都未取证**。
  * - `KxWpsStatusRowInfoCommand`（detail「@Line Status Bar」）与 `KxWpsStatusColumnInfoCommand`（detail
  *   「@Column Status Bar」，kuip 里靠它 `rightSibling` 与上一格 `leftSibling` 配成一对）——**行 X／列 X**：
  *   行是光标在**这一页里**排第几（每页重数，0 高的断点记号不数），列是它在这一行的第几个字。
@@ -28,16 +32,16 @@
  *   怎么计**都未取证**。
  * - `KxWpsStatusWordCountInfoCommand`（上段那条）——**字数**，点开对话框。
  *
- * 页码/页数/节/字数 四格是**按钮**：kuip 的 detail 说 页码/页数/节 点一下开「定位」对话框（`doc-goto.ts`，
- * 与 ⌘G 同一条命令 `Id="GoTo"`；点节那一格预选「节」目标），字数那一格是我们先接上的同形状。WPS 那几格
- * 点击的细节与中文界面字面都**未取证**（`.qm` 那堵墙与 `doc-word-count.ts` 头注记的是同一件），这里按
- * detail 接上这条腿：种子取光标所在页/节，「定位」把落点交回 `DocEditor.goToPage`／`goToSection`。
+ * 页码/页数/节/纵向位置/字数 五格是**按钮**：kuip 的 detail 说 页码/页数/节/纵向位置 点一下开「定位」对话框
+ * （`doc-goto.ts`，与 ⌘G 同一条命令 `Id="GoTo"`；点节那一格预选「节」目标），字数那一格是我们先接上的同形状。
+ * WPS 那几格点击的细节与中文界面字面都**未取证**（`.qm` 那堵墙与 `doc-word-count.ts` 头注记的是同一件），
+ * 这里按 detail 接上这条腿：种子取光标所在页/节，「定位」把落点交回 `DocEditor.goToPage`／`goToSection`。
  *
- * 还没接的那一格：`KxWpsPagePositionInfoCommand`（纵向位置）等量纵向坐标的那一片。
+ * 还没接的两格：`KxWpsStatusUnitCommand`（测量单位）与 `KxWpsTextEncodingListCommand`（编码）。
  *
  * 还有一条**没接**的腿：`res/wpsentries.kuip` 里 `idPath="Status bar Popup Menu.WordCountStatusBar"` 说明 WPS
  * 的状态栏可以右键弹出一串共 15 项的开关，逐格显示或隐藏。本轮不摆那个弹出菜单：逐格开关要先有「哪些格在
- * 显示」这件事，我们六格是写死的。
+ * 显示」这件事，我们七格是写死的。
  *
  * 样式从这个文件注入；这一条挂在 `document.body` 上而不是编辑器的宿主里——`render()` 会把宿主整个换掉。
  * `body` 本身是 `flex-direction: column`，所以一个 `flex: none` 的直接子元素就落在窗口底下，与表格里那排
@@ -61,9 +65,9 @@ const CSS = `
   font-variant-numeric: tabular-nums;
 }
 .solo-doc-status button:hover { background: #d7dce2; color: #1f2328; }
-.solo-doc-status .solo-doc-status-loc, .solo-doc-status .solo-doc-status-sec, .solo-doc-status .solo-doc-status-rc {
+.solo-doc-status .solo-doc-status-loc, .solo-doc-status .solo-doc-status-sec, .solo-doc-status .solo-doc-status-vpos, .solo-doc-status .solo-doc-status-rc {
   padding: 0 2px; color: #6b7480;
-  /* 页码/总页/节/行/列 都是数字，同样用等宽数位。 */
+  /* 页码/总页/节/纵向位置/行/列 都是数，同样用等宽数位。 */
   font-variant-numeric: tabular-nums;
 }
 @media print { .solo-doc-status { display: none; } }
@@ -77,11 +81,15 @@ function injectStyles(): void {
   document.head.append(style);
 }
 
+/** 1 厘米 = 96/2.54 px（CSS 参考像素：1 英寸 = 96px = 2.54 厘米）。WPS 那一格报什么单位、几位小数**未取证**，这里报厘米、两位。 */
+const CM_PER_PX = 2.54 / 96;
+
 export class DocStatusBar {
   private readonly root: HTMLDivElement;
   private readonly pageItem: HTMLButtonElement;
   private readonly pagesItem: HTMLButtonElement;
   private readonly sectionItem: HTMLButtonElement;
+  private readonly posItem: HTMLButtonElement;
   private readonly lineItem: HTMLSpanElement;
   private readonly colItem: HTMLSpanElement;
   private readonly wordItem: HTMLButtonElement;
@@ -89,6 +97,8 @@ export class DocStatusBar {
   private lastPage = 1;
   /** 节与页码同一口径：光标不在纸面上时保留上一次的读数。 */
   private lastSection = 1;
+  /** 纵向位置与页码同一口径：光标不在纸面上、或光标行量不出矩形时保留上一次的读数。 */
+  private lastPos: number | undefined;
   /** 行/列 与页码同一口径：光标不在纸面上、或数不出列（表格/只读容器）时保留上一次的读数。 */
   private lastRow: number | undefined;
   private lastCol: number | undefined;
@@ -114,11 +124,17 @@ export class DocStatusBar {
     this.sectionItem.type = "button";
     this.sectionItem.className = "solo-doc-status-sec";
     this.sectionItem.title = "节号：光标在第几节。点击打开「定位」对话框";
-    // 页码/页数/节 三格与 ⌘G 开的是同一个对话框，种子与范围都由编辑器现量（口径见 `doc-edit.ts` 的 `showGoTo`）；
-    // 点哪一格开哪个目标：前两格「页」，节这一格「节」。
+    // 页码/页数/节/纵向位置 四格与 ⌘G 开的是同一个对话框，种子与范围都由编辑器现量（口径见 `doc-edit.ts` 的 `showGoTo`）；
+    // 点哪一格开哪个目标：前两格「页」，节这一格「节」。纵向位置那条 detail 与页码那条同形（都带 "Click to Open"），
+    // 真机点开预选什么未取证，这一格走默认的「页」。
     this.pageItem.addEventListener("click", () => this.editor.showGoTo());
     this.pagesItem.addEventListener("click", () => this.editor.showGoTo());
     this.sectionItem.addEventListener("click", () => this.editor.showGoTo("section"));
+    this.posItem = document.createElement("button");
+    this.posItem.type = "button";
+    this.posItem.className = "solo-doc-status-vpos";
+    this.posItem.title = "纵向位置：光标那行离纸沿多远。点击打开「定位」对话框";
+    this.posItem.addEventListener("click", () => this.editor.showGoTo());
     // kuip 里 行/列 是两条没有点击动作的 status 条目（detail 里没有 "Click to open"），画成 span 而不是按钮。
     this.lineItem = document.createElement("span");
     this.lineItem.className = "solo-doc-status-rc";
@@ -131,7 +147,7 @@ export class DocStatusBar {
     this.wordItem.className = "solo-doc-status-words";
     this.wordItem.title = "字数。点击打开「字数统计」对话框";
     this.wordItem.addEventListener("click", () => openWordCount(this.editor.counts(), this.editor.selectionCounts(), this.editor.layout()));
-    this.root.append(this.pageItem, this.pagesItem, this.sectionItem, this.lineItem, this.colItem, this.wordItem);
+    this.root.append(this.pageItem, this.pagesItem, this.sectionItem, this.posItem, this.lineItem, this.colItem, this.wordItem);
     document.body.append(this.root);
     this.refresh();
   }
@@ -146,6 +162,10 @@ export class DocStatusBar {
     const cs = this.editor.caretSection();
     if (cs) this.lastSection = cs.section;
     this.sectionItem.textContent = total === undefined ? "" : `第 ${this.lastSection} 节`;
+    const pp = this.editor.caretPosition();
+    if (pp !== undefined) this.lastPos = pp;
+    this.posItem.textContent =
+      total === undefined || this.lastPos === undefined ? "" : `纵向位置 ${(this.lastPos * CM_PER_PX).toFixed(2)} 厘米`;
     const rc = this.editor.caretLine();
     if (rc) {
       this.lastRow = rc.row;

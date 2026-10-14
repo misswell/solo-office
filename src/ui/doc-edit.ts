@@ -8,7 +8,7 @@ import { IMAGE_EXT_BY_MIME } from "../core/media.js";
 import { CARRY_CLASS, CARRY_STYLE, PAGE_BORDER_CLASS, RUN_CARRY_CLASS, highlightColor, renderWord } from "../core/render.js";
 import { flatOf, inlineLength, isMark, keepRunIdentity } from "../core/run-identity.js";
 import { CommentPanel } from "./doc-comments.js";
-import { measurePageLayout, pageAtCaret, pageCaretAnchor, rowColumnAt, sectionCaretAnchor, type CaretLine, type PageAnchor, type PageMeasure, type PagePlacement } from "./doc-layout.js";
+import { measurePageLayout, pageAtCaret, pageCaretAnchor, pagePositionAt, rowColumnAt, sectionCaretAnchor, type CaretLine, type PageAnchor, type PageMeasure, type PagePlacement } from "./doc-layout.js";
 import { ReviewPanel } from "./doc-review.js";
 import { OutlinePanel } from "./doc-outline.js";
 import { openPageSetup as showPageSetupDialog } from "./doc-page-setup.js";
@@ -1414,6 +1414,23 @@ export class DocEditor {
     const b = at.path[0]!;
     if (b >= this.doc.blocks.length) return undefined;
     return { section: 1 + ends.filter((e) => e < b).length, sections: ends.length + 1 };
+  }
+
+  /**
+   * 状态栏 纵向位置 那一格（WPS 的 `KxWpsPagePositionInfoCommand`，kuip 452 行，detail「@Vertical Page
+   * Position. Click to Open "Go To" dialog.」）：光标那行离**纸沿**多远（px，从纸的上沿往下量）。
+   * 取点、判「光标在不在纸面上」与 `caretPage()` 同一条：这一格与「第 X 页」必须出自同一处光标。
+   * 纸沿怎么反推、量到哪条线，口径都写在 `doc-layout.ts` 的 `pagePositionAt` 上。厘米与小数位是显示层
+   * （状态栏）的事，这里报 px。
+   */
+  caretPosition(): number | undefined {
+    if (!this.page) return undefined;
+    const sel = document.getSelection();
+    const node = sel?.focusNode ?? null;
+    if (!node || !this.page.contains(node)) return undefined;
+    const mid = caretMidOf(node, sel!.focusOffset);
+    if (mid === undefined) return undefined;
+    return pagePositionAt(this.page, this.doc, { mid, node, offset: sel!.focusOffset });
   }
 
   /**

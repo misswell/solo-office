@@ -300,9 +300,34 @@ function smoke(): void {
         await wait(200);
         const tableRows = document.querySelectorAll("#view .page table.doc-table tr").length;
         const tableCols = document.querySelector("#view .page table.doc-table tr")?.children.length;
+        // WPS 把三条断命令挂在同一个下拉里（wpsentries.kuip 的 CT_Insert.RB_Pages.InsertBreaks.*），所以这里三颗
+        // 都点。标记是 br[data-brk]：从前这条读的是 [style*="page-break"]，那是 #104 之前的画法，改完之后它恒为 0
+        // —— 冒烟件自己在报「分页符没插进去」。（这段跑在模板字符串里，注释不能带反引号，反引号会终止字符串。）
+        const brShapes = () => [...document.querySelectorAll("#view .page br[data-brk]")].map((b) => b.getAttribute("data-brk"));
+        const newShape = (before, after) => {
+          const rest = before.slice();
+          for (const s of after) {
+            const i = rest.indexOf(s);
+            if (i < 0) return s;
+            rest.splice(i, 1);
+          }
+          return "";
+        };
+        const s0 = brShapes();
         rb("分页符")?.click();
         await wait(150);
-        const breaks = document.querySelectorAll('#view .page [style*="page-break"]').length;
+        const s1 = brShapes();
+        const shapePage = newShape(s0, s1);
+        rb("换行符")?.click();
+        await wait(150);
+        const s2 = brShapes();
+        const shapeLine = newShape(s1, s2);
+        rb("分栏符")?.click();
+        await wait(150);
+        const s3 = brShapes();
+        const shapeColumn = newShape(s2, s3);
+        const breaks = s3.length - s0.length;
+        const breakShapes = { page: shapePage, line: shapeLine, column: shapeColumn };
         rb("图片")?.click();
         await wait(500);
         const docPics = document.querySelectorAll("#view .page img").length;
@@ -316,7 +341,14 @@ function smoke(): void {
         hf?.blur?.();
         await wait(150);
         const hfText = document.querySelector("#view .hf-header")?.textContent;
-        const docInsert = { tableRows, tableCols, breaks, docPics, hfText };
+        const docInsert = {
+          tableRows,
+          tableCols,
+          breaks,
+          breakShapes,
+          docPics,
+          hfText,
+        };
 
         // 导航窗格: the page leaves one [data-outline] mark per paragraph whose outline level resolves, and the
         // pane lists a row for each in the same order, so the two counts are the invariant the pane is built on.

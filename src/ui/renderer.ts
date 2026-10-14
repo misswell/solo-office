@@ -494,7 +494,13 @@ function buildDocRibbon(): void {
   const insert = group();
   button(insert, "table", "表格", "插入表格", openTablePicker);
   button(insert, "picture", "图片", "插入本地图片", () => void pickPicture((url, name) => void editor?.insertPicture(url, name)));
+  // WPS 把三条断命令挂在同一个下拉里（`wpsentries.kuip`：`CT_Insert.RB_Pages.InsertBreaks.*` 与
+  // `CT_PageLayout.RB_Page_Setup.m_Breaks.*`、`InsertMenu.InsertBreakMenu.*`）。按钮文案只有分页符取到过证据
+  // （`InsertPageBreak`），换行符那条 kuip 里写的是 `text="@Text Wrapping Break"` 这个待译占位，中文措辞在 `.qm`
+  // 里读不出，所以「换行符／分栏符」两个词是按 WPS 家族习惯的**推断措辞**，不是取到的字面量。
   button(insert, "pagebreak", "分页符", "从这里另起一页", () => editor?.insertPageBreak());
+  button(insert, "linebreak", "换行符", "在这里软换行，不另起段落", () => editor?.insertLineBreak());
+  button(insert, "columnbreak", "分栏符", "从这里另起一栏", () => editor?.insertColumnBreak());
   button(insert, "header", "页眉", "编辑页眉（无则新建）", () => editor?.openHF("header"));
   button(insert, "footer", "页脚", "编辑页脚（无则新建）", () => editor?.openHF("footer"));
 
@@ -1615,6 +1621,14 @@ window.addEventListener("keydown", (e) => {
     if (key === "f") {
       ke.preventDefault();
       openFind();
+      return;
+    }
+    // WPS 给这条命令的快捷键：`res/wpscommon.kuip` 的快捷键表里 `cmd="InsertColumnBreak"` 只给了
+    // `Ctrl+Shift+Return` 一行。这张表在别处都是 Ctrl／Meta 成对出现（分页符、按行拆分表格都成对），所以 macOS
+    // 上把 ⌘⇧↵ 一并认下——这一条是**按表的成对惯例推的**，不是取到的字面量。必须排在下面那条 ⌘↵ 之前判。
+    if (key === "enter" && ke.shiftKey && (ke.metaKey || ke.ctrlKey)) {
+      ke.preventDefault();
+      editor?.insertColumnBreak();
       return;
     }
     // WPS 给这条命令的快捷键：`res/wpscommon.kuip:219` 写着 `shortcutHint="Ctrl+Enter"`，快捷键表在

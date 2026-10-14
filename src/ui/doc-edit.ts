@@ -50,6 +50,14 @@ const HIGHLIGHT_BY_CSS = new Map<string, string>(HIGHLIGHT_NAMES.map((n) => [css
 /** The zero-width space the pending cancellation stands in for: a character no run may ever keep. */
 const ZWSP = "\u200b";
 
+/**
+ * How WPS spells a soft return: `w:type="textWrapping"`, not a bare `w:br`. Measured over the 86 files this
+ * machine's WPS wrote — 132 breaks state `type="textWrapping"` with no `w:clear` and 9 add `w:clear="all"`, while
+ * **0 are spelled without `w:type`**. A break the page created itself (Shift+Enter, which Blink inserts as a bare
+ * `<br>`) therefore comes back with this token; a break the file authored keeps the token it arrived with.
+ */
+const TEXTWRAPPING_BR = '<w:br w:type="textWrapping"/>';
+
 function hexOf(css: string): string | undefined {
   const rgb = /^rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(css);
   if (!rgb) return undefined;
@@ -1069,9 +1077,9 @@ export class DocEditor {
         const tag = child.tagName.toLowerCase();
         if (tag === "br") {
           // Whatever the file wrote on the `w:br` comes back off the marker unchanged, so a keystroke in a
-          // page-break paragraph does not quietly turn it into a plain line break.
-          const brXml = child.getAttribute("data-brk") || undefined;
-          out.push({ ...ctx, text: "", break: true, ...(brXml ? { brXml } : {}) });
+          // page-break paragraph does not quietly turn it into a plain line break. A `br` with no marker is one
+          // this editor just made (Shift+Enter), and it gets WPS's own spelling rather than a bare `w:br`.
+          out.push({ ...ctx, text: "", break: true, brXml: child.getAttribute("data-brk") || TEXTWRAPPING_BR });
           continue;
         }
         if (tag === "img") {
@@ -1817,12 +1825,11 @@ export class DocEditor {
   }
 
   /**
-   * WPS 的 `InsertPageBreak`（`office6/res/wpscommon.kuip:219`，`shortcutHint="Ctrl+Enter"`，快捷键表 1115/1116
-   * 与 1304/1305 给了 `Ctrl+Return`／`Meta+Return`）在**光标处**放一枚 `w:br w:type="page"`：段落还是那一段，
-   * 不因为要分页就多出一个空段落（从前这条 `splice` 的是「下一段带 `pageBreakBefore`」，那是另一条命令的形状）。`mutated()` 那一步会把 `data-brk` 里的原串读回 `brXml`，
-   * 之后这段里再怎么打字都还按 `w:type="page"` 写回文件。
+   * 三条断命令共用的一条腿：在**光标处**放一枚 `w:br`。段落还是那一段，不因为要断就多出一个空段落（从前这条
+   * `splice` 的是「下一段带 `pageBreakBefore`」，那是另一条命令的形状）。`mutated()` 那一步会把 `data-brk` 里的
+   * 原串读回 `brXml`，之后这段里再怎么打字都还按原来那一型写回文件。
    */
-  insertPageBreak(): void {
+  private insertBreakAtCaret(brXml: string): void {
     const page = this.page;
     const at = this.caretPath();
     if (!page || !at) return;
@@ -1835,7 +1842,7 @@ export class DocEditor {
     // `execCommand("insertHTML")` 放不下这枚标记：光标在段落末尾时 Blink 会把那枚 `<br>` 当成换行处理，
     // 段落被劈开而标记自己消失（实测段落 4 → 5、`w:br` 0 枚）。所以直接按 DOM 插，再让 `mutated()` 把它读回模型。
     const br = document.createElement("br");
-    br.setAttribute("data-brk", '<w:br w:type="page"/>');
+    br.setAttribute("data-brk", brXml);
     range.insertNode(br);
     range.setStartAfter(br);
     range.collapse(true);
@@ -1843,6 +1850,32 @@ export class DocEditor {
     sel?.addRange(range);
     this.mutated();
     this.hooks.changed();
+  }
+
+  /**
+   * WPS 的 `InsertPageBreak`（`office6/res/wpscommon.kuip:219`，`shortcutHint="Ctrl+Enter"`，快捷键表 1115/1116
+   * 与 1304/1305 给了 `Ctrl+Return`／`Meta+Return`）：`w:br w:type="page"`。
+   */
+  insertPageBreak(): void {
+    this.insertBreakAtCaret('<w:br w:type="page"/>');
+  }
+
+  /**
+   * WPS 的 `InsertTextWrappingBreak`（`wpscommon.kuip` aid=80156，`shortcutHint="Shift+Enter"`，快捷键表另有
+   * `Shift+Return`；ribbon 上跟分页符、分栏符挂在同一个「断行」下拉里）：`w:br w:type="textWrapping"`。
+   * 平时按 Shift+Enter 走的是浏览器自己的软换行，这一条是给菜单/工具栏那颗用的。
+   */
+  insertLineBreak(): void {
+    this.insertBreakAtCaret(TEXTWRAPPING_BR);
+  }
+
+  /**
+   * WPS 的 `InsertColumnBreak`（快捷键表 `key="Ctrl+Shift+Return"`，ribbon id 在插入页与页面布局页各一枚）：
+   * `w:br w:type="column"`。命令声明行（aid、按钮文案）没在 `wpscommon.kuip` 里找到，所以这一条按**快捷键表 +
+   * ribbon 挂载**接，文案沿用 WPS 家族里已经取证的「断行」说法；语料 86 份里 `column` 0 枚，形状是规范给的。
+   */
+  insertColumnBreak(): void {
+    this.insertBreakAtCaret('<w:br w:type="column"/>');
   }
 
   // ------------------------------------------------------------- toolbar

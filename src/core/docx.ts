@@ -425,6 +425,14 @@ export interface Paragraph {
   lineSpacingRule?: LineSpacingRule;
   pageBreakBefore?: boolean;
   /**
+   * `w:keepNext` (§17.3.1.14): this paragraph's last line stays on the page where the next block starts.
+   * Read off this paragraph's own `w:pPr`; `undefined` means the file here said nothing (the style chain's
+   * statement is not looked up). The packer honours it through the `data-keep-next` the renderer stamps.
+   */
+  keepNext?: boolean;
+  /** `w:keepLines` (§17.3.1.13): this paragraph's lines do not split across pages. Same reading as `keepNext`. */
+  keepLines?: boolean;
+  /**
    * `w:outlineLvl`, this paragraph's own or the one its style chain states; see `ParaStyle` for what the number
    * means and `headingLevel` for the heading the page draws from it.
    */
@@ -1781,6 +1789,8 @@ export class WordDocument {
       lineSpacing: sp.lineSpacing ?? lent?.lineSpacing,
       lineSpacingRule: sp.lineSpacingRule ?? lent?.lineSpacingRule,
       pageBreakBefore: pPr.pageBreakBefore !== undefined,
+      keepNext: onOff(pPr.keepNext),
+      keepLines: onOff(pPr.keepLines),
       numPr: numPrOf(pPr.numPr) ?? lent?.numPr,
       outlineLevel: outlineOf(pPr.outlineLvl) ?? lent?.outlineLevel,
       markSizePt: markSz === undefined ? lentRuns.sizePt : markSz / 2,

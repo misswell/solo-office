@@ -219,3 +219,56 @@ describe("rowInPage", () => {
     expect(rowInPage([], [], 0)).toBeUndefined();
   });
 });
+
+describe("keepNext / keepLines：文件声明的两条保页规则", () => {
+  it("keepNext：段尾那一枚和下一块的第一枚同页——差一枚装不下时整枚挪下去", () => {
+    const units: LayoutUnit[] = [
+      { height: 40, forcePage: false },
+      { height: 40, forcePage: false },
+      { height: 20, forcePage: false, keepNext: true },
+      { height: 50, forcePage: false },
+    ];
+    expect(placementsOf(units, 100)).toEqual([1, 1, 2, 2]);
+    const loose: LayoutUnit[] = units.map((u) => ({ height: u.height, forcePage: u.forcePage }));
+    expect(placementsOf(loose, 100)).toEqual([1, 1, 1, 2]);
+  });
+  it("keepLines：整段一坨——一页装不下整段就整段挪到下一页起头", () => {
+    const units: LayoutUnit[] = [
+      { height: 60, forcePage: false },
+      { height: 20, forcePage: false, keepLines: 60 },
+      { height: 40, forcePage: false },
+    ];
+    expect(placementsOf(units, 100)).toEqual([1, 2, 2]);
+    const loose: LayoutUnit[] = units.map((u) => ({ height: u.height, forcePage: u.forcePage }));
+    expect(placementsOf(loose, 100)).toEqual([1, 1, 2]);
+  });
+  it("keepLines 比一页还高时这条不算数：与没写同铺法（整段放哪都在拆）", () => {
+    const tall: LayoutUnit[] = [
+      { height: 60, forcePage: false },
+      { height: 80, forcePage: false, keepLines: 180 },
+      { height: 50, forcePage: false },
+    ];
+    const loose: LayoutUnit[] = tall.map((u) => ({ height: u.height, forcePage: u.forcePage }));
+    expect(placementsOf(tall, 100)).toEqual(placementsOf(loose, 100));
+    expect(placementsOf(tall, 100)).toEqual([1, 2, 3]);
+  });
+  it("两条叠一起：标题 keepNext + 下一段 keepLines——标题跟着整段走，不孤零零留在页底", () => {
+    const units: LayoutUnit[] = [
+      { height: 30, forcePage: false },
+      { height: 20, forcePage: false, keepNext: true },
+      { height: 60, forcePage: false, keepLines: 60 },
+      { height: 40, forcePage: false },
+    ];
+    expect(placementsOf(units, 100)).toEqual([1, 2, 2, 3]);
+    const loose: LayoutUnit[] = units.map((u) => ({ height: u.height, forcePage: u.forcePage }));
+    expect(placementsOf(loose, 100)).toEqual([1, 1, 2, 2]);
+  });
+  it("keepNext 遇上声明断点：下一枚自己另起一页时链不成立，各走各的", () => {
+    const units: LayoutUnit[] = [
+      { height: 90, forcePage: false },
+      { height: 10, forcePage: false, keepNext: true },
+      { height: 10, forcePage: true },
+    ];
+    expect(placementsOf(units, 100)).toEqual([1, 1, 2]);
+  });
+});

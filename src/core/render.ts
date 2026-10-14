@@ -338,7 +338,7 @@ function renderParagraph(p: Paragraph, doc: WordDocument, counters: Map<string, 
         ` data-para-prev="${encodeURIComponent(JSON.stringify(fmt.prev))}"`
       : "");
   const shown = mark ? `${mark.author}${mark.date ? ` · ${mark.date.slice(0, 10)}` : ""} ${mark.move ? (mark.move === "from" ? "移出段落标记" : "移入段落标记") : mark.kind === "del" ? "删除段落标记" : "插入段落标记"}` : fmt ? `${fmt.author}${fmt.date ? ` · ${fmt.date.slice(0, 10)}` : ""} 修改段落格式` : "";
-  return `<${tag} class="${classes}"${outline === undefined ? "" : ` data-outline="${outline}"`}${carried}${shown ? ` title="${esc(shown)}"` : ""}${style.length ? ` style="${style.join(";")}"` : ""}>${prefix}${body}</${tag}>`;
+  return `<${tag} class="${classes}"${outline === undefined ? "" : ` data-outline="${outline}"`}${p.keepNext ? ` data-keep-next="1"` : ""}${p.keepLines ? ` data-keep-lines="1"` : ""}${carried}${shown ? ` title="${esc(shown)}"` : ""}${style.length ? ` style="${style.join(";")}"` : ""}>${prefix}${body}</${tag}>`;
 }
 
 /**

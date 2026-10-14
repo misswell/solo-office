@@ -91,6 +91,10 @@ import { CARRY_CLASS, PAGE_BORDER_CLASS } from "../core/render.js";
 export type LayoutUnit = {
   height: number;
   forcePage: boolean;
+  /** 段尾这一枚与下一块的第一枚**同页**（段落说 `w:keepNext`，量的时候盖在末一枚上）。 */
+  keepNext?: boolean;
+  /** 段首这一枚身上的**整段高度**（段落说 `w:keepLines`）：这一坨不拆页（比一页还高时不算数）。 */
+  keepLines?: number;
 };
 
 /**
@@ -295,6 +299,16 @@ function unitBlocksOf(page: HTMLElement): { el: HTMLElement; units: PlacedUnit[]
     if (units.length && gap > 0) units[0] = { ...units[0]!, height: units[0]!.height + gap };
     else if (!units.length && gap > 0) units.push({ height: gap, forcePage: false, top: rect.top });
     if (units.length && breaksBefore(el)) units[0] = { ...units[0]!, forcePage: true };
+    // 「与下段同页」/「段中不分页」两枚旗子（render.ts 按模型落在 `data-keep-*` 上）盖到units上：
+    // keepNext 盖在**末**一枚（无内容的 0 高记号不盖——它自己就是一页的开头），keepLines 盖在**首**一枚
+    // （带着整段高度）。段里自己就有声明的断点（`w:br type=page` 那一族切出来的内部截）时两条都不盖：
+    // 声明过的断点先说了算，段里都断过一回了，「整段不拆」「和下一段同页」就没了着力点。
+    const last = units[units.length - 1];
+    const internalBreak = units.some((u, ui) => ui > 0 && u.forcePage);
+    if (last && !internalBreak) {
+      if (el.dataset.keepNext === "1" && last.height > 0) last.keepNext = true;
+      if (el.dataset.keepLines === "1") units[0] = { ...units[0]!, keepLines: units.reduce((n, u) => n + u.height, 0) };
+    }
     out.push({ el, units });
     cursor = Math.max(cursor, rect.bottom);
   }
@@ -319,8 +333,17 @@ export function sheetOf(section: Section): Sheet | undefined {
 
 /**
  * 纯的那一半（多节版）：一列单位在 `unitSections[i]` 说的那一节的纸上各落在第几页（与 `units` 一一对应）。
- * 每一节内的铺法与「单节」完全是同一套；**节界必另起一页**（断点是声明，哪怕上一节那一页还空着），
- * 从下一节的第一枚起换用那一节的容量。单节件就是 `sheets` 一张的特例——两处的答案必须逐枚相同。
+ * 每一节内的铺法是「单节」那一套再加两条**文件声明的保持规则**（`w:keepNext` / `w:keepLines`）：
+ *
+ * - `keepNext`（段尾那一枚上的旗子）：它和**下一枚**得同页。装这一枚时把下一枚的位子也带上一起算，
+ *   带不下就这一枚先挪到下一页（下一块自己整段不拆时，带的就是它那整坨），到了空页还带不下就不硬凑，
+ *   这一枚照放、下一枚自己流（声明互相打架的文件里这是两条规则都退让的唯一出路）。下一枚自己另起一页
+ *   （`forcePage`，声明断点）时链不成立，各走各的。
+ * - `keepLines`（段首那一枚上带着整段高度）：这一段不拆页——装它的第一枚时若一页装不下整段，整段挪到
+ *   下一页起头；比一页还高时这条不算数（那样整段放哪都在拆）。
+ *
+ * **节界必另起一页**（断点是声明，哪怕上一节那一页还空着），从下一节的第一枚起换用那一节的容量；
+ * 保持规则不跨节（隔着一道声明的页界，链谈不上）。单节件就是 `sheets` 一张的特例——两处的答案必须逐枚相同。
  */
 export function placementsAcrossSections(units: readonly LayoutUnit[], unitSections: readonly number[], sheets: readonly Sheet[]): number[] {
   const pages: number[] = [];
@@ -343,7 +366,13 @@ export function placementsAcrossSections(units: readonly LayoutUnit[], unitSecti
       used = 0;
     }
     const h = Math.min(Math.max(u.height, 0), contentHeightPx);
-    if (used > 0 && used + h > contentHeightPx + FIT_SLACK) {
+    // 这一枚自己的一坨（keepLines）：整段放不进当前这页就整段挪走（空页上放得下才算数，不然这条作废）。
+    const atomic = u.keepLines !== undefined && u.keepLines <= contentHeightPx + FIT_SLACK ? Math.min(u.keepLines, contentHeightPx) : 0;
+    // 与下一枚的链（keepNext）：下一枚的代价 = 它自己（若它也是 keepLines 的段首，就是它那一整段）。
+    const next = u.keepNext === true && i + 1 < units.length && (unitSections[i + 1] ?? 0) === s && units[i + 1]!.forcePage !== true ? units[i + 1]! : undefined;
+    const nextH = next ? (next.keepLines !== undefined && next.keepLines <= contentHeightPx + FIT_SLACK ? Math.min(next.keepLines, contentHeightPx) : Math.min(Math.max(next.height, 0), contentHeightPx)) : 0;
+    const need = Math.max(h + nextH, atomic);
+    if (used > 0 && used + need > contentHeightPx + FIT_SLACK) {
       page++;
       used = 0;
     }
@@ -676,7 +705,8 @@ function tailPositionOf(el: HTMLElement): { node: Node; offset: number } {
  * 给「定位」对话框用（`doc-goto.ts` 的 `goToPage` 拿它落光标、滚动）。这一版不经过视口取点
  * （`caretRangeFromPoint` 只认视口里的点，先滚后量对不上就会落空），而是按「枚→块」的同一趟来路直接
  * 指出文档位置，与滚动、视口都无关——页从哪儿切来与 `pageAtCaret` 同一份（`planOf`，多节各按自己的
- * 页高切）。枚落在哪一截就落哪一截：表格取那一行，段内另起一页切出来的截落在断点之后。整页只有 0 高
+ * 页高切）。枚落在哪一截就落哪一截：表格取那一行；段落取那一枚行盒的行首（`firstAtUnit` 的上沿二分）——
+ * 软换行切出来的页与另起一页的断点之后那一截，走的都是同一条取点。整页只有 0 高
  * 记号的空页（断点画在流尾、后面什么都没有）没有可落的位置：落在最后一枚有内容的单位的末尾——连续纸
  * 模型里最近的就是流尾，WPS 真机落去何处**未取证**。
  * 越界的页号（<1、>pages、不是整数）不猜，返回 `undefined`，由调用方拒绝。
@@ -714,11 +744,16 @@ export function pageCaretAnchor(page: HTMLElement, doc: WordDocument, target: nu
     const row = [...(block as HTMLTableElement).rows].filter((r) => r.getBoundingClientRect().height > 0)[segment];
     return row ? { ...headPositionOf(row), block } : undefined;
   }
-  if (segment === 0) return { ...headPositionOf(block), block };
-  // 段内另起一页切出来的第 segment 截：落点就在第 segment 枚断点之后。
-  const br = [...block.querySelectorAll<HTMLBRElement>("br")].filter(forcesPage)[segment - 1];
-  if (!br?.parentElement) return undefined;
-  return { node: br.parentElement, offset: [...br.parentElement.childNodes].indexOf(br) + 1, block };
+  // 段落（非表格、非只读容器）：这一页头一枚单位的落笔位置就是那一枚行盒的**行首**——与「行」目标走同一条
+  // 取点（`firstAtUnit` 的上沿二分）。软换行切出来的页、另起一页的断点后面那一截的首行，都落在这里。
+  // 旧写法把块内**枚序**当断点序（`br[segment−1]`）：段落里第 2 枚往后起页时既找不到断点、又不认识软换行，
+  // 一路返回 `undefined`（第 125 轮的 straddle 夹具量到：整段 6 行、页 2 从第 2 行起，跳页其实没落成）。
+  // 一枚文字都没有、行首量不出时退回块首（那是这一块的第 1 行，与落不到时的容错同一条）。
+  if (block.classList.contains(CARRY_CLASS)) return { ...headPositionOf(block), block };
+  const flat = flattenText(block);
+  const at = flat.len ? firstAtUnit(flat, units[idx]!) : undefined;
+  const pos = at === undefined ? undefined : positionAt(flat, at);
+  return pos ? { ...pos, block } : { ...headPositionOf(block), block };
 }
 
 /**

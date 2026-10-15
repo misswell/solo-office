@@ -4,7 +4,7 @@ import { WordDocument } from "../src/core/docx.js";
 import { writeDocx } from "../src/core/write-docx.js";
 import { renderWord } from "../src/core/render.js";
 import { OpcPackage, text } from "../src/core/opc.js";
-import { makeMergedTableDocx, makeRowSignatureDocx, makeTableFidelityDocx, makeWideRootDocx } from "./helpers/make-tables.js";
+import { makeCellMarginDocx, makeMergedTableDocx, makeRowSignatureDocx, makeTableFidelityDocx, makeWideRootDocx } from "./helpers/make-tables.js";
 
 const open = (bytes: Uint8Array): WordDocument => WordDocument.openBytes(bytes);
 const saved = (doc: WordDocument): string => text(OpcPackage.from(writeDocx(doc)).bytes("word/document.xml")!);
@@ -258,6 +258,8 @@ describe("docx tables built by the editor", () => {
     // 表格自己没声明宽度，就不写 `w:tblW`：`w:w="0" w:type="auto"` 说的正是"没声明"，
     // 为一列宽度都没定的表补上这一句只是写出模型自己造的属性。宽度由 `w:tblGrid` 与单元格各自的说法带着。
     expect(out).not.toContain("<w:tblPr>");
+    // 边距同宽度一样：编辑器没让它说过，就不替它写一句 `w:tblCellMar`。
+    expect(out).not.toContain("tblCellMar");
     expect(out).toContain('<w:tblGrid><w:gridCol w:w="4513"/><w:gridCol w:w="4513"/></w:tblGrid>');
     expect(out).toContain('<w:tcPr><w:tcW w:w="4513" w:type="dxa"/></w:tcPr>');
     expect(tableOf(open(writeDocx(doc))).columnWidths).toEqual([4513, 4513]);
@@ -271,5 +273,72 @@ describe("docx tables built by the editor", () => {
     const out = saved(doc);
     expect(out).toContain('<w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="3000"/><w:gridCol w:w="1000"/></w:tblGrid>');
     expect(out).toContain("<w:tblStyle w:val=\"a7\"/>");
+  });
+});
+
+/**
+ * A cell's padding is stated in three places and the page has to obey the closest one. Before this round the
+ * padding was not read at all: the sheet gave every cell `5px 9px` (`src/ui/index.html`), while all 115 of the
+ * corpus's WPS-written table-bearing files state margins — 204 tables in `w:tblPr`, 1,660 rows in the
+ * `w:tblPrEx` band, 1,897 cells in `w:tcPr` — and the commonest table says `0` above and below against 108
+ * twips at the sides. Because the page cuts its tables off measured row boxes (`doc-layout.ts`), those 5px
+ * were 10px of height on every one of the corpus's 2,647 rows: paper the file never asked for.
+ */
+describe("docx cell margins", () => {
+  const tablesOf = (doc: WordDocument): Table[] => doc.blocks.filter((b) => b.kind === "table") as Table[];
+  const marginDoc = (): WordDocument => open(makeCellMarginDocx());
+
+  it("reads the padding the table, the row's exception band and the cell each state", () => {
+    const [t] = tablesOf(marginDoc());
+    expect(t.cellMargin).toEqual({ top: 0, left: 108, bottom: 0, right: 108 });
+    // `w:tblPrEx` is a child of `w:tr`, not of `w:trPr`, so the band is read off the row it belongs to.
+    expect(t.rows[0][0]!.row!.cellMargin).toEqual({ left: 0, right: 0 });
+    expect(t.rows[0][1]!.row).toBe(t.rows[0][0]!.row);
+    expect(t.rows[0][0]!.margin).toEqual({ top: 15 });
+    expect(t.rows[1][0]!.margin).toEqual({ top: 12, left: 170, bottom: 12, right: 170 });
+    // A row with no `w:trPr` and no band holds no row record at all, so the sides fall to the table.
+    expect(t.rows[1][0]!.row).toBeUndefined();
+    expect(tablesOf(marginDoc())[1]!.cellMargin).toBeUndefined();
+  });
+
+  it("tells a side that says zero from a side that says nothing, and leaves a non-`dxa` side asking the next layer", () => {
+    const [t] = tablesOf(marginDoc());
+    // `<w:tcMar></w:tcMar>` names no side: the same fact as having no `w:tcMar` at all.
+    expect(t.rows[1][1]!.margin).toBeUndefined();
+    // `w:type="auto"` is not a number counted in twips, so this cell states only its top and the table's
+    // 108 stays the answer at the left.
+    expect(t.rows[2][0]!.margin).toEqual({ top: 57 });
+  });
+
+  it("draws the cell's own padding over the row band's, and the band's over the table's", () => {
+    const html = renderWord(marginDoc());
+    // 15 twips above (cell) beats nothing above from the table's 0; the band's 0 at the sides beats 108.
+    expect(html).toContain("padding-top:1px;padding-left:0px;padding-bottom:0px;padding-right:0px;");
+    // The cell beside it says nothing: the band answers the sides, the table the top and bottom.
+    expect(html).toContain("padding-top:0px;padding-left:0px;padding-bottom:0px;padding-right:0px;");
+    // 12 and 170 twips: the cell states all four, so neither the band nor the table gets a say.
+    expect(html).toContain("padding-top:0.8px;padding-left:11.333333333333334px;padding-bottom:0.8px;padding-right:11.333333333333334px;");
+    // 108 twips is 7.2px, and the page's own 9px is gone from a table that never asked for it.
+    expect(html).toContain("padding-top:0px;padding-left:7.2px;padding-bottom:0px;padding-right:7.2px;");
+  });
+
+  it("leaves a table that says nothing of padding to the page's own spacing", () => {
+    const html = renderWord(marginDoc());
+    const silent = html.slice(html.lastIndexOf('<table class="doc-table"'));
+    const td = /<td[^>]*>/.exec(silent)![0];
+    expect(td).not.toContain("padding-");
+    expect(silent).not.toContain("padding-");
+  });
+
+  it("saves the padding the file stated, and reads it back as the same numbers", () => {
+    const doc = marginDoc();
+    const [t] = tablesOf(doc);
+    const out = saved(doc);
+    // The writer still spells these sets from the carried text: reading a padding is not authority to change one.
+    expect(out).toContain(t.tblPrXml!);
+    expect(out).toContain(t.rows[0][0]!.tcPrXml!);
+    expect(out).toContain(t.rows[2][0]!.tcPrXml!);
+    const again = tablesOf(open(writeDocx(doc)))[0]!;
+    expect(again).toEqual(t);
   });
 });

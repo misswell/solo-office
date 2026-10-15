@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { RevisionEntry, Table } from "../src/core/docx.js";
 import { WordDocument } from "../src/core/docx.js";
 import { writeDocx } from "../src/core/write-docx.js";
+import { renderWord } from "../src/core/render.js";
 import { OpcPackage, text } from "../src/core/opc.js";
 import {
   makeCellRevisionDocx,
@@ -37,11 +38,15 @@ describe("docx 修订：表格部件上的属性改动", () => {
     const t = tableOf(open(makeTablePropertyRevisionDocx()));
     expect(t.revFormat).toMatchObject({ id: 61, author: "林晓", prev: { widthTwips: 0, widthType: "auto" } });
     expect(t.widthTwips).toBe(5000);
+    // `w:tblCellMar` is a field the page draws, so the record's copy of it is read as one and not only carried.
+    expect(t.cellMargin).toEqual({ left: 108 });
+    expect(t.revFormat!.prev.cellMargin).toEqual({ left: 72 });
     const row = t.rows[0][0]!.row!;
     expect(row.revFormat).toMatchObject({ id: 62, author: "顾峰", prev: { heightTwips: 300, keepTogether: true } });
     expect(row).toMatchObject({ heightTwips: 600, heightRule: "exact", header: true });
     expect(t.rows[0][0]!.revs).toMatchObject([{ tag: "tcPrChange", id: 63, prev: { widthTwips: 1500, shading: "#DDEBF7" } }]);
-    expect(t.rows[0][0]).toMatchObject({ widthTwips: 2000, shading: "#FFF2CC" });
+    expect(t.rows[0][0]).toMatchObject({ widthTwips: 2000, shading: "#FFF2CC", margin: { top: 60 } });
+    expect(t.rows[0][0]!.revs![0]!.prev.margin).toEqual({ top: 120 });
   });
 
   it("reads a record whether the set it holds is wrapped in its own element or written straight", () => {
@@ -74,6 +79,18 @@ describe("docx 修订：表格部件上的属性改动", () => {
     expect(out).not.toContain("<w:tblPrChange");
     expect(tableOf(doc)).toMatchObject({ widthTwips: 0, widthType: "auto" });
     expect(listed(doc)).toBe("1.row-format:62:顾峰:甲 乙,2.cell-format:63:林晓:甲");
+  });
+
+  it("makes the page itself follow the decision, not only the bytes", () => {
+    // 边距现在是画得出的一层：判定改了模型，纸上的 padding 就得跟着改，不然「记录带回」只带回一半。
+    const asSaid = renderWord(open(makeTablePropertyRevisionDocx()));
+    expect(asSaid).toContain("padding-top:4px;padding-left:7.2px;");
+    const tableBack = open(makeTablePropertyRevisionDocx());
+    tableBack.resolveRevisions("reject", 61);
+    expect(renderWord(tableBack)).toContain("padding-top:4px;padding-left:4.8px;");
+    const cellBack = open(makeTablePropertyRevisionDocx());
+    cellBack.resolveRevisions("reject", 63);
+    expect(renderWord(cellBack)).toContain("padding-top:8px;padding-left:7.2px;");
   });
 
   it("refusing a row's change puts its height back and leaves the row's own signature alone", () => {

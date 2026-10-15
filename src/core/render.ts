@@ -1,5 +1,5 @@
-import type { Block, Carried, CarriedInline, Inline, NumberLevel, PageBorder, Paragraph, RowInfo, Section, Table, TableBorder, WordDocument } from "./docx.js";
-import { DEFAULT_SECTION, PAGE_BORDER_SIDES, headingLevel, twipsToPx } from "./docx.js";
+import type { Block, Carried, CarriedInline, Inline, NumberLevel, PageBorder, Paragraph, RowInfo, Section, Table, TableBorder, TableCell, WordDocument } from "./docx.js";
+import { DEFAULT_SECTION, MARGIN_SIDES, PAGE_BORDER_SIDES, headingLevel, twipsToPx } from "./docx.js";
 import type { CommentAnchor } from "./comments.js";
 import type { Presentation, Shape, SlideParagraph } from "./pptx.js";
 
@@ -524,6 +524,26 @@ function rowStyle(row?: RowInfo): string {
 }
 
 /**
+ * A cell's own padding, side by side, from the three places a file may state it: the cell's `w:tcMar`
+ * (§17.3.2.69), then the row's `w:tblPrEx` exception band, then the table's `w:tblCellMar` (§17.3.2.82).
+ * A side nobody states keeps the page's own spacing, which is what a table the editor built draws —
+ * `w:w="0"` is not the same fact as silence, so this asks per side rather than taking the set as a whole.
+ *
+ * Before this the padding was never read at all: the sheet gave every cell `5px 9px`, while every one of
+ * the corpus's 115 table-bearing WPS files states margins — 204 tables in `w:tblPr`, 1,660 rows in the
+ * exception band, 1,897 cells in `w:tcPr` — and the commonest table says `0` above and below against 108
+ * twips at the sides. Since the page measures each table row off its drawn box to cut the pages
+ * (`doc-layout.ts`), those 5px were 10px of height per row × 2,647 rows of paper that is not in the file.
+ */
+function cellPaddingCss(cell: TableCell, table: Table): string {
+  const band = cell.row?.cellMargin;
+  return MARGIN_SIDES.map((side) => {
+    const twips = [cell.margin?.[side], band?.[side], table.cellMargin?.[side]].find((v) => v !== undefined);
+    return twips === undefined ? "" : `padding-${side}:${twipsToPx(twips)}px;`;
+  }).join("");
+}
+
+/**
  * What each cell of a table draws as: how many rows it covers, and whether it is the part a merge above
  * already drew. `w:vMerge` says only "restart" or "continue", so the height comes from counting the
  * continues that line up under a restart in the same grid column.
@@ -594,6 +614,7 @@ function renderTable(t: Table, doc: WordDocument, state: CommentState): string {
             c.valign ? `vertical-align:${VALIGN[c.valign] ?? c.valign};` : "",
             c.noWrap ? "white-space:nowrap;" : "",
             c.textDirection ? `writing-mode:${writingMode(c.textDirection)};` : "",
+            cellPaddingCss(c, t),
             // The table's inside lines belong to the seam, so they draw on the cell that faces it, and a
             // border the cell set for itself wins over the one the table set for the grid.
             borderCss("border-top", [own?.top, r > 0 ? table?.insideH : undefined].find(isSet)),

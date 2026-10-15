@@ -279,6 +279,8 @@ export interface TableStyle {
   align?: string;
   layout?: string;
   borders?: BorderSet;
+  /** `w:tblCellMar`: the padding every cell of this table gets unless it or its row says otherwise. */
+  cellMargin?: MarginTwips;
 }
 
 /** What a `w:trPr` says about its row, minus the row's own record and the children it only carries. */
@@ -301,6 +303,8 @@ export interface CellStyle {
   noWrap?: boolean;
   textDirection?: string;
   borders?: BorderSet;
+  /** `w:tcMar`: this cell's own padding, which wins over the table's and over its row's exception. */
+  margin?: MarginTwips;
 }
 
 /**
@@ -545,10 +549,13 @@ export interface TableCell {
   textDirection?: string;
   /** `w:tcBorders`, one entry per side the cell draws for itself. */
   borders?: BorderSet;
+  /** `w:tcMar`: this cell's own padding, side by side; a side it does not name comes from row or table. */
+  margin?: MarginTwips;
   /**
    * The cell's own `w:tcPr`, exactly as the file wrote it. What the page draws comes from the fields
-   * above; what a save writes comes from here, so a property set the model cannot explain — `w:tcMar`,
-   * `w:cnfStyle`, a pending `w:tcPrChange` — returns the way it went in.
+   * above; what a save writes comes from here, so a property set the model cannot change — `w:cnfStyle`,
+   * the row-conditional band, a pending `w:tcPrChange` — returns the way it went in. `w:tcMar` is read
+   * into `margin` but written from here: reading a padding is not authority to invent one.
    */
   tcPrXml?: string;
   /** The attributes on this cell's own `w:tc` opening tag, exactly as written — see `Paragraph.attrsXml`. */
@@ -580,6 +587,18 @@ export type BorderSet = Partial<
   Record<"top" | "left" | "bottom" | "right" | "start" | "end" | "insideH" | "insideV" | "tl2br" | "tr2bl", TableBorder>
 >;
 
+/** The four sides a cell-margin set names, in the order `CT_TblCellMar` gives them. */
+export const MARGIN_SIDES = ["top", "left", "bottom", "right"] as const;
+
+/**
+ * Cell padding, twips per side: `w:tblCellMar` (§17.3.2.82) says it for a whole table and `w:tcMar`
+ * (§17.3.2.69) for a single cell. A side is present only when the file said it — `w:w="0"` means flush,
+ * which is a different fact from saying nothing, and a page that cannot tell them apart puts its own
+ * spacing back on a table that asked for none. Across the 115 WPS-written table-bearing files in the
+ * corpus every file says at least one side, and every side that comes with a `w:type` spells it `dxa`.
+ */
+export type MarginTwips = Partial<Record<(typeof MARGIN_SIDES)[number], number>>;
+
 /**
  * What a row says about itself, in `w:trPr`. One object shared by the row's cells, because the row has
  * no object of its own here: `rev` is 整行的插入或删除, the rest is height, header repeat, splitting and
@@ -607,6 +626,14 @@ export interface RowInfo {
   keepTogether?: boolean;
   /** `w:hidden`: the row is there but draws nowhere. */
   hidden?: boolean;
+  /**
+   * The row's `w:tblPrEx` band, read down to the one property the page draws: cell padding as this row is
+   * to lay itself out, overriding the table's. The band is a child of `w:tr` rather than of `w:trPr` — the
+   * corpus spells it that way in all 1,660 rows that carry margins in it, WPS writing it ahead of the
+   * row's properties — so it is read from the parsed row and carried back as the source text it came in
+   * with (`extras`), never re-spelled from this field.
+   */
+  cellMargin?: MarginTwips;
   slots?: PropSlot[];
   /**
    * The row's own children that are neither `w:trPr` nor `w:tc` — the `w:tblPrEx` band, which says this row
@@ -655,14 +682,18 @@ export interface Table {
   layout?: string;
   /** `w:tblBorders`, the table's own lines including the inside ones. */
   borders?: BorderSet;
+  /** `w:tblCellMar`: the padding this table gives every cell that does not say its own. */
+  cellMargin?: MarginTwips;
   /** `w:tblGrid/@w:w` of each column, in order — what a fixed layout sizes its columns from. */
   columnWidths?: number[];
   /** The source text of `w:tblGrid` whole, so every `w:gridCol` and its attributes come back. */
   gridXml?: string;
   /**
    * The table's own `w:tblPr`, exactly as the file wrote it. The fields above are what the page draws;
-   * a save writes this, so `w:tblLook`, `w:tblCellMar` and a pending `w:tblPrChange` are not invented
-   * but returned — see the note on `TableCell.tcPrXml`.
+   * a save writes this, so `w:tblLook`, `w:tblCellMar` and a pending `w:tblPrChange` are not re-spelled
+   * from a partial set but returned — see the note on `TableCell.tcPrXml`. The margins are the one
+   * property the page now reads as fields and the save still takes from here: reading a number is not
+   * the same authority as being allowed to change one, and no command has that yet.
    */
   tblPrXml?: string;
   /**
@@ -2145,7 +2176,7 @@ export class WordDocument {
         extras.push({ tag: s.tag, xml: s.xml, afterCells: cellsSoFar, beforeProps: !sawProps });
       }
       const slots = slotsOf(childSpans(elementContent(elementOf(rowOwn, "trPr"))));
-      const info = rowInfoOf(tr.trPr, slots, ownAttrs(rowSpan?.xml), extras);
+      const info = rowInfoOf(tr.trPr, slots, ownAttrs(rowSpan?.xml), extras, marginOf(tr.tblPrEx?.tblCellMar));
       // A row's `w:trPrChange` is one of the slots the model carries rather than a field it owns, so it is
       // read twice: the parsed node for what the page draws, the slot's text for what a decision rewrites.
       if (info) info.revFormat = rowFormatRevision(tr.trPr, slots);
@@ -4462,11 +4493,42 @@ function bordersOf(set: any): BorderSet | undefined {
   return any ? out : undefined;
 }
 
+/**
+ * A cell-margin set read from the parsed tree: `w:tblCellMar` and `w:tcMar` each name one element per side
+ * they pad. A side counts only when the file gave it a `w:w`, because `w:w="0"` (flush) is a fact the page
+ * has to draw, not the absence of one. `w:type` says what the number is counted in; a side spelled anything
+ * other than `dxa` is left unsaid — `auto` asks for the next layer's answer, which is exactly what leaving
+ * it out does here.
+ */
+function marginOf(set: any): MarginTwips | undefined {
+  if (!set) return undefined;
+  const out: MarginTwips = {};
+  let any = false;
+  for (const side of MARGIN_SIDES) {
+    const node = set[side];
+    if (!node) continue;
+    const type = str(node["@_type"]);
+    if (type && type !== "dxa") continue;
+    const w = num(node["@_w"]);
+    if (w === undefined) continue;
+    out[side] = w;
+    any = true;
+  }
+  return any ? out : undefined;
+}
+
 /** What a row says about itself: its own revision, its height, whether it repeats or may split. */
-function rowInfoOf(trPr: any, slots?: PropSlot[], attrs?: string, extras?: RowExtra[]): RowInfo | undefined {
+function rowInfoOf(
+  trPr: any,
+  slots?: PropSlot[],
+  attrs?: string,
+  extras?: RowExtra[],
+  cellMargin?: MarginTwips,
+): RowInfo | undefined {
   const info: RowInfo = { ...rowStyleOf(trPr) };
   const rev = trPr?.ins ? revisionOf("ins", trPr.ins) : trPr?.del ? revisionOf("del", trPr.del) : undefined;
   if (rev) info.rev = rev;
+  if (cellMargin) info.cellMargin = cellMargin;
   if (slots?.length) info.slots = slots;
   if (extras?.length) info.extras = extras;
   if (attrs) info.attrsXml = attrs;
@@ -4503,6 +4565,7 @@ function tableStyleOf(tblPr: any): TableStyle {
     align: str(tblPr?.jc?.["@_val"]),
     layout: str(tblPr?.tblLayout?.["@_type"]),
     borders: bordersOf(tblPr?.tblBorders),
+    cellMargin: marginOf(tblPr?.tblCellMar),
   };
 }
 
@@ -4595,6 +4658,7 @@ function cellStyleOf(tcPr: any): CellStyle {
     valign: str(tcPr?.vAlign?.["@_val"]),
     textDirection: str(tcPr?.textDirection?.["@_val"]),
     borders: bordersOf(tcPr?.tcBorders),
+    margin: marginOf(tcPr?.tcMar),
   };
   const wrap = onOff(tcPr?.noWrap);
   if (wrap !== undefined) out.noWrap = wrap;
@@ -4602,7 +4666,16 @@ function cellStyleOf(tcPr: any): CellStyle {
 }
 
 /** Every table property a `w:tblPrChange` can carry, so a refusal clears the ones the record left out. */
-export const TABLE_STYLE_KEYS: (keyof TableStyle)[] = ["styleId", "widthTwips", "widthType", "indentTwips", "align", "layout", "borders"];
+export const TABLE_STYLE_KEYS: (keyof TableStyle)[] = [
+  "styleId",
+  "widthTwips",
+  "widthType",
+  "indentTwips",
+  "align",
+  "layout",
+  "borders",
+  "cellMargin",
+];
 
 /** Every row property a `w:trPrChange` can carry. */
 export const ROW_STYLE_KEYS: (keyof RowStyle)[] = ["heightTwips", "heightRule", "header", "keepTogether", "hidden"];
@@ -4618,6 +4691,7 @@ export const CELL_STYLE_KEYS: (keyof CellStyle)[] = [
   "noWrap",
   "textDirection",
   "borders",
+  "margin",
 ];
 
 /**

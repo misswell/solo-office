@@ -93,6 +93,38 @@ export function makeTablePropertyRevisionDocx(): Uint8Array {
 }
 
 /**
+ * A table whose padding is stated in all three places a file may state it, spelled the way the corpus spells
+ * it: the table's `w:tblCellMar` (`w:w="0"` above and below against `108` at the sides — the shape 204 of the
+ * 204 tables in the 115 WPS-written table-bearing files use), a row band `w:tblPrEx/w:tblCellMar` that zeroes
+ * the two sides (431 of the corpus's 1,660 banded rows do exactly this against a table that said 108), and
+ * cells that say their own `w:tcMar` — one side only, all four, and one side spelled `w:type="auto"`, which
+ * asks for the next layer's answer instead of giving one. `w:tblCellSpacing` is left out: no file in the
+ * corpus states it, and 0 of the 115 say anything about it.
+ *
+ * The second table says nothing anywhere, and the fourth cell of the first table carries an empty
+ * `<w:tcMar></w:tcMar>`: both are the "silence" half of the distinction this fixture exists to test, since a
+ * page that cannot tell `w:w="0"` from "not said" puts spacing back on a table that asked for none.
+ *
+ * Values are drawn from what the corpus actually uses (108, 12, 15, 57, 170 twips), not invented; every side
+ * the corpus states comes with `w:type="dxa"`, so the `auto` side here is a shape no file in it has. 未取证:
+ * what WPS draws for these — the page-level comparison is against the file's own numbers.
+ */
+export function makeCellMarginDocx(): Uint8Array {
+  const cell = (text: string, mar = ""): string =>
+    `<w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/>${mar}</w:tcPr><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:tc>`;
+  const document = `<w:p><w:r><w:t>表前</w:t></w:r></w:p>
+<w:tbl><w:tblPr><w:tblW w:w="4000" w:type="dxa"/><w:tblLayout w:type="fixed"/><w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="108" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid>
+<w:tr>${cell("甲", '<w:tcMar><w:top w:w="15" w:type="dxa"/></w:tcMar>')}${cell("乙")}<w:tblPrEx><w:tblCellMar><w:left w:w="0" w:type="dxa"/><w:right w:w="0" w:type="dxa"/></w:tblCellMar></w:tblPrEx></w:tr>
+<w:tr>${cell("丙", '<w:tcMar><w:top w:w="12" w:type="dxa"/><w:left w:w="170" w:type="dxa"/><w:bottom w:w="12" w:type="dxa"/><w:right w:w="170" w:type="dxa"/></w:tcMar>')}<w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/><w:tcMar></w:tcMar></w:tcPr><w:p><w:r><w:t>丁</w:t></w:r></w:p></w:tc></w:tr>
+<w:tr>${cell("戊", '<w:tcMar><w:top w:w="57" w:type="dxa"/><w:left w:w="144" w:type="auto"/></w:tcMar>')}${cell("己")}</w:tr>
+</w:tbl>
+<w:tbl><w:tblPr><w:tblW w:w="2000" w:type="dxa"/><w:tblLayout w:type="fixed"/></w:tblPr><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid>
+<w:tr>${cell("没说边距的表")}</w:tr>
+</w:tbl>`;
+  return pack(document);
+}
+
+/**
  * A table a decision cannot take away: one column, whose only cell carries `w:cellDel`. Accepting the deletion
  * would leave a table with no cells, which is not a table a reader gets back, so the record stays pending
  * rather than being half-applied.

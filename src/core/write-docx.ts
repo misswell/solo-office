@@ -141,6 +141,13 @@ function paragraphProps(p: Paragraph): string {
   if (has("styleId")) parts.push(`<w:pStyle w:val="${XML_ESC(p.styleId ?? "")}"/>`);
   if (has("pageBreakBefore")) parts.push("<w:pageBreakBefore/>");
   if (has("numPr")) parts.push(`<w:numPr><w:ilvl w:val="${p.numPr!.ilvl}"/><w:numId w:val="${p.numPr!.numId}"/></w:numPr>`);
+  // 「对齐到网格」不在 `PARA_STYLE_KEYS` 里——带 `w:pPr` 的段落由 `syncParaSlots` 按件的原字节带着走，这一段
+  // 却可能一个 slot 也没有（编辑器自己拆出来的段、或那 159 段没写 `w:pPr` 的），那时候勾选框只剩字段可说。
+  // 拼法照件：说开裸写、说关 `w:val="0"`。只说**这一击动过的**，与 `ownParaStyle` 对着读快照同一条口径——
+  // 从样式链借来的那个开关是样式的话，抄到段落身上就是替文件编一句。`CT_PPr` 把它排在 `w:spacing` 前。
+  if (p.snapToGrid !== undefined && !samePropValue(p.asRead?.snapToGrid, p.snapToGrid)) {
+    parts.push(p.snapToGrid ? "<w:snapToGrid/>" : '<w:snapToGrid w:val="0"/>');
+  }
   const spacing: string[] = [];
   if (has("spacingBefore")) spacing.push(` w:before="${Math.round(p.spacingBefore!)}"`);
   if (has("spacingAfter")) spacing.push(` w:after="${Math.round(p.spacingAfter!)}"`);

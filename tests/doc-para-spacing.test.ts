@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { Paragraph } from "../src/core/docx.js";
-import { LINE_ONE, linePitchTwips, paraSpacingPitch, syncParaSlots, WordDocument } from "../src/core/docx.js";
+import { LINE_ONE, lineGridPitchTwips, linePitchTwips, paraSpacingPitch, syncParaSlots, WordDocument } from "../src/core/docx.js";
 import { writeDocx } from "../src/core/write-docx.js";
 import { childSpans, elementContent, OpcPackage, text } from "../src/core/opc.js";
-import { makeSpacingDocx } from "./helpers/make-paragraph.js";
+import { makeChainDocx, makeGridRevisionDocx, makeSpacingDocx } from "./helpers/make-paragraph.js";
 
 const part = (bytes: Uint8Array): string => text(OpcPackage.from(bytes).bytes("word/document.xml")!);
 const open = (bytes: Uint8Array): WordDocument => WordDocument.openBytes(bytes);
@@ -162,5 +162,154 @@ describe("docx 段距与行距的写出", () => {
     expect(paraSpacingPitch(findPara(doc, "什么都没说的"))).toBeUndefined();
     expect(linePitchTwips("0", "100")).toBeUndefined();
     expect(linePitchTwips("312", "0")).toBeUndefined();
+  });
+});
+
+/** 那一段自己写下的 `w:snapToGrid`——按 `w:pPr` 的直接孩子找，段落标记 `w:rPr` 里那枚同名的不算（201 份里 19 枚挂在那儿）。 */
+const snapOf = (xml: string, needle: string): string => childSpans(pPrOf(xml, needle)).find((k) => k.tag === "snapToGrid")?.xml ?? "";
+
+/**
+ * 「如果定义了文档网格，则对齐到网格」的**写出**侧（§17.3.1.87 `w:snapToGrid`）。读与画早在 #130 就归了文件，
+ * 这一枚开关此前没有任何一条命令能改它。
+ *
+ * 拼法与位置都不是编的（`.scratch/snap-grid-audience.ts`，同一批 201 份 WPS 写出的件）：
+ * - `document.xml` 3,466 枚里 `p>w:pPr` 直接孩子 3,394 枚；另有 72 枚挂在 `w:rPr`（`pPr>rPr` 19、`r>rPr` 53），
+ *   §17.3.1.87 不放它在那儿，读取不看、写出也不碰。
+ * - 说法只有两种：裸写 1,416 枚（= 说开，缺省也是开）、`w:val="0"` 2,381 枚（= 说关）。**没有一枚**写 `"1"`、
+ *   `"false"` 或 `"none"`，所以关掉必须写 `"0"`，打开必须裸写。
+ * - 正文段（13,426 段）里说开 1,353、说关 672，而这 672 段**全在定义了行网格的节下**（201 份里 200 份首节写
+ *   `w:docGrid w:type="lines"`）。
+ * - `w:pPr` 里它的前后兄弟固定是 `adjustRightInd → snapToGrid → spacing|jc|ind`（2,185 + 597 + 270 枚），
+ *   与 `PPR_ORDER` 同一条，所以新写的那一枚必须落在 `w:spacing` 之前。
+ */
+describe("docx 「与文档网格对齐」的写出", () => {
+  const GRID = makeSpacingDocx(
+    [
+      { snapToGrid: 'w:val="0"', spacing: 'w:line="240" w:lineRule="auto"', text: "说不吸的" },
+      { snapToGrid: "", text: "裸写说吸的" },
+      { spacing: 'w:before="120"', text: "没提网格的" },
+      { markRPr: '<w:rPr><w:snapToGrid w:val="0"/></w:rPr>', text: "标记里有一枚的" },
+      { pStyle: "Lent", text: "网格靠样式的" },
+      { text: "整段没 pPr 的" },
+    ],
+    '<w:snapToGrid w:val="0"/>',
+    '<w:docGrid w:type="lines" w:linePitch="312"/>',
+  );
+
+  it("件里那两种拼法一件没动时原样带回", () => {
+    const round = save(open(GRID));
+    expect(snapOf(round, "说不吸的")).toBe('<w:snapToGrid w:val="0"/>');
+    expect(snapOf(round, "裸写说吸的")).toBe("<w:snapToGrid/>");
+    expect(snapOf(round, "没提网格的")).toBe("");
+    // 段落标记 `w:rPr` 里那枚同名的开关不是段落属性：整枚留在原地，一个字没动。
+    expect(snapOf(round, "标记里有一枚的")).toBe("");
+    expect(/<w:rPr>[\s\S]*?<\/w:rPr>/.exec(pPrOf(round, "标记里有一枚的"))?.[0]).toBe('<w:rPr><w:snapToGrid w:val="0"/></w:rPr>');
+  });
+
+  it("把读到的值原样交回去不是用户的话：一个字节都不写", () => {
+    const doc = open(GRID);
+    const p = findPara(doc, "说不吸的");
+    expect(p.snapToGrid).toBe(false);
+    p.snapToGrid = false;
+    syncParaSlots(p);
+    expect(pPrOf(save(doc), "说不吸的")).toBe(pPrOf(part(GRID), "说不吸的"));
+  });
+
+  it("段落没说过而用户关掉时，新写的一枚按件的拼法落在 `w:spacing` 之前", () => {
+    const doc = open(GRID);
+    const p = findPara(doc, "没提网格的");
+    expect(p.snapToGrid).toBeUndefined();
+    p.snapToGrid = false;
+    syncParaSlots(p);
+    expect(pPrOf(save(doc), "没提网格的")).toBe('<w:snapToGrid w:val="0"/><w:spacing w:before="120"/>');
+    // 同一份件里另一段没被这一击碰到：它的 `w:spacing` 与原字节一模一样。
+    expect(pPrOf(save(doc), "裸写说吸的")).toBe(pPrOf(part(GRID), "裸写说吸的"));
+  });
+
+  it("打开时裸写，不写 `w:val=\"1\"`；同一句里别的属性留在原位", () => {
+    const doc = open(GRID);
+    const p = findPara(doc, "说不吸的");
+    p.snapToGrid = true;
+    syncParaSlots(p);
+    expect(pPrOf(save(doc), "说不吸的")).toBe('<w:snapToGrid/><w:spacing w:line="240" w:lineRule="auto"/>');
+    // 段落标记里那枚同名的开关整枚照旧——它说的是断行符自己吸不吸，不是这一段的事。
+    expect(/<w:rPr>[\s\S]*?<\/w:rPr>/.exec(pPrOf(save(doc), "标记里有一枚的"))?.[0]).toBe('<w:rPr><w:snapToGrid w:val="0"/></w:rPr>');
+  });
+
+  it("样式链借来的那一枚不抄进段落；用户改口说开时段落自己认领", () => {
+    const doc = open(GRID);
+    const p = findPara(doc, "网格靠样式的");
+    // 字段读的是解析过样式链的那一份，`asRead` 存的也是它——写出侧对着这一份判「是不是这一段自己改的口」。
+    expect(p.snapToGrid).toBe(false);
+    expect(p.asRead?.snapToGrid).toBe(false);
+    expect(p.pPrSlots?.map((s) => s.tag)).toEqual(["pStyle"]);
+    // 没动过 → 「不吸」还是样式的话，段落那一句里只有它自己点的名。
+    expect(pPrOf(save(doc), "网格靠样式的")).toBe('<w:pStyle w:val="Lent"/>');
+    const other = open(GRID);
+    const q = findPara(other, "网格靠样式的");
+    q.snapToGrid = true;
+    syncParaSlots(q);
+    expect(pPrOf(save(other), "网格靠样式的")).toBe('<w:pStyle w:val="Lent"/><w:snapToGrid/>');
+  });
+
+  it("整段没有 `w:pPr` 时由字段拼这一句（那条路也得接上），存下去再读回来不再改字节", () => {
+    const doc = open(GRID);
+    const p = findPara(doc, "整段没 pPr 的");
+    expect(p.pPrSlots).toBeUndefined();
+    p.snapToGrid = false;
+    const once = writeDocx(doc);
+    expect(pPrOf(part(once), "整段没 pPr 的")).toBe('<w:snapToGrid w:val="0"/>');
+    const again = open(once);
+    expect(findPara(again, "整段没 pPr 的").snapToGrid).toBe(false);
+    expect(pPrOf(part(writeDocx(again)), "整段没 pPr 的")).toBe('<w:snapToGrid w:val="0"/>');
+  });
+
+  it("`lineGridPitchTwips` 只认件说得出间距的那种网格", () => {
+    const withGrid = open(GRID);
+    expect(lineGridPitchTwips(withGrid.sections[0]!)).toBe(312);
+    const noGrid = open(makeSpacingDocx([{ text: "没有网格的" }]));
+    expect(lineGridPitchTwips(noGrid.sections[0]!)).toBeUndefined();
+    const otherType = open(makeSpacingDocx([{ text: "别档网格的" }], "", '<w:docGrid w:type="default" w:linePitch="312"/>'));
+    expect(lineGridPitchTwips(otherType.sections[0]!)).toBeUndefined();
+    const noPitch = open(makeSpacingDocx([{ text: "网格没间距的" }], "", '<w:docGrid w:type="lines"/>'));
+    expect(lineGridPitchTwips(noPitch.sections[0]!)).toBeUndefined();
+  });
+
+  /**
+   * 拒绝一条改动时，这一枚开关与别项是同一件事：记录没说的就是当时没说。`restoreParaStyle` 以前只清
+   * `PARA_STYLE_KEYS` 那本账，而开关不在里头——拒绝完字段还顶着被否决的那一句，画错，下一次存盘还会替段落把它
+   * 写回件里。三条保持规则原来有同一个口子，这一并补上（同一条判据、同一个循环）。
+   */
+  it("拒绝那条改动：记录没说的那一枚被清回去，说过的那一枚按记录的字节还回来", () => {
+    const doc = open(makeGridRevisionDocx());
+    const added = findPara(doc, "网格是刚加上的");
+    expect(added.snapToGrid).toBe(true);
+    expect(doc.resolveRevisions("reject", 21)).toBe(1);
+    // 记录那一句没有 `w:snapToGrid`，样式链也没借，所以这一段回到「自己没说」（缺省仍是吸，与「说了不吸」两件事）。
+    expect(added.snapToGrid).toBeUndefined();
+    expect(snapOf(save(doc), "网格是刚加上的")).toBe("");
+    // 存下去再读回来也一样：字段与快照都说「没说」，`moved()` 认不出这一击，不会替文件补一句。
+    expect(snapOf(save(open(writeDocx(doc))), "网格是刚加上的")).toBe("");
+
+    const removed = findPara(doc, "网格是刚被删掉的");
+    expect(removed.snapToGrid).toBeUndefined();
+    expect(doc.resolveRevisions("reject", 22)).toBe(1);
+    expect(removed.snapToGrid).toBe(false);
+    expect(pPrOf(save(doc), "网格是刚被删掉的")).toBe('<w:snapToGrid w:val="0"/><w:spacing w:line="300" w:lineRule="auto"/>');
+  });
+
+  it("回车拆段：上一段自己那句「不吸」跟着走，从样式借来的那句留在样式那里", () => {
+    const own = open(makeChainDocx([{ id: "Head", next: "Body" }, { id: "Body" }], [{ pStyle: "Head", pPr: '<w:snapToGrid w:val="0"/>', text: "自己说的" }]));
+    const split = own.nextSplit(findPara(own, "自己说的")!)!;
+    expect(split.styleId).toBe("Body");
+    expect(split.snapToGrid).toBe(false);
+
+    const lent = open(
+      makeChainDocx([{ id: "Head", next: "Body", pPr: '<w:snapToGrid w:val="0"/>' }, { id: "Body" }], [{ pStyle: "Head", text: "借来的" }]),
+    );
+    const borrowed = lent.nextSplit(findPara(lent, "借来的")!)!;
+    // 「不吸」是 Head 说的话，Body 没说，所以新段不该认领它——写出来就是替文件在一段没说过的话上签了名。
+    expect(findPara(lent, "借来的").snapToGrid).toBe(false);
+    expect(borrowed.snapToGrid).toBeUndefined();
   });
 });

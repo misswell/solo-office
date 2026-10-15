@@ -1,7 +1,7 @@
 import type { Block, Carried, CarriedInline, FormatRevision, HfSegment, Inline, LineSpacingRule, ParaStyle, PageGeometry, PageSetup, Paragraph, ParagraphFormatRevision, PropSlot, Revision, RevisionEntry, RowInfo, RunStyle, Table, TableCell, WordDocument } from "../core/docx.js";
 import type { CommentAnchor, DocComment } from "../core/comments.js";
 import { bodyShape, commentTexts } from "../core/comments.js";
-import { DEFAULT_SECTION, RUN_STYLE_KEYS, countTexts, ownParaStyle, ownRunStyle, paraSpacingPitch, paraStyleOf, paragraphTextsOf, runStyleOf, sectionEndsOf, stampNow, syncParaSlots, twipsToPx } from "../core/docx.js";
+import { DEFAULT_SECTION, RUN_STYLE_KEYS, countTexts, lineGridPitchTwips, ownParaStyle, ownRunStyle, paraSpacingPitch, paraStyleOf, paragraphTextsOf, runStyleOf, sectionEndsOf, stampNow, syncParaSlots, twipsToPx } from "../core/docx.js";
 import type { CellWhere, TableEdit } from "../core/doc-table-ops.js";
 import { cellRangeFor, cellRect, cellsInRect, cellsInSweep, deleteColumnHere, deleteRowHere, gridColumns, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, splitHere, splitTableAt } from "../core/doc-table-ops.js";
 import { IMAGE_EXT_BY_MIME } from "../core/media.js";
@@ -2627,14 +2627,20 @@ export class DocEditor {
   }
 
   /**
-   * 「段落」那三个数的**读数**：段前、段后、行距，按页面上正在画的那一份交（模型字段本来就是解析过样式链的，
-   * 从样式借来的也算——那正是这一格该说的）。多选跨段时逐段比对：几段说得不一样就整键交 `undefined`，那一格空着，
-   * 而不是拿第一段的答案替全部说话。`linePitchTwips` 只给「件自己两笔一起写」那行小字用，取第一个说得出档的段。
+   * 「段落」那三个数的**读数**：段前、段后、行距，加一颗「对齐到网格」的勾，按页面上正在画的那一份交（模型字段
+   * 本来就是解析过样式链的，从样式借来的也算——那正是这一格该说的）。多选跨段时逐段比对：几段说得不一样就整键交
+   * `undefined`，那一格空着，而不是拿第一段的答案替全部说话。`linePitchTwips` 只给「件自己两笔一起写」那行小字用，
+   * 取第一个说得出档的段。
+   *
+   * `snapToGrid` 的 `undefined` 有两种来路，对话框分不开（缺省就是「吸」，所以两种都摆成勾着），所以跨段不一致时
+   * 另交一个 `snapMixed` 让那行小字说出来——WPS 在这种混合态上摆什么（勾／空框／灰掉）**未取证**，这里不猜。
+   * `docGridTwips` 取第一段所在那一节的行网格（一格多高，缇；没有网格就 `undefined`），口径与渲染同一处：
+   * `lineGridPitchTwips`。节号按状态栏 节 那一格的同一条算法（块 `b` 属于第 `#{e < b}` 节）。
    */
   paraSpacingState(): ParaSpacingState | undefined {
     const targets = this.selectionParagraphs();
     if (!targets.length) return undefined;
-    const agree = <K extends "spacingBefore" | "spacingAfter" | "lineSpacing" | "lineSpacingRule">(key: K): Paragraph[K] | undefined => {
+    const agree = <K extends "spacingBefore" | "spacingAfter" | "lineSpacing" | "lineSpacingRule" | "snapToGrid">(key: K): Paragraph[K] | undefined => {
       const first = targets[0]![key];
       return targets.every((p) => p[key] === first) ? first : undefined;
     };
@@ -2643,12 +2649,19 @@ export class DocEditor {
       afterTwips: agree("spacingAfter"),
       line: agree("lineSpacing"),
       lineRule: agree("lineSpacingRule"),
+      snapToGrid: agree("snapToGrid"),
     };
     state.linePitchTwips = targets.map((p) => paraSpacingPitch(p)).find((x) => x !== undefined);
+    state.snapMixed = targets.length > 1 && state.snapToGrid === undefined;
+    const at = this.doc.blocks.indexOf(targets[0]);
+    const block = at < 0 ? this.caretPath()?.path[0] ?? 0 : at;
+    const sections = this.doc.sections.length ? this.doc.sections : [DEFAULT_SECTION];
+    const passed = sectionEndsOf(this.doc.blocks).filter((e) => e < block).length;
+    state.docGridTwips = lineGridPitchTwips(sections[passed] ?? sections[0] ?? DEFAULT_SECTION);
     return state;
   }
 
-  /** Ribbon command: 「段落」——段前／段后／行距，从光标或选区那几段读，改完写回 `w:spacing`。 */
+  /** Ribbon command: 「段落」——段前／段后／行距与「对齐到网格」，从光标或选区那几段读，改完写回 `w:spacing` 与 `w:snapToGrid`。 */
   openParaSpacing(): void {
     const state = this.paraSpacingState();
     if (!state) return;
@@ -2656,7 +2669,7 @@ export class DocEditor {
   }
 
   /**
-   * ribbon 行距下拉与「段落」对话框共用的落笔处。**只写用户动过的那一句**：三个键都不在补丁里就整击作废，
+   * ribbon 行距下拉与「段落」对话框共用的落笔处。**只写用户动过的那一句**：四个键都不在补丁里就整击作废，
    * 连撤销栈都不进——与 `shiftParagraphIndent` 已经在边上时同一个判定。`w:line` 与 `w:lineRule` 必须同进同出
    * （201 份的 7,810 枚里 0 枚只写一边），所以补丁交了 `line` 就一定带着规则；只交一半会被读成上一份的规则，
    * 那正是 #132 钉住过的那类漂移。
@@ -2664,19 +2677,23 @@ export class DocEditor {
   setParagraphSpacing(patch: ParaSpacingPatch): boolean {
     const targets = this.selectionParagraphs();
     if (!targets.length) return false;
-    if (patch.beforeTwips === undefined && patch.afterTwips === undefined && patch.line === undefined) return false;
+    if (patch.beforeTwips === undefined && patch.afterTwips === undefined && patch.line === undefined && patch.snapToGrid === undefined) return false;
     this.snapshot(this.caretPath());
     for (const paragraph of targets) {
       const was = paraStyleOf(paragraph);
       const wasSlots = paragraph.pPrSlots;
+      const wasSnap = paragraph.snapToGrid;
       if (patch.beforeTwips !== undefined) paragraph.spacingBefore = patch.beforeTwips;
       if (patch.afterTwips !== undefined) paragraph.spacingAfter = patch.afterTwips;
       if (patch.line !== undefined) {
         paragraph.lineSpacing = patch.line;
         paragraph.lineSpacingRule = patch.lineRule ?? "auto";
       }
+      if (patch.snapToGrid !== undefined) paragraph.snapToGrid = patch.snapToGrid;
       syncParaSlots(paragraph);
-      if (this.trackRevisions && JSON.stringify(was) !== JSON.stringify(paraStyleOf(paragraph))) {
+      // 网格这一枚开关不在 `PARA_STYLE_KEYS` 里（它整枚走 `pPrSlots` 的字节），所以字段那本账看不出它动了。
+      // 修订开着时单动这一枚也得留痕：记录带 `prevSlots`，拒绝就是把改之前那一句字节放回去。
+      if (this.trackRevisions && (JSON.stringify(was) !== JSON.stringify(paraStyleOf(paragraph)) || wasSnap !== paragraph.snapToGrid)) {
         paragraph.revFormat = this.signParagraphRevision(paragraph, was, wasSlots);
       }
     }

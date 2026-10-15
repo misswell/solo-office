@@ -254,9 +254,11 @@ export interface ParaStyle {
    * slices against 3,466 in the files, two of them paragraph-mark statements read as paragraph properties and 70
    * never attributed. `.scratch/wps-snap-where.mjs` walks the ancestor stack so every element reaches a slot.
    *
-   * Like the three keep flags, this is deliberately not in `PARA_STYLE_KEYS`: nothing in the writer spells it,
-   * the element travels in `pPrSlots`, and a `w:pPrChange` record's own `w:snapToGrid` comes back as the
-   * record's bytes rather than as a field re-spelled.
+   * Like the three keep flags, this is not in `PARA_STYLE_KEYS`: the element travels in `pPrSlots`, and a
+   * `w:pPrChange` record's own `w:snapToGrid` comes back as the record's bytes rather than as a field re-spelled.
+   * It is written, though — `syncParaSlots` re-spells the element in the two spellings the corpus uses (bare for
+   * on, `w:val="0"` for off) once the field moves, and `write-docx.ts` spells it for the paragraphs that have no
+   * slots at all. Both compare against this snapshot, so a switch the paragraph only borrowed stays the style's.
    */
   snapToGrid?: boolean;
   numPr?: { numId: number; ilvl: number };
@@ -864,6 +866,21 @@ export interface Section {
  * the same box.
  */
 export const DEFAULT_SECTION: Section = { pageWidthTwips: 11906, pageHeightTwips: 16838, margins: { top: 1440, right: 1440, bottom: 1440, left: 1440 } };
+
+/**
+ * 「这一节到底有没有一行网格、一格多高（缇）」唯一的一处判定。§17.3.2.9 给 `w:docGrid@w:type` 四种拼法，语料只用
+ * 一种：**234 枚 `w:sectPr` 里的 234 枚写了 `w:docGrid` 且每一枚都说 `lines`**（`render.ts` 的 `gridPitchPx`
+ * 头记的是同一批数），所以 `default`/`linesAndChars`/`snapToColumns` 与整句没写一样，都算「没有行网格」。
+ * 说了 `lines` 却说不出的间距（`w:linePitch` 缺失或非正）也不算网格——那要模型替文件编一个数。
+ *
+ * 渲染（px）与「段落」对话框里那句小字（缇）都问这一个问题，所以判定只有这一份，两处各自只换算单位。
+ */
+export function lineGridPitchTwips(sec: Section): number | undefined {
+  const g = sec.docGrid;
+  if (!g || g.type !== "lines") return undefined;
+  const pitch = g.linePitch;
+  return pitch !== undefined && pitch > 0 ? pitch : undefined;
+}
 
 /** A copy, because a section a caller mutates must not move the page every other document falls back to. */
 const copySection = (s: Section): Section => ({
@@ -1914,23 +1931,7 @@ export class WordDocument {
     const pprXml = elementOf(childSpans(elementContent(span ?? "")), "pPr");
     const carried = paraSlotsOf(childSpans(elementContent(pprXml)));
     if (carried.length) para.pPrSlots = carried;
-    para.asRead = {
-      styleId: para.styleId,
-      align: para.align,
-      indentLeft: para.indentLeft,
-      indentLeftChars: para.indentLeftChars,
-      indentRight: para.indentRight,
-      indentFirstLine: para.indentFirstLine,
-      indentFirstLineChars: para.indentFirstLineChars,
-      indentHanging: para.indentHanging,
-      spacingBefore: para.spacingBefore,
-      spacingAfter: para.spacingAfter,
-      lineSpacing: para.lineSpacing,
-      lineSpacingRule: para.lineSpacingRule,
-      pageBreakBefore: para.pageBreakBefore || undefined,
-      numPr: para.numPr,
-      outlineLevel: para.outlineLevel,
-    };
+    para.asRead = paraReadSnapshot(para);
     // The paragraph's own mark can be revised: `w:pPr/w:rPr` holds the break that ends this paragraph,
     // signed the same way a run is. Its character properties are read for the numbering symbol's own three —
     // size, the two faces, colour (`markSizePt`, `markFont`, `markFontEastAsia`, `markColor`) — and the break's
@@ -2533,9 +2534,11 @@ export class WordDocument {
     const own = ownParaStyle(before, paraStyleOf(previous));
     delete own.styleId;
     const fields: ParaStyle = { ...lent, ...own };
-    // 三条保持规则不在 `PARA_STYLE_KEYS` 里（写出靠 `w:pPr` 的槽位带回），`ownParaStyle` 认不到它们，
-    // 所以「上一段自己写的 keepNext」得按同一条判据再认一次：与旧链说的不一样，就是这一段自己写的，跟着走。
-    for (const key of ["keepNext", "keepLines", "widowControl"] as const) {
+    // 那四项不在 `PARA_STYLE_KEYS` 里（写出靠 `w:pPr` 的槽位带回），`ownParaStyle` 认不到它们，所以「上一段自己
+    // 写的那一份」得按同一条判据再认一次：与旧链说的不一样，就是这一段自己写的，跟着走——回车不该把上一段自己写的
+    // 保持规则或它自己那句「不吸网格」忘掉（语料里 1,994 枚 `w:snapToGrid w:val="0"` 是段落自己写的，
+    // `.scratch/snap-grid-audience.ts`）。`.scratch/next-dom.ts` 在真页面上量到的正是这一族丢掉的形状。
+    for (const key of MODEL_ONLY_PARA_KEYS) {
       const stated = previous[key];
       if (stated !== undefined && stated !== before?.[key]) fields[key] = stated;
     }
@@ -3312,19 +3315,19 @@ export class WordDocument {
 
   /**
    * Putting a paragraph back the properties its `w:pPrChange` recorded. The record holds the whole
-   * previous set, so a property it does not mention was not set — and alignment and indent come from
-   * the paragraph's style when the record leaves them out, which is where they belonged before.
+   * previous set, so a property it does not mention was not set — and alignment, indent, the three page-keeping
+   * rules and the grid switch come from the paragraph's style when the record leaves them out, which is where
+   * they belonged before.
    */
   private restoreParaStyle(p: Paragraph, fmt: ParagraphFormatRevision): void {
     const prev = fmt.prev;
-    for (const key of PARA_STYLE_KEYS) delete p[key];
+    for (const key of [...PARA_STYLE_KEYS, ...MODEL_ONLY_PARA_KEYS]) delete p[key];
     Object.assign(p, prev);
     p.styleName = p.styleId ? this.styles.get(p.styleId)?.name : undefined;
     if (fmt.prevSlots?.length) {
       // The record wrote more than the model has a field for, so the paragraph takes its set as written;
       // syncing the slots from fields would re-spell the named ones and delete the rest.
       p.pPrSlots = fmt.prevSlots;
-      p.asRead = { ...prev };
     } else {
       // The record spells the properties the paragraph owns, so the owned children of its `w:pPr` follow the
       // restored fields before anything the new style lends is folded back in.
@@ -3353,6 +3356,15 @@ export class WordDocument {
     // style lends, and one that wrote `w:val="9"` keeps that — 9 is body text (§17.3.2.26), so the paragraph has
     // taken back a level the chain was lending it.
     p.outlineLevel = p.outlineLevel ?? inherited?.outlineLevel;
+    // 那四项模型有字段、但 `ownParaStyle` 认不到的（三条保持规则与「对齐到网格」）走同一条：记录说了就按记录的，
+    // 没说就把手里的清掉、把样式链借的那份还回来。留着不放的话，被否决的那一句还挂在字段上——画错，下一击
+    // `syncParaSlots` 还会把它替段落写进件里。
+    p.keepNext = p.keepNext ?? inherited?.keepNext;
+    p.keepLines = p.keepLines ?? inherited?.keepLines;
+    p.widowControl = p.widowControl ?? inherited?.widowControl;
+    p.snapToGrid = p.snapToGrid ?? inherited?.snapToGrid;
+    // 退回完之后，这一段重新有一份「它当时显示的是什么」的参照：写出侧对着它判哪一句是用户后来改的口。
+    p.asRead = paraReadSnapshot(p);
   }
 
   /** Tracked formatting changes on runs (`w:rPrChange`) still waiting for a decision, one entry per `w:id`. */
@@ -4129,6 +4141,46 @@ export function paraStyleOf(p: Paragraph): ParaStyle {
 }
 
 /**
+ * 模型有字段、但不在 `PARA_STYLE_KEYS` 里的那四项。它们不参与 `ownParaStyle` 的「这一段自己说了哪些」那本账
+ * （整枚靠 `w:pPr` 的槽位字节带回），可**退回一条格式改动**时它们与别项是同一件事：记录没说的就是当时没说，
+ * 字段里留着的那些得清掉、再让样式链重新借给它——不清的话拒绝完这一段还顶着用户刚被否决的那一句，画错了，
+ * 下一次存盘还会把被否决的话替它写回件里。
+ */
+const MODEL_ONLY_PARA_KEYS = ["keepNext", "keepLines", "widowControl", "snapToGrid"] as const;
+
+/**
+ * The snapshot the write side measures the user against: every property the paragraph **showed** when it came
+ * in — its own `w:pPr` first, the style chain behind. A key it neither stated nor borrowed is absent, and
+ * `moved()`/`ownParaStyle` read that absence as "this one is not this paragraph's to write".
+ *
+ * `snapToGrid` is in this set (round #134) because the checkbox needs both halves of it: a paragraph borrowing
+ * `w:snapToGrid w:val="0"` from its style shows the box unchecked, and only against this snapshot does the write
+ * side recognise that statement as the style's rather than as a click. The three keep flags are deliberately
+ * not here, exactly as they are not in `PARA_STYLE_KEYS` — `nextSplit` re-derives them by the same test.
+ */
+function paraReadSnapshot(p: Paragraph): ParaStyle {
+  return {
+    styleId: p.styleId,
+    align: p.align,
+    indentLeft: p.indentLeft,
+    indentLeftChars: p.indentLeftChars,
+    indentRight: p.indentRight,
+    indentFirstLine: p.indentFirstLine,
+    indentFirstLineChars: p.indentFirstLineChars,
+    indentHanging: p.indentHanging,
+    spacingBefore: p.spacingBefore,
+    spacingAfter: p.spacingAfter,
+    lineSpacing: p.lineSpacing,
+    lineSpacingRule: p.lineSpacingRule,
+    // 断点那一格只认「说了要」：`false` 与没说在这一项上不是两件事，件里也没有 `<w:pageBreakBefore w:val="0"/>`。
+    pageBreakBefore: p.pageBreakBefore || undefined,
+    numPr: p.numPr,
+    outlineLevel: p.outlineLevel,
+    snapToGrid: p.snapToGrid,
+  };
+}
+
+/**
  * Whether a property field still holds what the read snapshot has for it. Every writer in this file and
  * `write-docx.ts` spells a property only once it has moved: a value the paragraph or run only borrowed from its
  * style is the style's to state, and writing it again as direct formatting is how a save makes the file claim
@@ -4566,7 +4618,18 @@ export function syncParaSlots(p: Paragraph): void {
     }
     wanted.push({ tag: "spacing", xml: written.length ? `<${prefix}:spacing ${written.map((k) => k.xml).join(" ")}/>` : "" });
   }
-  const owned = new Set(["pStyle", "pageBreakBefore", "numPr", "jc", ...(indMoved ? ["ind"] : []), ...(spacingMoved ? ["spacing"] : [])]);
+  // 「如果定义了文档网格，则对齐到网格」那一句：件里只有两种拼法——说开**裸写**、说关写 `w:val="0"`
+  // （201 份 `document.xml` 的 3,466 枚里裸写 1,416、`"0"` 2,381，没有一枚写 `"1"` 或 `"false"`；
+  // `.scratch/snap-grid-audience.ts`）。字段是三态的：`undefined` = 这一段没说（照样式链或缺省的「吸」），
+  // 所以只有动过且说得出开/关才整枚换掉；没说过的原件一个字都不动。
+  const snapMoved = moved("snapToGrid") && p.snapToGrid !== undefined;
+  if (snapMoved) {
+    wanted.push({
+      tag: "snapToGrid",
+      xml: p.snapToGrid ? `<${prefix}:snapToGrid/>` : `<${prefix}:snapToGrid ${prefix}:val="0"/>`,
+    });
+  }
+  const owned = new Set(["pStyle", "pageBreakBefore", "numPr", "jc", ...(indMoved ? ["ind"] : []), ...(spacingMoved ? ["spacing"] : []), ...(snapMoved ? ["snapToGrid"] : [])]);
   let next = slots.filter((s) => !owned.has(s.tag));
   for (const w of wanted) {
     const at = next.findIndex((s) => pprRank(s.tag) > pprRank(w.tag));

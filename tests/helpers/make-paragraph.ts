@@ -217,6 +217,25 @@ export function makeSpacingRevisionDocx(): Uint8Array {
   return pack(document, styles);
 }
 
+/**
+ * Two paragraphs whose `w:pPrChange` disagrees with the set it sits in about 「对齐到网格」, in the shape
+ * §17.13.5.19 gives the record: the last child of `w:pPr`, holding a whole set of its own. The first states a
+ * bare `<w:snapToGrid/>` now while its record states nothing about the grid, so refusing it has to take the
+ * paragraph's own statement back rather than leave the switch claimed. The second states nothing now while its
+ * record states `w:val="0"`, so refusing it has to hand that statement back — bytes and field both.
+ */
+export function makeGridRevisionDocx(): Uint8Array {
+  const document =
+    `<w:p><w:pPr><w:snapToGrid/><w:spacing w:line="300" w:lineRule="auto"/>` +
+    `<w:pPrChange ${REV(21, "顾峰")}><w:pPr><w:spacing w:line="300" w:lineRule="auto"/></w:pPr></w:pPrChange></w:pPr>` +
+    `<w:r><w:t>网格是刚加上的</w:t></w:r></w:p>` +
+    `<w:p><w:pPr><w:spacing w:line="300" w:lineRule="auto"/>` +
+    `<w:pPrChange ${REV(22, "林晓")}><w:pPr><w:snapToGrid w:val="0"/><w:spacing w:line="300" w:lineRule="auto"/></w:pPr></w:pPrChange></w:pPr>` +
+    `<w:r><w:t>网格是刚被删掉的</w:t></w:r></w:p>` +
+    `<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800"/><w:docGrid w:type="lines" w:linePitch="312"/></w:sectPr>`;
+  return pack(document, STYLES);
+}
+
 /** A style as `word/styles.xml` spells it, for the tests about how far up `w:basedOn` the read walks. */
 export interface ChainStyle {
   id: string;

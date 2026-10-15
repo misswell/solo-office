@@ -1,5 +1,5 @@
 import type { Block, Carried, CarriedInline, Inline, NumberLevel, PageBorder, Paragraph, RowInfo, Section, Table, TableBorder, TableCell, WordDocument } from "./docx.js";
-import { DEFAULT_SECTION, LINE_ONE, MARGIN_SIDES, PAGE_BORDER_SIDES, headingLevel, twipsToPx } from "./docx.js";
+import { DEFAULT_SECTION, LINE_ONE, MARGIN_SIDES, PAGE_BORDER_SIDES, headingLevel, lineGridPitchTwips, twipsToPx } from "./docx.js";
 import type { CommentAnchor } from "./comments.js";
 import type { Presentation, Shape, SlideParagraph } from "./pptx.js";
 
@@ -252,12 +252,11 @@ const ptToPx = (pt: number): number => roundPx((pt * 96) / 72);
  * a section that states no `w:docGrid` at all means, and what every fixture written before this round states. A
  * grid with no `w:linePitch` says where the lines are but not how far apart they lie, and a number this model
  * would have to invent is not a grid: all 234 state the pitch, so the branch is spec-guarded, not corpus-fed.
+ * 哪一种 `w:type` 算「有行网格」由 `lineGridPitchTwips` 一处判定，「段落」对话框那句小字问的是同一个答案。
  */
 const gridPitchPx = (sec: Section): number | undefined => {
-  const g = sec.docGrid;
-  if (!g || g.type !== "lines") return undefined;
-  const pitch = g.linePitch === undefined ? undefined : twipsToPx(g.linePitch);
-  return pitch !== undefined && pitch > 0 ? roundPx(pitch) : undefined;
+  const pitch = lineGridPitchTwips(sec);
+  return pitch === undefined ? undefined : roundPx(twipsToPx(pitch));
 };
 
 /**

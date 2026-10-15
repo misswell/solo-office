@@ -4,7 +4,8 @@ import { currentUnit, twipText, twipsFromUnit, unitDef } from "./doc-units.js";
 import type { Unit } from "./doc-units.js";
 
 /**
- * 「段落」对话框：竖向节奏那三个数——段前、段后、行距。#132 把样式表代劳的那 8px 判死之后，这一族**只剩文件自己
+ * 「段落」对话框：竖向节奏那三个数——段前、段后、行距，外加一颗「如果定义了文档网格，则对齐到网格」的勾。
+ * #132 把样式表代劳的那 8px 判死之后，这一族**只剩文件自己
  * 说过的那一条路**，而这条路此前没有任何一条 UI 命令能走：段前/段后 13,426 段里 11,977 段两边都没说，说了的也只有
  * 段前 517 / 段后 463（`.scratch/spacing-audience.ts`，201 份）；行距这一家 201 份里 7,810 枚写了 `w:line`，其中
  * `w:lineRule="exact"` 5,627 枚、`auto` 2,178 枚、`atLeast` 5 枚（`.scratch/spacing-shape.ts`）。能画不能改，
@@ -27,6 +28,18 @@ import type { Unit } from "./doc-units.js";
  * twip 精确位数预填（「页面设置」那条同一个口径），所以没人改过的对话框按一次「确定」不改任何字节。
  * 件把同一个间距用两笔写（`w:before` 缇 + `w:beforeLines` 1/100 行，201 份里段前 2,007 枚、段后 1,850 枚这么写）时，
  * 下面那行小字把用户填的数按**件自己的那一档**换算成「几行」摆出来——那一档的来路在 `linePitchTwips`。
+ *
+ * 第三颗勾是「如果定义了文档网格，则对齐到网格」（`w:snapToGrid`，§17.3.1.87）。它的归属也是 WPS 自己声明的：
+ * `wpsentries.kuip:1108-1110` 在段落那一页挂了三条——`CT_Paragraph.RB_GridlinesOnParagraph`（name
+ * ="ParagraphGroupGridlines"）、`…GridlinesInParaLayoutTab`（ParagraphGridlines）与
+ * `…SnapToGridInParaLayoutTab`（**ParagraphSnapToGrid**）。13 份 `.kuip` 里没有任何 `DocumentGrid`/`LinePitch`
+ * 命令，即节那一层的网格档位**没有可照的 WPS 命令**，本片不做；做的这一颗正是段落级的 `ParagraphSnapToGrid`。
+ * 受众（`.scratch/snap-grid-audience.ts`，同一批 201 份）：`document.xml` 里 3,466 枚 `w:snapToGrid`，
+ * `p>w:pPr` 直接孩子 3,394 枚（另有 72 枚挂在 `w:rPr` 里，§17.3.1.87 不放它在那儿，读取也不看那儿）；
+ * 正文段（13,426 段）里说开 1,353、说关 672，而**这 672 段全在定义了行网格的节下**（201 份里 200 份首节写
+ * `w:docGrid w:type="lines"`，`w:linePitch` 312 缇 189 份 / 319 7 份 / 326 4 份）。拼法只有两种：说开**裸写**
+ * 1,416 枚、说关 `w:val="0"` 2,381 枚，没有一枚写 `"1"` 或 `"false"`；`w:pPr` 里它的前后兄弟也固定是
+ * `adjustRightInd → snapToGrid → spacing|jc|ind`（2,185 + 597 + 270 枚），与 `PPR_ORDER` 同一条。
  */
 const STYLE_ID = "solo-para-spacing-styles";
 
@@ -51,6 +64,9 @@ const CSS = `
 .solo-pg-dialog select { width: 100%; }
 .solo-pg-num span { color: #6b7280; flex: none; }
 .solo-pg-hint { color: #6b7280; font-size: 11px; min-height: 14px; }
+.solo-pg-snap { display: grid; gap: 3px; font-size: 12px; color: #4b5563; }
+.solo-pg-snap > span { display: flex; align-items: center; gap: 7px; }
+.solo-pg-snap input { width: 14px; height: 14px; flex: none; margin: 0; padding: 0; }
 .solo-pg-error { margin: 0; min-height: 18px; color: #b42318; font-size: 12px; }
 .solo-pg-dialog footer { display: flex; gap: 8px; justify-content: flex-end; }
 .solo-pg-dialog footer button { padding: 5px 14px; border-radius: 7px; border: 1px solid #c9d3e6; background: #f5f7fb; cursor: pointer; font: inherit; }
@@ -76,12 +92,24 @@ export type ParaSpacingPatch = {
   line?: number;
   /** 与 `line` 同进同出的那一条规则。 */
   lineRule?: LineSpacingRule;
+  /** `w:snapToGrid`：勾着 = 吸本节行网格，没勾 = 这一段明写着不吸。键不存在 = 这一笔不改。 */
+  snapToGrid?: boolean;
 };
 
 /** 打开时对话框上摆的那份数，来自段落**解析后**的状态（样式链借来的也算，那正是页面上画的）。 */
 export type ParaSpacingState = ParaSpacingPatch & {
   /** 件在这一段里认的一行多高（缇）：`w:before`／(`w:beforeLines`/100)。说不出来就没有那行小字。 */
   linePitchTwips?: number;
+  /**
+   * 段落所在那一节的行网格一格多高（`w:docGrid@w:linePitch`，缇）；`undefined` = 那一节没定义行网格
+   * （§17.3.2.9 的 `w:type` 不是 `lines`，或整句没写）。勾着但没有网格时排版一点不动，所以这一格要说出来。
+   */
+  docGridTwips?: number;
+  /**
+   * 所选跨段且那几段对「吸不吸网格」说法不一致。这一格摆不出三态（缺省就是「吸」，所以没说的也摆成勾着），
+   * 于是由那行小字说明；用户一旦改过勾选，值就按同一份写给所有所选段。
+   */
+  snapMixed?: boolean;
 };
 
 /** 一个 `w:line` 折算成「几倍行距」，只在 `auto` 那一族里有意义（`LINE_ONE` = 单倍，§17.3.1.27）。 */
@@ -138,13 +166,15 @@ export function showParaSpacingDialog(state: ParaSpacingState, apply: (patch: Pa
     <label>行距<select name="pg-rule">${ROWS.map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select></label>
     <label><span data-value-label>设置值</span><span class="solo-pg-num"><input name="pg-value" inputmode="decimal" autocomplete="off" value=""><span data-value-unit></span></span></label>
     </div>
+    <label class="solo-pg-snap"><span><input type="checkbox" name="pg-snap">如果定义了文档网格，则对齐到网格</span><small class="solo-pg-hint" data-hint="pg-snap"></small></label>
     <p class="solo-pg-error" role="status"></p>
     <footer><button type="button" class="solo-pg-cancel">取消</button><button type="submit" class="solo-pg-apply">确定</button></footer></form>`;
 
-  const field = (name: string): HTMLInputElement => dialog.querySelector(`[name="${name}"]`)!;
+  const field = (name: string): HTMLInputElement => dialog.querySelector<HTMLInputElement>(`[name="${name}"]`)!;
   const before = field("pg-before");
   const after = field("pg-after");
   const value = field("pg-value");
+  const snap = field("pg-snap");
   const rule = dialog.querySelector<HTMLSelectElement>('select[name="pg-rule"]')!;
   const valueUnit = dialog.querySelector<HTMLElement>("[data-value-unit]")!;
   const valueLabel = dialog.querySelector<HTMLElement>("[data-value-label]")!;
@@ -153,6 +183,9 @@ export function showParaSpacingDialog(state: ParaSpacingState, apply: (patch: Pa
 
   // 行距那一格预填成页面正在画的那一档；用户没换过它就不交这一笔（`touched` 只管这一格）。
   let touched = false;
+  // 「对齐到网格」同一条纪律，另一只 `snapTouched`：这一枚开关的缺省是**吸**（§17.3.1.87 说 `w:snapToGrid`
+  // 没写就算 on），所以没说的段落也摆成勾着——但勾着不等于用户说了，不交这一笔，件里那句借来的话照旧归样式。
+  let snapTouched = false;
   const pick = (): string => {
     const { line, lineRule } = state;
     if (line === undefined) return "auto:1";
@@ -162,6 +195,7 @@ export function showParaSpacingDialog(state: ParaSpacingState, apply: (patch: Pa
     return m === 1 ? "auto:1" : m === 1.5 ? "auto:1.5" : m === 2 ? "auto:2" : "auto";
   };
   rule.value = pick();
+  snap.checked = state.snapToGrid !== false;
   /** 「设置值」那一格装的是倍数还是长度，跟着行距那一档走；单倍/1.5/2 自己说完了数，格子禁用。 */
   const needsValue = (): boolean => NEEDS_VALUE.has(rule.value);
   const isMultiple = (): boolean => rule.value === "auto";
@@ -187,7 +221,7 @@ export function showParaSpacingDialog(state: ParaSpacingState, apply: (patch: Pa
     const lends = kind === "mult" ? state.lineRule === "auto" : state.lineRule === rule.value;
     value.value = lends && state.line !== undefined ? (kind === "mult" ? String(multipleOf(state.line)) : twipText(state.line)) : "";
   };
-  /** 段前段后那两行小字：件自己两笔一起说时，把用户填的数换算成「几行」。说不出一档就没有这一行。 */
+  /** 段前段后与「对齐到网格」那三行小字：件自己两笔一起说时，把用户填的数换算成「几行」。说不出一档就没有这一行。 */
   const syncHints = (): void => {
     const pitch = state.linePitchTwips;
     for (const [name, input] of [["pg-before", before], ["pg-after", after]] as const) {
@@ -195,6 +229,17 @@ export function showParaSpacingDialog(state: ParaSpacingState, apply: (patch: Pa
       const v = Number(input.value.trim());
       hint.textContent = pitch && input.value.trim() && Number.isFinite(v) ? `≈ ${(twipsFromUnit(v, u) / pitch).toFixed(2)} 行（件里一行=${twipText(pitch)}${unitName}）` : "";
     }
+    // 网格那一行的话只能说文件自己说的：本节有没有行网格、一格多高（`w:docGrid`）。没有网格时这一勾
+    // 落下去排版一点不动（`render.ts` 的 `lineHeight` 拿不到 `pitchPx`），所以那句话必须摆出来，不让用户勾了才发现。
+    const grid = dialog.querySelector<HTMLElement>('[data-hint="pg-snap"]')!;
+    const pitchTxt = state.docGridTwips === undefined ? "" : `本节一格 ${twipText(state.docGridTwips)}${unitName}`;
+    grid.textContent = state.docGridTwips === undefined
+      ? "本节没有定义行网格，勾与不勾都不改排版。"
+      : state.snapMixed && !snapTouched
+        ? `所选几段说法不一致：有的吸，有的不吸（${pitchTxt}）。改一次勾选会把同一个答案写给全部。`
+        : snap.checked
+          ? `行高按本节的网格取整格：${pitchTxt}。`
+          : `这一段不吸网格：行高只按它自己说的算（${pitchTxt} 不用）。`;
   };
   const build = (): ParaSpacingPatch | undefined => {
     const b = readGap(before, u);
@@ -207,6 +252,7 @@ export function showParaSpacingDialog(state: ParaSpacingState, apply: (patch: Pa
     const patch: ParaSpacingPatch = {};
     if (b.value !== undefined) patch.beforeTwips = b.value;
     if (a.value !== undefined) patch.afterTwips = a.value;
+    if (snapTouched) patch.snapToGrid = snap.checked;
     if (touched) {
       if (needsValue()) {
         const v = Number(value.value.trim());
@@ -239,7 +285,9 @@ export function showParaSpacingDialog(state: ParaSpacingState, apply: (patch: Pa
     build();
   });
   dialog.addEventListener("change", (e) => {
-    if ((e.target as HTMLElement).getAttribute("name") === "pg-rule") touched = true;
+    const name = (e.target as HTMLElement).getAttribute("name");
+    if (name === "pg-rule") touched = true;
+    if (name === "pg-snap") snapTouched = true;
     syncValueBox();
     syncHints();
     build();

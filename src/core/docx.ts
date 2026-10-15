@@ -1,4 +1,5 @@
 import { OpcPackage, asArray, childSpans, children, decodeEntities, elementContent } from "./opc.js";
+import { ThemeFonts, themeFontScript } from "./theme-fonts.js";
 import { isMark } from "./run-identity.js";
 import { dataUrl } from "./media.js";
 import { coversWholeSet, decideSetXml, decideSlots, recordedSlots, setChildren } from "./doc-table-revisions.js";
@@ -1565,6 +1566,12 @@ export class WordDocument {
    * on, §17.7.2. Only one rung, and it goes in below the chain rather than inside it — see `paragraph`.
    */
   private docDefaultRun: RunStyle = {};
+  /**
+   * The package's theme fonts, read once at the top of `read` because §17.3.2's four `w:rFonts` theme attributes are
+   * how a `w:rPr` can name a face without naming one — 58 of the 201 WPS-written documents put their whole document
+   * floor there (`.scratch/theme-font-audience.ts`). See `ThemeFonts` for what resolves and what deliberately does not.
+   */
+  private theme: ThemeFonts = ThemeFonts.none;
   /** Resolved style chains, keyed by the style id the paragraph names. See `paraLent`. */
   private lentMemo = new Map<string | undefined, Partial<ParaStyle> | undefined>();
   /** The same memo for `runLent`, keyed by which kind of chain was walked as well as by the style. */
@@ -1675,6 +1682,7 @@ export class WordDocument {
 
   private read(pkg: OpcPackage): void {
     this.pkg = pkg;
+    this.theme = ThemeFonts.fromPackage(pkg);
     this.readStyles(pkg);
     this.readNumbering(pkg);
     this.readMedia(pkg);
@@ -1729,7 +1737,7 @@ export class WordDocument {
     // §17.7.2 puts `w:rPrDefault` beneath the *whole* ladder, so it is kept as the one floor the run read ends on
     // and not folded into every style: merged in, a style that states no size would read as stating the default's,
     // and a chain whose ancestor holds the real one would stop at the first hop.
-    const stated = (defaults ? runStyle(defaults) : {}) as Record<string, unknown>;
+    const stated = (defaults ? runStyle(defaults, this.theme) : {}) as Record<string, unknown>;
     const floor: Record<string, unknown> = {};
     for (const k of LENT_RUN_KEYS) if (stated[k] !== undefined) floor[k] = stated[k];
     this.docDefaultRun = floor as RunStyle;
@@ -1739,7 +1747,7 @@ export class WordDocument {
         name: s.name?.["@_val"] ?? id,
         basedOn: s.basedOn?.["@_val"],
         next: s.next?.["@_val"],
-        rPr: s.rPr ? runStyle(s.rPr) : undefined,
+        rPr: s.rPr ? runStyle(s.rPr, this.theme) : undefined,
         pPr: s.pPr ? paraStyle(s.pPr) : undefined,
       });
       if (this.defaultParaStyleId === undefined && s["@_type"] === "paragraph" && s["@_default"] === "1") this.defaultParaStyleId = id;
@@ -1846,7 +1854,15 @@ export class WordDocument {
             start: Number(l.start?.["@_val"] ?? 1),
             ilvl: num(l["@_ilvl"]),
             indent: num(l.pPr?.ind?.["@_left"]),
-            font: rFonts?.["@_ascii"] ?? rFonts?.["@_hAnsi"],
+            font:
+              rFonts?.["@_ascii"] ??
+              rFonts?.["@_hAnsi"] ??
+              // A level may hand its bullet font to the theme instead of naming a face. That is the same glyph the two
+              // rounds above chase (a PUA character from a particular face), so leaving the reference unread draws a
+              // box where the file said Wingdings-like art. None of the 201 files does it yet — their numbering.xml
+              // holds 421 `w:rFonts` and no theme attribute among them (`.scratch/theme-font-audience.ts`) — so this
+              // is the same `w:rFonts` read the same way everywhere else, not a shape measured to be needed.
+              this.theme.face(rFonts?.["@_asciiTheme"] ?? rFonts?.["@_hAnsiTheme"], themeFontScript(asArray(l.rPr?.lang)[0]?.["@_eastAsia"])),
             sizePt: szHalf === undefined ? undefined : szHalf / 2,
           };
         }),
@@ -1887,8 +1903,10 @@ export class WordDocument {
     // Faces the same way, one attribute at a time: a mark that names only `w:eastAsia` must not hand back an
     // undefined Latin face that erases the chain's, and an empty `w:ascii=""` states nothing (§17.7.2).
     const markRFonts = asArray(pPr.rPr?.rFonts)[0];
-    const markAscii = markRFonts?.["@_ascii"] || undefined;
-    const markEast = markRFonts?.["@_eastAsia"] || undefined;
+    // The same one-attribute-at-a-time rule, with the theme answering only where the mark states no literal face.
+    const markScript = themeFontScript(asArray(pPr.rPr?.lang)[0]?.["@_eastAsia"]);
+    const markAscii = markRFonts?.["@_ascii"] || this.theme.face(markRFonts?.["@_asciiTheme"], markScript) || undefined;
+    const markEast = markRFonts?.["@_eastAsia"] || this.theme.face(markRFonts?.["@_eastAsiaTheme"], markScript) || undefined;
     // Colour the same way, with the two filters `readRunStyle` applies to a run's own: `auto` is no statement,
     // and a value that is not a colour is no statement either — the mark then falls through to the chain.
     const markColorRaw = asArray(pPr.rPr?.color)[0]?.["@_val"];
@@ -2105,7 +2123,7 @@ export class WordDocument {
     // the character style it names, and the paragraph it sits in. §17.7.2 ranks them in that order, so only a
     // field the run leaves open is taken from below. `w:rStyle` says where the properties come from and is not
     // itself one of them, so it is read off the parsed node rather than through `runStyle`.
-    const own = runStyle(r.rPr ?? {});
+    const own = runStyle(r.rPr ?? {}, this.theme);
     const named = r.rPr?.rStyle?.["@_val"];
     const fromChar = typeof named === "string" ? this.runLent(named, false) : undefined;
     const style: RunStyle = { ...fromPara, ...fromChar, ...own };
@@ -2123,7 +2141,7 @@ export class WordDocument {
           id: Number(change["@_id"]) || 0,
           author: String(change["@_author"] ?? ""),
           date: change["@_date"],
-          prev: runStyle(change.rPr ?? {}),
+          prev: runStyle(change.rPr ?? {}, this.theme),
           ...(record.length ? { prevSlots: record } : {}),
         }
       : undefined;
@@ -4967,7 +4985,12 @@ function coversColumn(t: Table, at: number, rec: CellRevision): boolean {
   });
 }
 
-function runStyle(rPr: any): RunStyle {
+/**
+ * One `w:rPr` read into fields. `theme` resolves the four `w:rFonts` theme attributes — a run that names no face of
+ * its own but points at `minorHAnsi` did name one, two parts away — and is left off only by callers whose `w:rPr`
+ * comes from somewhere with no theme to ask.
+ */
+function runStyle(rPr: any, theme?: ThemeFonts): RunStyle {
   const s: RunStyle = {};
   if (rPr.b !== undefined) s.bold = rPr.b["@_val"] !== "0" && rPr.b["@_val"] !== "false";
   if (rPr.i !== undefined) s.italic = rPr.i["@_val"] !== "0" && rPr.i["@_val"] !== "false";
@@ -5004,6 +5027,21 @@ function runStyle(rPr: any): RunStyle {
     if (ascii) s.font = ascii;
     const east = rPr.rFonts["@_eastAsia"];
     if (east) s.fontEastAsia = east;
+    // A face can also be stated by pointing at the theme instead of naming one, and these files do it for
+    // 250 of styles.xml's references and 58 documents' whole run floor (`.scratch/theme-font-audience.ts`).
+    // Only where no literal face was written: §17.3.2 gives no precedence between the two, and nothing in
+    // the 201 documents needs it — every theme-referencing `w:rFonts` there states no literal face at all.
+    if (theme) {
+      const script = themeFontScript(asArray(rPr.lang)[0]?.["@_eastAsia"]);
+      if (!s.font) {
+        const f = theme.face(rPr.rFonts["@_asciiTheme"] ?? rPr.rFonts["@_hAnsiTheme"], script);
+        if (f) s.font = f;
+      }
+      if (!s.fontEastAsia) {
+        const f = theme.face(rPr.rFonts["@_eastAsiaTheme"], script);
+        if (f) s.fontEastAsia = f;
+      }
+    }
   }
   const va = rPr.vertAlign?.["@_val"];
   if (va === "superscript" || va === "subscript" || va === "baseline") s.vertAlign = va;

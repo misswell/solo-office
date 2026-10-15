@@ -1,5 +1,5 @@
 import type { Block, Carried, CarriedInline, Inline, NumberLevel, PageBorder, Paragraph, RowInfo, Section, Table, TableBorder, TableCell, WordDocument } from "./docx.js";
-import { DEFAULT_SECTION, MARGIN_SIDES, PAGE_BORDER_SIDES, headingLevel, twipsToPx } from "./docx.js";
+import { DEFAULT_SECTION, LINE_ONE, MARGIN_SIDES, PAGE_BORDER_SIDES, headingLevel, twipsToPx } from "./docx.js";
 import type { CommentAnchor } from "./comments.js";
 import type { Presentation, Shape, SlideParagraph } from "./pptx.js";
 
@@ -328,7 +328,7 @@ const lineHeight = (p: Paragraph, pitchPx?: number): string => {
     const floor = pitch === undefined ? twipsToPx(p.lineSpacing) : gridLinesPx(twipsToPx(p.lineSpacing), pitch);
     return `max(${floor}px, ${text === undefined ? "1em" : `${ptToPx(text)}px`})`;
   }
-  const multiple = p.lineSpacing / 240;
+  const multiple = p.lineSpacing / LINE_ONE;
   if (pitch === undefined) return multiple.toFixed(2);
   return `max(${pitch}px, ${text === undefined ? `${multiple}em` : `${ptToPx(text * multiple)}px`})`;
 };

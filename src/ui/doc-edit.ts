@@ -1,7 +1,7 @@
-import type { Block, Carried, CarriedInline, FormatRevision, HfSegment, Inline, ParaStyle, PageGeometry, PageSetup, Paragraph, ParagraphFormatRevision, PropSlot, Revision, RevisionEntry, RowInfo, RunStyle, Table, TableCell, WordDocument } from "../core/docx.js";
+import type { Block, Carried, CarriedInline, FormatRevision, HfSegment, Inline, LineSpacingRule, ParaStyle, PageGeometry, PageSetup, Paragraph, ParagraphFormatRevision, PropSlot, Revision, RevisionEntry, RowInfo, RunStyle, Table, TableCell, WordDocument } from "../core/docx.js";
 import type { CommentAnchor, DocComment } from "../core/comments.js";
 import { bodyShape, commentTexts } from "../core/comments.js";
-import { DEFAULT_SECTION, RUN_STYLE_KEYS, countTexts, ownParaStyle, ownRunStyle, paraStyleOf, paragraphTextsOf, runStyleOf, sectionEndsOf, stampNow, syncParaSlots, twipsToPx } from "../core/docx.js";
+import { DEFAULT_SECTION, RUN_STYLE_KEYS, countTexts, ownParaStyle, ownRunStyle, paraSpacingPitch, paraStyleOf, paragraphTextsOf, runStyleOf, sectionEndsOf, stampNow, syncParaSlots, twipsToPx } from "../core/docx.js";
 import type { CellWhere, TableEdit } from "../core/doc-table-ops.js";
 import { cellRangeFor, cellRect, cellsInRect, cellsInSweep, deleteColumnHere, deleteRowHere, gridColumns, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, splitHere, splitTableAt } from "../core/doc-table-ops.js";
 import { IMAGE_EXT_BY_MIME } from "../core/media.js";
@@ -12,6 +12,8 @@ import { applySheetGaps, caretCharTop, lineCaretAnchor, lineNumberAt, measurePag
 import { ReviewPanel } from "./doc-review.js";
 import { OutlinePanel } from "./doc-outline.js";
 import { openPageSetup as showPageSetupDialog } from "./doc-page-setup.js";
+import { showParaSpacingDialog } from "./doc-para-spacing.js";
+import type { ParaSpacingPatch, ParaSpacingState } from "./doc-para-spacing.js";
 import { openWordCount, type WordCountReadout } from "./doc-word-count.js";
 import { openGoTo } from "./doc-goto.js";
 
@@ -2430,7 +2432,7 @@ export class DocEditor {
    * colour name is a background. A control that shows 「没提过」 the same way as 「说了没有」 answers the reader
    * with a silence where the document spoke.
    */
-  markState(): { bold: boolean; italic: boolean; underline: boolean; strike: boolean; sizePt?: number; highlight?: string; align?: string; list?: "bullet" | "number" } {
+  markState(): { bold: boolean; italic: boolean; underline: boolean; strike: boolean; sizePt?: number; highlight?: string; align?: string; list?: "bullet" | "number"; line?: number; lineRule?: LineSpacingRule } {
     const sel = document.getSelection();
     let el: Element | null = null;
     if (sel?.rangeCount) {
@@ -2460,6 +2462,8 @@ export class DocEditor {
       highlight: carried.highlight,
       align: paragraph?.align,
       list,
+      line: paragraph?.lineSpacing,
+      lineRule: paragraph?.lineSpacingRule,
     };
   }
 
@@ -2610,6 +2614,67 @@ export class DocEditor {
       const wasSlots = paragraph.pPrSlots;
       paragraph.indentLeft = next.indentLeft;
       if (next.indentLeftChars !== undefined) paragraph.indentLeftChars = next.indentLeftChars;
+      syncParaSlots(paragraph);
+      if (this.trackRevisions && JSON.stringify(was) !== JSON.stringify(paraStyleOf(paragraph))) {
+        paragraph.revFormat = this.signParagraphRevision(paragraph, was, wasSlots);
+      }
+    }
+    const caret = this.caretPath();
+    this.render();
+    if (caret) this.setCaret(this.clamp(caret));
+    this.hooks.changed();
+    return true;
+  }
+
+  /**
+   * 「段落」那三个数的**读数**：段前、段后、行距，按页面上正在画的那一份交（模型字段本来就是解析过样式链的，
+   * 从样式借来的也算——那正是这一格该说的）。多选跨段时逐段比对：几段说得不一样就整键交 `undefined`，那一格空着，
+   * 而不是拿第一段的答案替全部说话。`linePitchTwips` 只给「件自己两笔一起写」那行小字用，取第一个说得出档的段。
+   */
+  paraSpacingState(): ParaSpacingState | undefined {
+    const targets = this.selectionParagraphs();
+    if (!targets.length) return undefined;
+    const agree = <K extends "spacingBefore" | "spacingAfter" | "lineSpacing" | "lineSpacingRule">(key: K): Paragraph[K] | undefined => {
+      const first = targets[0]![key];
+      return targets.every((p) => p[key] === first) ? first : undefined;
+    };
+    const state: ParaSpacingState = {
+      beforeTwips: agree("spacingBefore"),
+      afterTwips: agree("spacingAfter"),
+      line: agree("lineSpacing"),
+      lineRule: agree("lineSpacingRule"),
+    };
+    state.linePitchTwips = targets.map((p) => paraSpacingPitch(p)).find((x) => x !== undefined);
+    return state;
+  }
+
+  /** Ribbon command: 「段落」——段前／段后／行距，从光标或选区那几段读，改完写回 `w:spacing`。 */
+  openParaSpacing(): void {
+    const state = this.paraSpacingState();
+    if (!state) return;
+    showParaSpacingDialog(state, (patch) => this.setParagraphSpacing(patch));
+  }
+
+  /**
+   * ribbon 行距下拉与「段落」对话框共用的落笔处。**只写用户动过的那一句**：三个键都不在补丁里就整击作废，
+   * 连撤销栈都不进——与 `shiftParagraphIndent` 已经在边上时同一个判定。`w:line` 与 `w:lineRule` 必须同进同出
+   * （201 份的 7,810 枚里 0 枚只写一边），所以补丁交了 `line` 就一定带着规则；只交一半会被读成上一份的规则，
+   * 那正是 #132 钉住过的那类漂移。
+   */
+  setParagraphSpacing(patch: ParaSpacingPatch): boolean {
+    const targets = this.selectionParagraphs();
+    if (!targets.length) return false;
+    if (patch.beforeTwips === undefined && patch.afterTwips === undefined && patch.line === undefined) return false;
+    this.snapshot(this.caretPath());
+    for (const paragraph of targets) {
+      const was = paraStyleOf(paragraph);
+      const wasSlots = paragraph.pPrSlots;
+      if (patch.beforeTwips !== undefined) paragraph.spacingBefore = patch.beforeTwips;
+      if (patch.afterTwips !== undefined) paragraph.spacingAfter = patch.afterTwips;
+      if (patch.line !== undefined) {
+        paragraph.lineSpacing = patch.line;
+        paragraph.lineSpacingRule = patch.lineRule ?? "auto";
+      }
       syncParaSlots(paragraph);
       if (this.trackRevisions && JSON.stringify(was) !== JSON.stringify(paraStyleOf(paragraph))) {
         paragraph.revFormat = this.signParagraphRevision(paragraph, was, wasSlots);

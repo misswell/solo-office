@@ -4460,20 +4460,29 @@ const pprRank = (tag: string): number => {
 };
 
 /**
- * Putting a paragraph's `w:pPr` slots in line with the four properties the model spells for itself, so a
- * toolbar click on alignment or a list button lands *and* the properties the model cannot explain stay.
+ * Putting a paragraph's `w:pPr` slots in line with the properties the model spells for itself, so a toolbar
+ * click on alignment, a list button or the 段落 dialog lands *and* the properties the model cannot explain stay.
  * This is the same split `applyCellProps` makes for a cell's `w:tcPr`: the set stays the file's, only the
  * named child moves.
  *
  * A prefix is copied from the set rather than assumed: `w` is only an alias for the words namespace where the
  * part binds it, and a child written with a different prefix than its neighbours would read as another element.
  *
- * `w:spacing` stays out: it states more attributes than the model has fields for, and rewriting it from the
- * fields would take `w:lineRule` down with it. `w:ind` is re-spelled, but only over the attributes the model
- * holds (`left`, `leftChars`, `right`, `firstLine`, `firstLineChars`, `hanging`) — the character spellings it
- * does not hold (`w:rightChars`, `w:hangingChars`) stay in place with the file's own bytes, and the whole child
- * is left untouched whenever none of the six moved. That is what lets 增加缩进量 move a Chinese indent without
- * the file saying 420 缇 in one attribute and 4 字符 in the next.
+ * `w:spacing` and `w:ind` are re-spelled attribute by attribute rather than replaced, because both state more
+ * than the model has fields for. `w:ind` holds six of them (`left`, `leftChars`, `right`, `firstLine`,
+ * `firstLineChars`, `hanging`) and leaves the character spellings it does not hold (`w:rightChars`,
+ * `w:hangingChars`) in place with the file's own bytes. `w:spacing` holds four (`w:before`, `w:after`,
+ * `w:line`, `w:lineRule`) and the child usually states more: over the 10,248 `w:spacing` elements in the 201
+ * WPS-written documents (`.scratch/spacing-shape.ts`), 2,160 name `w:beforeLines` and 2,005 `w:afterLines` —
+ * the same gap in 1/100 行 — and 987/967 name `w:*Autospacing`. Dropping those on a 段前 click is how a save
+ * quietly rewrites a paragraph the user only nudged.
+ *
+ * The two spellings of one gap must not be left to disagree: readers honour `w:beforeLines` over `w:before`,
+ * so writing only the absolute would make the click invisible in WPS. Where the element states both, their
+ * quotient is the document's own 行 pitch — 312 缇 in 2,007 of the 段前 and 1,850 of the 段后 pairs, and 前后同档
+ * in all 1,865 elements that state both pairs (never a disagreement) — and that pitch re-spells the 行 count in
+ * step. The 33 + 91 elements that state a 行 count and no absolute give no pitch, so the one the user just
+ * replaced is the one that goes: a paragraph the page has to draw from a stated distance.
  */
 export function syncParaSlots(p: Paragraph): void {
   const slots = p.pPrSlots;
@@ -4496,6 +4505,7 @@ export function syncParaSlots(p: Paragraph): void {
     p.numPr,
     p.numPr ? `<${prefix}:numPr><w:ilvl w:val="${p.numPr.ilvl}"/><w:numId w:val="${p.numPr.numId}"/></${prefix}:numPr>` : "",
   );
+  const moved = (key: keyof ParaStyle): boolean => !samePropValue(p.asRead?.[key], p[key]);
   // 缩进那一句：六个属性跟着字段走，件里说过而模型没有字段的那些（`w:rightChars`、`w:hangingChars`）留在原位。
   // 一个都没动时整句按原件的字节留着——属性之间怎么空格、值怎么写，都是文件自己的事。
   const IND_ATTRS: [keyof ParaStyle, string][] = [
@@ -4504,30 +4514,59 @@ export function syncParaSlots(p: Paragraph): void {
   ];
   const IND_ORDER = ["left", "leftChars", "right", "rightChars", "firstLine", "firstLineChars", "hangingChars", "hanging"];
   const indSlot = slots.find((s) => s.tag === "ind");
-  const indMoved = IND_ATTRS.some(([key]) => !samePropValue(p.asRead?.[key], p[key]));
+  const indMoved = IND_ATTRS.some(([key]) => moved(key));
   if (indMoved) {
-    const written = [...(indSlot?.xml ?? "").matchAll(/([A-Za-z_][-\w.]*:)?([\w-]+)\s*=\s*"([^"]*)"/g)].map((m) => ({
-      name: m[2],
-      xml: `${m[1] ?? ""}${m[2]}="${m[3]}"`,
-    }));
+    const written = attrsWritten(indSlot?.xml ?? "");
     for (const [key, name] of IND_ATTRS) {
       const value = p[key] as number | undefined;
-      const at = written.findIndex((k) => k.name === name);
-      if (value === undefined) {
-        if (at >= 0) written.splice(at, 1);
-        continue;
-      }
-      const spell = { name, xml: `${prefix}:${name}="${Math.round(value)}"` };
-      if (at >= 0) written[at] = spell;
-      else {
-        const after = written.findIndex((k) => IND_ORDER.indexOf(k.name) > IND_ORDER.indexOf(name));
-        if (after < 0) written.push(spell);
-        else written.splice(after, 0, spell);
-      }
+      putAttr(written, name, value === undefined ? undefined : String(Math.round(value)), IND_ORDER, prefix);
     }
     wanted.push({ tag: "ind", xml: written.length ? `<${prefix}:ind ${written.map((k) => k.xml).join(" ")}/>` : "" });
   }
-  const owned = new Set(["pStyle", "pageBreakBefore", "numPr", "jc", ...(indMoved ? ["ind"] : [])]);
+  // 段前段后与行距那一句，同一条口径：模型握着的四个属性跟着字段走，件里另写的 `w:beforeLines`/`w:afterLines`
+  // （1/100 行）与 `w:*Autospacing` 留在原位。只动**这一击动过的那一笔**——没动的连件里古怪的写法一起照抄。
+  const SPACING_ATTRS: [keyof ParaStyle, string][] = [
+    ["spacingBefore", "before"], ["spacingAfter", "after"], ["lineSpacing", "line"], ["lineSpacingRule", "lineRule"],
+  ];
+  const SPACING_ORDER = ["before", "beforeLines", "beforeAutospacing", "after", "afterLines", "afterAutospacing", "line", "lineRule"];
+  const spacingSlot = slots.find((s) => s.tag === "spacing");
+  const spacingMoved = SPACING_ATTRS.some(([key]) => moved(key));
+  if (spacingMoved) {
+    const written = attrsWritten(spacingSlot?.xml ?? "");
+    // 改之前的那份字节才是件的说法：档位从「件自己两笔一起说」的那一对里读，改完的值里读不出来了。
+    const said = new Map(written.map((k) => [k.name, k.value]));
+    /** 件认的一行多高（缇）：`w:before`／(`w:beforeLines`/100)。只说行数不说绝对值的那种给不出这一档。 */
+    const pitchOf = (abs: string, lines: string): number | undefined =>
+      linePitchTwips(said.get(abs), said.get(lines));
+    const saidOn = (name: string): boolean => {
+      const v = said.get(name);
+      return v !== undefined && v !== "0" && v !== "false";
+    };
+    const putGap = (key: keyof ParaStyle, name: string, linesName: string, autoName: string): void => {
+      if (!moved(key)) return;
+      const value = p[key] as number | undefined;
+      putAttr(written, name, value === undefined ? undefined : String(Math.round(value)), SPACING_ORDER, prefix);
+      // 行单位那一笔跟得上就跟上：读者认 `w:beforeLines` 多过认 `w:before`，留着一个对不上的行数，这一击在
+      // WPS 里等于没发生。件只说了行数、说不出档位时（201 份里段前 33 枚、段后 91 枚），被替掉的那句就摘掉。
+      if (said.has(linesName)) {
+        const pitch = pitchOf(name, linesName);
+        putAttr(written, linesName, value === undefined || pitch === undefined ? undefined : String(Math.round((value * 100) / pitch)), SPACING_ORDER, prefix);
+      }
+      // 「按行自动加空」与刚填进去的数不能两头都说；关掉的字面是件自己写的那种（语料里 13 枚就这么写）。
+      if (said.has(autoName) && value !== undefined && saidOn(autoName)) putAttr(written, autoName, "0", SPACING_ORDER, prefix);
+    };
+    putGap("spacingBefore", "before", "beforeLines", "beforeAutospacing");
+    putGap("spacingAfter", "after", "afterLines", "afterAutospacing");
+    if (moved("lineSpacing") || moved("lineSpacingRule")) {
+      const line = p.lineSpacing as number | undefined;
+      putAttr(written, "line", line === undefined ? undefined : String(Math.round(line)), SPACING_ORDER, prefix);
+      // 件里 `w:line` 与 `w:lineRule` 从来没单独出现过（201 份里 7,810 枚成对、0 枚只写一边），所以行高连着
+      // 它的单位一起写；模型只存了数没存规则时按 §17.3.1.27 的缺省签名 `w:auto`。
+      putAttr(written, "lineRule", line === undefined ? undefined : String(p.lineSpacingRule ?? "auto"), SPACING_ORDER, prefix);
+    }
+    wanted.push({ tag: "spacing", xml: written.length ? `<${prefix}:spacing ${written.map((k) => k.xml).join(" ")}/>` : "" });
+  }
+  const owned = new Set(["pStyle", "pageBreakBefore", "numPr", "jc", ...(indMoved ? ["ind"] : []), ...(spacingMoved ? ["spacing"] : [])]);
   let next = slots.filter((s) => !owned.has(s.tag));
   for (const w of wanted) {
     const at = next.findIndex((s) => pprRank(s.tag) > pprRank(w.tag));
@@ -4535,6 +4574,70 @@ export function syncParaSlots(p: Paragraph): void {
   }
   p.pPrSlots = next.length ? [...next].sort((a, b) => pprRank(a.tag) - pprRank(b.tag)) : undefined;
 }
+
+/**
+ * `w:lineRule="auto"` 那一族里 `w:line` 的单位：240 分之一行（§17.3.1.27）。`exact`/`atLeast` 的两笔按缇数，
+ * 与这一个数无关——同一个字段两种单位，所以线（渲染）、格（对话框）与下拉（ribbon）三处必须共用这一个换算。
+ */
+export const LINE_ONE = 240;
+
+/**
+ * 件的同一句 `w:spacing` 里两笔一起说时，它们的商就是这个文档认的「一行多高」（缇）：`w:before`／(`w:beforeLines`/100)。
+ * 201 份里这样成对写下的有段前 2,007 枚、段后 1,850 枚，商几乎全落在 312 缇（`kind="lines"` 的 `w:docGrid` 那一档，
+ * 见 #130），1,865 枚前后两档没有一枚不一致（`.scratch/spacing-shape.ts`）。只说一边说不出来。
+ */
+export const linePitchTwips = (absTwips: string | undefined, lines: string | undefined): number | undefined => {
+  const a = Number(absTwips);
+  const l = Number(lines);
+  return Number.isFinite(a) && a > 0 && Number.isFinite(l) && l > 0 ? (a * 100) / l : undefined;
+};
+
+/**
+ * 这一段自己那句 `w:spacing` 里件认的一行多高（缇），给对话框把「0.5 行」这样的字面摆出来用。只读这一段的
+ * `w:pPr` 直接孩子：段落标记 `w:rPr` 里那个同名的 `w:spacing` 说的是字符间距（201 份里 913 枚，值是 `w:val`），
+ * 它整枚待在 `rPr` 槽的字节里，不是这里的输入。
+ */
+export function paraSpacingPitch(p: Paragraph): number | undefined {
+  const xml = p.pPrSlots?.find((s) => s.tag === "spacing")?.xml ?? "";
+  const get = (name: string): string | undefined =>
+    new RegExp(`(?:^|\\s)(?:[A-Za-z_][-\\w.]*:)?${name}\\s*=\\s*"([^"]*)"`).exec(xml)?.[1];
+  return linePitchTwips(get("before"), get("beforeLines")) ?? linePitchTwips(get("after"), get("afterLines"));
+}
+
+/** 一个属性集里已经写着的属性：名字去掉前缀，字节连前缀一起照抄（`w:rightChars` 那种没字段的就留在原位）。 */
+function attrsWritten(xml: string): { name: string; xml: string; value: string }[] {
+  return [...xml.matchAll(/([A-Za-z_][-\w.]*:)?([\w-]+)\s*=\s*"([^"]*)"/g)].map((m) => ({
+    name: m[2]!,
+    xml: `${m[1] ?? ""}${m[2]}="${m[3]}"`,
+    value: m[3]!,
+  }));
+}
+
+/**
+ * 把模型握着的那一个属性摆进文件自己的序列：`spell` 为空就是这一笔不要了；原来写着就原地换值，没写过就按
+ * `order` 的先后插进第一个比它晚的属性前面——顺序是件定的（201 份的 10,248 枚 `w:spacing` 里属性先后只有一簇，
+ * 全在 `before, beforeLines, beforeAutospacing, after, afterLines, afterAutospacing, line, lineRule` 这一条上）。
+ */
+function putAttr(
+  written: { name: string; xml: string; value: string }[],
+  name: string,
+  spell: string | undefined,
+  order: readonly string[],
+  prefix: string,
+): void {
+  const at = written.findIndex((k) => k.name === name);
+  if (spell === undefined) {
+    if (at >= 0) written.splice(at, 1);
+    return;
+  }
+  if (at >= 0) written[at] = { name, xml: `${prefix}:${name}="${spell}"`, value: spell };
+  else {
+    const later = written.findIndex((k) => order.indexOf(k.name) > order.indexOf(name));
+    if (later < 0) written.push({ name, xml: `${prefix}:${name}="${spell}"`, value: spell });
+    else written.splice(later, 0, { name, xml: `${prefix}:${name}="${spell}"`, value: spell });
+  }
+}
+
 
 /** One edge of `w:tblBorders` or `w:tcBorders`. */
 function borderOf(node: any): TableBorder | undefined {

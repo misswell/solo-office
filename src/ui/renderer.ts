@@ -1,5 +1,5 @@
 import { Spreadsheet } from "../core/xlsx.js";
-import { WordDocument } from "../core/docx.js";
+import { LINE_ONE, WordDocument } from "../core/docx.js";
 import { Presentation } from "../core/pptx.js";
 import { OpcPackage } from "../core/opc.js";
 import { writeXlsx } from "../core/write.js";
@@ -253,6 +253,18 @@ const DOC_SIZES = [10, 10.5, 12, 14, 16, 18, 24, 36];
 const DECK_SIZES = [12, 14, 16, 18, 20, 24, 28, 32, 40, 44];
 
 /**
+ * 行距下拉那五档倍数。档位与次序按 Writer 自己声明的那一族命令：`wpsentries.kuip` 的
+ * `CT_Home.RB_Paragraph.*.m_LineSpacing` 挂 `LineSpacing1_0 / 1_5 / 2_0 / 2_5 / 3_0 / LineSpacingMore` 六条，
+ * `wpscommon.kuip` 把前三条的字面写成 `1.0`/`1.5`/`2.0`；后两条的中文在 `.qm` 那堵墙后面读不出，所以「2.5」
+ * 「3.0」与「行距…」是照前三条的写法补的**推断字面**，不是取到的词。落下去的数是 `w:line = 倍数 × 240`
+ * 配 `w:lineRule="auto"`（§17.3.1.27）。
+ *
+ * 别拿 `wppentries.kuip`（演示）里那条 `LineSpacingInHomeTab` 当依据：那一份还多摆 1.25 与 1.75，是 PPT 的档位，
+ * 不是 Writer 的。
+ */
+const DOC_LINES = [1, 1.5, 2, 2.5, 3];
+
+/**
  * 突出显示's palette. The names are what `w:highlight w:val=` can hold (§17.17.64 has 17 members); these eight are
  * what this ribbon can paint. Measured over the 86 WPS documents, only `yellow` and `none` ever reach a run with
  * text in them, so the palette gap has no audience today and is left alone (`.scratch/ribbon-echo-measure.ts`).
@@ -485,6 +497,28 @@ function buildDocRibbon(): void {
   // Touch Bar 图标的中文标题写的就是「增加缩进量」「减少缩进量」），右键菜单里也有同名的一对。
   button(align, "outdent", "缩进−", "减少缩进量", () => editor?.shiftParagraphIndent(-1));
   button(align, "indent", "缩进+", "增加缩进量", () => editor?.shiftParagraphIndent(1));
+  // 行距那一格与上面两条同属 `CT_Home.RB_Paragraph`。五档倍数按 `wpsentries.kuip` 的 `m_LineSpacing` 摆，
+  // 最后一条 `LineSpacingMore` 开「段落」对话框——段前/段后与 最小值/固定值 没有下拉档，只能从那里说。
+  chooser(
+    align,
+    "linespacing",
+    "行距",
+    [...DOC_LINES.map((n): [string, string] => [String(n), n.toFixed(1)]), ["more", "行距…"]],
+    (v) => {
+      if (v === "more") {
+        editor?.openParaSpacing();
+        syncDocRibbon();
+        return;
+      }
+      // 只有那五档是命令：回显会把「件里说的那一档」插成一个额外选项，而一段没写行距的段落那一格是空着的
+      // （`selectedIndex = -1`，值是空串）。`Number("")` 是 0，落进 `w:line` 就是一句「这一段的行盒零高」，
+      // 所以认不出来的字面不当命令办。
+      const mult = DOC_LINES.find((n) => String(n) === v);
+      if (mult === undefined) return;
+      editor?.setParagraphSpacing({ line: Math.round(mult * LINE_ONE), lineRule: "auto" });
+      syncDocRibbon();
+    },
+  );
 
   const lists = group();
   button(lists, "bullet", "• 符号", "项目符号", () => editor?.setParagraph({ list: "bullet" }));
@@ -584,6 +618,14 @@ function syncDocRibbon(): void {
   // Three sentences the file could have written — 没提过底色 / 提了「没有」 / 提了某个颜色名 — three readings of
   // the box. Leaving it blank is the first, and only the `none` option spells the second.
   if (hl) echoChoice(hl, state?.highlight, DOC_HIGHLIGHTS.map(([v]) => v), DOC_HIGHLIGHTS.length);
+  // 行距那一格只认 `w:lineRule="auto"` 那一族：`w:line` 在 固定值/最小值 下数的是缇，把它当成倍数摆进这一格
+  // 就是给 ribbon 编一个件里没说过的数（#132 之前正是这样把 固定值 22 磅画成 1.83 倍的）。所以这两档与「没提过」
+  // 一律留空——那句话说的是另一件事，要看得去「段落」对话框。件里 7,810 枚 `w:line` 有 2,178 枚是 `auto`。
+  const ls = ctl.linespacing as HTMLSelectElement | undefined;
+  if (ls) {
+    const mult = state?.lineRule === "auto" && state.line !== undefined ? state.line / LINE_ONE : undefined;
+    echoChoice(ls, mult === undefined ? undefined : String(mult), DOC_LINES.map(String), DOC_LINES.filter((n) => n < (mult ?? 0)).length);
+  }
   mark("track", editor?.trackingChanges ?? false);
   mark("revPane", editor?.reviewPaneOpen ?? false);
   mark("navPane", editor?.outlinePaneOpen ?? false);

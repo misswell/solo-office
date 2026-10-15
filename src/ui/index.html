@@ -354,10 +354,24 @@
       .page .para { margin: 0; min-height: 1lh; white-space: pre-wrap; }
       .page[contenteditable="true"] { outline: none; }
       .page[contenteditable="true"] .bullet { user-select: none; }
-      .page .s-Title { font-size: 26pt; font-weight: 600; margin-bottom: 4px; }
-      .page .s-Subtitle { font-size: 14pt; color: #5a6270; margin-bottom: 18px; }
-      .page h1, .page h2, .page h3, .page h4 { font-family: var(--font-ui); line-height: 1.25; margin: 20px 0 8px; }
-      .page h1 { font-size: 19pt; } .page h2 { font-size: 15.5pt; } .page h3 { font-size: 13pt; }
+      /* A heading is a paragraph the *file* put a level on, not a paragraph the App restyles. Where the file's
+         ladder answers, `render.ts` says so inline and an inline declaration wins; where it says nothing, the
+         heading takes exactly what body text takes. This sheet used to answer instead: `h1` 19pt, `h2` 15.5pt,
+         `h3` 13pt, all in the UI face at line-height 1.25, plus `.s-Title` 26pt/600 with a 4px gap and
+         `.s-Subtitle` 14pt with an 18px one. Measured (`.scratch/title-css-dom.html`): a heading that states
+         nothing drew a 32.66px line box over the 25.92px its neighbours draw — a quarter taller, and none of it
+         asked for by the file. The audience is tiny either way: of the 201 WPS-written documents' 13,426 root
+         paragraphs, 489 are reached by those selectors, 486 of those carry their own size inline, and 0 are named
+         `Title` or `Subtitle` — WPS signs 「标题 1」, and the class comes from `w:name`
+         (`.scratch/title-css-audience.ts`). What WPS itself draws for a heading whose style states nothing is
+         未取证: the installed bundle ships no Writer template (`office6/templates` holds only two `.et` files), so
+         there is nothing here to copy, and the App must not guess a line box.
+         `font: inherit` is not a no-op: measured, an `h1` the sheet does not reach draws 32px/700 with a 21.44px
+         gap over the 16px it inherits — the browser's own sheet is a second invention, larger than the first. And
+         these three declarations are the only answer a heading gets from here: an `h1` placed on the paper without
+         the `para` class, so `.page .para` cannot reach it, still draws 16px/400/25.92px and 0px of gap
+         (`.scratch/title-css-dom.html`). */
+      .page h1, .page h2, .page h3, .page h4 { font: inherit; line-height: inherit; margin: 0; }
       .page .doc-table { border-collapse: collapse; margin: 10px 0; width: auto; }
       .page .doc-table td { border: 1px solid #b9bfc7; padding: 5px 9px; vertical-align: top; }
       .page .bullet { display: inline-block; min-width: 22px; color: #4a5160; }

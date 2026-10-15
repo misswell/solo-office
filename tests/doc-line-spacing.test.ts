@@ -481,23 +481,34 @@ describe("docx 段前段后（w:spacing@w:before/@w:after）：文件没说就�
     expect(marginOf(doc, "只说行距", "bottom")).toBe("");
   });
 
-  it("keeps the page stylesheet from inventing a gap under a paragraph", () => {
-    // A paragraph's vertical gap has exactly one owner: `renderParagraph`, inline, from `w:before`/`w:after`.
-    // So no rule that reaches a `.para` element may answer one. Comments are stripped first — the justification
-    // above the rule says "8px" in prose and is not a declaration.
+  it("keeps the page stylesheet from answering anything a paragraph's own file could answer", () => {
+    // A paragraph's formatting has exactly one owner: the file, applied by `renderParagraph` as inline style. So
+    // no rule that reaches a paragraph element — by the `para` class, by the `s-<样式名>` class, or by the
+    // `h1…h4` tag a resolved level is drawn as — may state a gap, a size, a face, a weight or a line height,
+    // except as `0` or `inherit`. Comments are stripped first: the prose above these rules quotes pixel numbers
+    // and is not a declaration. `.page` on its own is not in scope — the paper's inherited 12pt/1.62 is the floor
+    // a silent paragraph falls back to, not an answer aimed at one paragraph — and neither is any rule outside
+    // the paper (`.empty h1`, a dialog's `h2`), or `.page .doc-table`, which is not a paragraph.
     const sheet = readFileSync(new URL("../src/ui/index.html", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
-    const rules = [...sheet.matchAll(/([^{}]+)\{([^}]*)\}/g)].filter(([, sel]) => /\.para\b/.test(sel));
+    // One scan, reused below: the same sheet parsed twice in the same test was measured once as 193 rules and
+    // once as 0, and the guard is only worth anything if the two stages look at the same parse.
+    const matched = [...sheet.matchAll(/([^{}]+)\{([^}]*)\}/g)];
+    const rules = matched
+      .map(([, sel, body]) => ({ sel: sel.trim(), body }))
+      .filter((r) => /\.page\b/.test(r.sel) && (/\.(?:para|s-[\w-]+)\b/.test(r.sel) || /\bh[1-6]\b/.test(r.sel)));
     expect(rules.length).toBeGreaterThan(0); // the scan must not go vacuous on a renamed selector
-    const invented = rules.flatMap(([, sel, body]) =>
-      [...body.matchAll(/(?:^|;)\s*(margin(?:-(?:top|bottom))?)\s*:\s*([^;!]+)/g)].flatMap(([decl, prop, value]) =>
-        /^0(\s+0)*$/.test(value.trim()) ? [] : [`${sel.trim()}: ${prop}: ${value.trim()} (${decl})`],
-      ),
+    const invented = rules.flatMap((r) =>
+      [...r.body.matchAll(/(?:^|;)\s*(margin|margin-top|margin-bottom|font|font-size|font-family|font-weight|line-height)\s*:\s*([^;!]+)/g)]
+        .flatMap(([, prop, value]) => (/^(?:0(\s+0)*|inherit)$/.test(value.trim()) ? [] : [`${r.sel}: ${prop}: ${value.trim()}`])),
     );
     expect(invented).toEqual([]);
-    // Not covered here, and deliberately: `.page .s-Title` (4px), `.page .s-Subtitle` (18px) and
-    // `.page h1…h4` (20px 0 8px) put the same kind of invented gap on the 785 heading paragraphs the 86-document
-    // corpus resolves a heading level for (`.scratch/outline-census.ts`, cited in `render.ts`). Taking those off
-    // is what WPS draws for a heading whose style states no gap — un取证 so far, so they stay and this line says so.
+    // The heading case this line used to wave past: `.page h1…h4` once answered 19pt/15.5pt/13pt in the UI face
+    // at line-height 1.25, and `.page .s-Title`/`.s-Subtitle` answered 26pt+4px and 14pt+18px. #135 measured what
+    // that drew — a heading stating nothing took a 32.66px line box over the 25.92px body text next to it
+    // (`.scratch/title-css-dom.html`) — and over the 201 WPS-written documents those selectors reach 489 of their
+    // 13,426 paragraphs, 486 of which already carry their own size inline, while `Title`/`Subtitle` name 0 of them
+    // (`.scratch/title-css-audience.ts`). What WPS draws for a heading whose style states nothing is 未取证, so
+    // the rules now answer nothing and this guard is what keeps them answering nothing.
   });
 
   it("draws the gap the file states, in the unit it is written", () => {

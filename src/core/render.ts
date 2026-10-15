@@ -356,11 +356,13 @@ function renderParagraph(p: Paragraph, doc: WordDocument, counters: Map<string, 
   // 86 WPS-written documents' 46,417 paragraphs have a level, 785 of them a heading one (0 × 30, 1 × 368,
   // 2 × 367, 3 × 20, `.scratch/outline-census.ts`).
   const outline = headingLevel(p);
-  // The tag follows that level, but only down to 4: the page's stylesheet sizes h1…h4, which is where every
-  // paragraph here lands, while a browser draws h5 and below *smaller* than body text — turning a deep level
-  // into a heading would draw the file's heading under the paragraph it introduces. A `w:pStyle` name still
-  // counts on its own, because a Word file can name `Heading2` and state no level; 0 of the corpus's 433
-  // level-stating styleIds match that pattern, so on these files the branch below never fires alone.
+  // The tag follows that level, but only down to 4. The page's stylesheet holds those four level-neutral
+  // (`font: inherit; line-height: inherit; margin: 0`), so an `h1` the file says nothing about draws exactly the
+  // line body text draws (#135); a deeper level stays a `div`, because the browser's own sheet would draw `h5`
+  // and below *smaller* than body text — turning a deep level into a heading would put the file's heading under
+  // the paragraph it introduces. A `w:pStyle` name still counts on its own, because a Word file can name
+  // `Heading2` and state no level; 0 of the corpus's 433 level-stating styleIds match that pattern, so on these
+  // files the branch below never fires alone.
   const named = /^Heading([1-9])$/i.exec(p.styleId ?? "");
   const drawn = outline ?? (named ? Number(named[1]) : undefined);
   const tag = drawn !== undefined && drawn <= 4 ? `h${drawn}` : "div";

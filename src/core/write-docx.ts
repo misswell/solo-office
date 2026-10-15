@@ -336,9 +336,10 @@ const RUN_PROPS: {
  * does. A moved field that now holds nothing takes its attribute with it — that is what refusing a font change
  * means.
  *
- * A moved slot takes its theme reference with it. Over the 54,996 `w:rFonts` in all the parts of the 201 documents
- * this machine's WPS wrote, **no slot ever states a literal face and a theme reference side by side** — while
- * 5,229 of those elements legitimately state one slot literally and another by theme, so the rule is per slot, not
+ * A moved slot takes its theme reference with it. Over the 55,585 `w:rFonts` in every part of the 201 documents
+ * this machine's WPS wrote (54,200 in `word/document.xml`, 796 in `word/styles.xml`, 156 in headers and footers,
+ * 433 elsewhere), **no slot ever states a literal face and a theme reference side by side** — while 5,260 of those
+ * elements legitimately state one slot literally and another by theme, so the rule is per slot, not
  * per element (`.scratch/theme-slot-pair.ts`). Writing `w:ascii` next to a standing `w:asciiTheme` would put the run
  * in a state §17.3.2 gives no precedence for and the files never reach; leaving the reference standing is what the
  * other half of the pair is for, since a slot the model did not move keeps saying where its face comes from.

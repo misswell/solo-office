@@ -57,9 +57,9 @@ const NUMBERING = `<w:numbering xmlns:w="${NS_W}">
  * Every way this model lets a `w:rFonts` name a face without naming one, each in the paragraph shape the files
  * write it in. The audience is measured, not assumed (`.scratch/theme-font-audience.ts` over the 201 documents
  * this machine's WPS wrote): 54,200 `w:rFonts` in the bodies, **5,702 of them carrying a theme attribute**. That is
- * per *element*, and the interesting count is per *slot* (`.scratch/theme-slot-pair.ts`, all 54,996 `w:rFonts` in
+ * per *element*, and the interesting count is per *slot* (`.scratch/theme-slot-pair.ts`, all 55,585 `w:rFonts` in
  * every part of those files): **no slot ever states a literal face and a theme reference together — 0 elements**,
- * while 5,229 elements do carry both, each one naming one slot literally and pointing another at the theme. So a
+ * while 5,260 elements do carry both, each one naming one slot literally and pointing another at the theme. So a
  * reference is the slot saying "no face of my own", never an extra opinion next to a face the same slot named.
  * 27,831 state only literal faces, so both shapes live in the same parts. By layer: 2,756 sit in a paragraph's
  * `w:pPr/w:rPr` and 2,946 in a run's own; by part, 264 more in `word/styles.xml` —
@@ -71,7 +71,7 @@ const NUMBERING = `<w:numbering xmlns:w="${NS_W}">
  *
  * What the fixtures therefore hold: the floor read through the theme (`地板给的脸`), a style's `w:rPr`
  * (`样式给的脸`), a literal face and a reference on the *same slot* for the case §17.3.2 leaves unranked
- * (`字面先赢`, stated by 0 of the 54,996 — pinned as a rule, not as a shape), the East Asian slot reached through the
+ * (`字面先赢`, stated by 0 of the 55,585 — pinned as a rule, not as a shape), the East Asian slot reached through the
  * run's own `w:lang@w:eastAsia` (`汉字有语言`) and refused without it (`汉字无语言`, `标记只说hint`), the paragraph
  * mark's own pair (`标记的脸`), and all four slots handed to the theme at once (`整行交给主题`) — the shape the
  * write side is measured against, since moving one of its slots must retire that slot's reference and leave the

@@ -23,7 +23,7 @@ const saved = (bytes: Uint8Array): string => {
  * which is a slot of the package's theme part rather than a font. 5,702 of the 54,200 `w:rFonts` in the bodies of
  * the 201 documents this machine's WPS wrote are stated that way, and the rule that shape follows is per slot —
  * across every part of those files, **0 elements state a literal face and a theme reference for the same slot**,
- * while 5,229 state one slot literally and point another at the theme (`.scratch/theme-slot-pair.ts`). These tests
+ * while 5,260 state one slot literally and point another at the theme (`.scratch/theme-slot-pair.ts`). These tests
  * pin which references the file lets this reader answer, and — just as deliberately — which it does not, then which
  * half of the element a face edit is allowed to rewrite.
  */
@@ -44,7 +44,7 @@ describe("docx theme fonts", () => {
   });
 
   it("keeps a literal face ahead of a theme reference on the same element", () => {
-    // §17.3.2.11 ranks neither attribute over the other, and per slot 0 of the 54,996 elements in these files write
+    // §17.3.2.11 ranks neither attribute over the other, and per slot 0 of the 55,585 tags in these files write
     // both (`.scratch/theme-slot-pair.ts`), so this is pinned as a rule for a shape the corpus never reaches.
     expect(runAt(open(makeThemeDocx()), "字面先赢").font).toBe("Times New Roman");
   });

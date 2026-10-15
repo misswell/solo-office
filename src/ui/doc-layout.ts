@@ -17,7 +17,9 @@
  *   没有从正文里占走高度。Word 一族是把带子放在页边距之内的，所以我们量出的页数可能比真机少——**未取证**差多少。
  * - 行盒从**画出来的盒子**里量：`Range.getClientRects()` 给的是每个文字碎片的盒子，同一行上的碎片按 `top`
  *   归堆（容差取本段自己那条 `line-height` 的八成：跨行至少差一整行高，同行上两段字号不同也就差几像素）。
- *   一堆算一行，占的高度取这堆的上下沿，但不小于本段的行高。段与段之间真正画出来的空白（`w:spacing` 的
+ *   一堆算一行，**这一行占多高按它在纸上推进多少算**（本堆上沿到下一堆上沿，最后一堆到这一截在纸上的下沿），
+ *   不小于本段的行高——浏览器的行盒可以比 `line-height` 那句声明高（字体内容盒顶出来的，见 `lineBoxesOf`
+ *   的注），只按声明 charging 会一路累出纸的底边距。段与段之间真正画出来的空白（`w:spacing` 的
  *   before/after 在 CSS 里合成后的那一截）并进下一段第一枚单位里，所以流的总高与纸上画的一致。
  * - 段落只在**它自己的行盒之间**断开跨页；表格按**整行**铺（一行算一行，格子里换了几行不改这个数），
  *   只读容器（`.doc-carry`）整块算一枚。`w:cantSplit` 这一版没读，所以「这行不许拆」的文件与没写的同样铺。
@@ -104,9 +106,10 @@ export type LayoutUnit = {
 
 /**
  * 量出来的单位还带着它在纸上画出来的**上沿**（视口坐标，与 `getBoundingClientRect()` 同一套）；
- * 光标→页的查找靠它。`height` 里并进来的段间空白落在**声明区间的末尾**（上沿取的是本行第一枚文字碎片的
- * 上沿，并进来的空白是这一枚之后、下一枚之前的），所以相邻两枚的声明区间首尾相接——接缝上像素级的比较
- * 分不出究竟在哪一枚里，查找要用光标矩形的**中线**（中线在行盒正中，离接缝有一整个半行高）。
+ * 光标→页的查找靠它。`height` 说的是这一枚在流里**吃掉多高**（`lineBoxesOf` 按画出来的推进量、
+ * `unitBlocksOf` 把段间空白并到这一块的第一枚上），对这一块的第一枚来说那截空白画在它的上沿**之上**——
+ * 所以 `top + height` 不是这一枚的地盘界线，相邻两枚的「声明区间」会互相压过头。查光标落在哪一枚要按
+ * **画出来的上沿**切带（`unitIndexAt`），中线取点则保证离上下两条界都有半个行高。
  */
 export type PlacedUnit = LayoutUnit & { top: number };
 
@@ -183,29 +186,37 @@ function lineHeightOf(el: HTMLElement): number {
 /**
  * 一个范围里量出来的行盒：同一行上的碎片按 `top` 归成一堆。
  * 比的是**这一堆第一条**的 `top`：同行上字号不一的碎片最多差几像素，跨行至少差一整行高。
+ *
+ * 一枚行盒占多高，问的是**它在纸上推进了多少**：本堆上沿到下一堆上沿，最后一堆到这一截在纸上的下沿
+ * （`to`）。不是问 `line-height` 那句声明——浏览器排一行用的是字体自己的内容高，声明够矮时行盒比声明高：
+ * 11 磅的中文行在 `.scratch/lh-drift-dom.ts` 里量到「声明 23.76px、画出来 24.77px」（run 那颗 span 的
+ * 内容盒 21px，按基线一摆就把行盒顶出声明之外）。一枚差 1px 看着不要紧，六十段就累出 60px——装箱照声明
+ * charging，正文会一路铺过纸的底边距、页数少算一页，而 `pageAtCaret` 读的是画出来的位置，两处从此不是
+ * 同一个数。量不出下沿（`to` 不可信、`NaN`）时退回声明那句。
  */
-function lineBoxesOf(range: Range, lh: number): { top: number; height: number }[] {
+function lineBoxesOf(range: Range, lh: number, from: number, to: number): { top: number; height: number }[] {
   const rects = [...range.getClientRects()].filter((r) => r.height > 0);
   if (!rects.length) return [];
   rects.sort((a, b) => a.top - b.top || b.bottom - a.bottom);
-  const out: { top: number; height: number }[] = [];
-  let top = rects[0]!.top;
-  let bottom = rects[0]!.bottom;
+  const runs: { top: number; bottom: number }[] = [];
   const tol = lh * 0.8;
-  const flush = (): void => {
-    out.push({ top, height: Math.max(lh, bottom - top) });
-  };
-  for (const r of rects.slice(1)) {
-    if (r.top - top <= tol) {
-      bottom = Math.max(bottom, r.bottom);
+  for (const r of rects) {
+    const cur = runs[runs.length - 1];
+    if (cur && r.top - cur.top <= tol) {
+      cur.bottom = Math.max(cur.bottom, r.bottom);
       continue;
     }
-    flush();
-    top = r.top;
-    bottom = r.bottom;
+    runs.push({ top: r.top, bottom: r.bottom });
   }
-  flush();
-  return out;
+  // 第一枚那一格的高从这一截在纸上的上沿起算（`from` 比碎片上沿还高时，那截空白也是这段占的），但**报出来的
+  // 上沿仍是碎片的**：切纸的推距（`applySheetGaps`）与「纵向位置」那一格都要把内容对齐到纸沿，取点换了 1px
+  // 就等于把每一张纸的第一行都往上挪 1px。
+  const starts = runs.map((g, i) => (i === 0 && Number.isFinite(from) ? Math.min(from, g.top) : g.top));
+  return runs.map((g, i) => {
+    const start = starts[i]!;
+    const lastBottom = i + 1 < runs.length ? runs[i + 1]!.top : Number.isFinite(to) ? Math.max(to, g.bottom) : g.bottom;
+    return { top: g.top, height: Math.max(lh, lastBottom - start) };
+  });
 }
 
 /** `render.ts` 把 `w:pageBreakBefore` 写成 `page-break-before:always`，这里只认画出来的那一句。 */
@@ -227,6 +238,13 @@ function unitsOfParagraph(el: HTMLElement): PlacedUnit[] {
   const cuts = [...el.querySelectorAll<HTMLElement>(`br, .${SHEET_GAP_CLASS}`)].filter(
     (n) => n.tagName !== "BR" || forcesPage(n as unknown as HTMLBRElement),
   );
+  // 每一截在纸上的上下沿：第一截从块自己的内容上沿起，往后各截从前一枚切断元素的下沿起；末尾收到下一枚
+  // 切断元素的上沿，最后一截收到块的内容下沿。`br` 画出来是零高的（量不到自己那一行），不当边界。
+  const box = el.getBoundingClientRect();
+  const cs = getComputedStyle(el);
+  const contentTop = box.top + (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.paddingTop) || 0);
+  const contentBottom = box.bottom - (parseFloat(cs.borderBottomWidth) || 0) - (parseFloat(cs.paddingBottom) || 0);
+  const cutBoxes = cuts.map((c) => c.getBoundingClientRect());
   const out: PlacedUnit[] = [];
   for (let i = 0; i <= cuts.length; i++) {
     const range = document.createRange();
@@ -234,7 +252,11 @@ function unitsOfParagraph(el: HTMLElement): PlacedUnit[] {
     else range.setStartAfter(cuts[i - 1]!);
     if (i === cuts.length) range.setEnd(el, el.childNodes.length);
     else range.setEndBefore(cuts[i]!);
-    const boxes = lineBoxesOf(range, lh);
+    const prev = i > 0 ? cutBoxes[i - 1]! : undefined;
+    const next = i < cuts.length ? cutBoxes[i]! : undefined;
+    const from = prev ? (prev.height > 0 ? prev.bottom : NaN) : contentTop;
+    const to = next ? (next.height > 0 ? next.top : NaN) : contentBottom;
+    const boxes = lineBoxesOf(range, lh, from, to);
     if (i === 0) {
       out.push(...boxes.map((b) => ({ height: b.height, forcePage: false, top: b.top })));
       continue;
@@ -526,13 +548,25 @@ function locateUnit(blocks: readonly { el: HTMLElement; units: PlacedUnit[] }[],
 }
 
 /**
- * `caretMid`（视口坐标，光标自己那枚矩形的**中线** = 上沿 + 高/2）落在第几枚。中线而不是上沿：相邻两枚
- * 单位的声明区间首尾相接（见 `PlacedUnit`），而光标矩形的字体盒上沿与行盒跨度差零点几像素且方向不定，
- * 正好落在缝上；中线在行盒正中，离接缝总有半个行高。中线落在纸面之上/之下时取下（或最后一）枚——
- * 防呆，不是「按最近的算」。`pageAtCaret` 与 `rowColumnAt` 共用这一趟。
+ * `caretMid`（视口坐标，光标自己那枚矩形的**中线** = 上沿 + 高/2）落在第几枚。带子按**画出来的上沿**切：
+ * 这一枚管「自己的上沿 → 下一枚的上沿」（最后一枚收到 `top + height`）。不能拿 `top + height` 当界——
+ * 一块的第一枚把段间空白和块内容上沿以上那截也算进了高（见 `PlacedUnit`），那样它的高会压到第二枚头上：
+ * 折行边界那一处的光标（中线在本枚上沿之下半个光标高）会被判回上一行。上一版的说法是「相邻两枚首尾相接，
+ * 中线离接缝总有半个行高」——接缝确实在上沿，可第一枚的地盘被高撑到过界，`w:spacing` 的段后距越大越容易踩。
+ * 中线而不是上沿：光标矩形的字体盒上沿与碎片上沿差零点几像素且方向不定，正好压在界线上。
+ * 中线落在纸面之上/之下时取下（或最后一）枚——防呆，不是「按最近的算」。`pageAtCaret` 与 `rowColumnAt` 共用这一趟。
  */
 function unitIndexAt(units: readonly PlacedUnit[], caretMid: number): number {
-  let idx = units.findIndex((u) => u.height > 0 && caretMid >= u.top && caretMid < u.top + u.height);
+  let idx = -1;
+  for (let i = 0; i < units.length; i++) {
+    const u = units[i]!;
+    if (u.height <= 0) continue;
+    const next = i + 1 < units.length ? units[i + 1]!.top : u.top + u.height;
+    if (caretMid >= u.top && caretMid < Math.max(next, u.top)) {
+      idx = i;
+      break;
+    }
+  }
   if (idx < 0) idx = units.findIndex((u) => u.top > caretMid);
   if (idx < 0) idx = units.length - 1;
   return idx;

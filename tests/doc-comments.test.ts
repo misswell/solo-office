@@ -259,7 +259,9 @@ describe("docx 批注：渲染", () => {
     const html = renderWord(open(makeDocx()));
     expect(html).not.toContain("cmt-anchor");
     expect(html).not.toContain("cmt-in");
-    expect(html).toContain('<div class="para">');
+    // A plain paragraph is still a plain `<div class="para">`, with nothing but the size its own ladder resolved
+    // (this fixture's `w:docDefaults` states 11 磅) and no comment scaffolding around it.
+    expect(html).toContain('<div class="para" style="font-size:11pt">');
   });
 });
 

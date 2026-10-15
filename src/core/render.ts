@@ -241,6 +241,9 @@ const firstLineIndent = (p: Paragraph): string => {
 /** Three decimals is enough to place a line on a page and keeps the declaration readable in the DOM. */
 const roundPx = (px: number): number => Math.round(px * 1000) / 1000;
 
+/** CSS px at 96dpi against the points a `.docx` states sizes in: 1 磅 = 4/3 px. */
+const ptToPx = (pt: number): number => roundPx((pt * 96) / 72);
+
 /**
  * The line grid the page measures snapped paragraphs in, in px, or `undefined` when the section asks for none.
  * §17.3.2.9 gives `w:docGrid@w:type` four spellings and the corpus uses one: **234 of its 235 `w:sectPr` state a
@@ -269,6 +272,22 @@ const gridPitchPx = (sec: Section): number | undefined => {
 const gridLinesPx = (px: number, pitchPx: number): number => roundPx(Math.max(1, Math.ceil(px / pitchPx - 1e-9)) * pitchPx);
 
 /**
+ * The tallest character height this paragraph asks for, in points — the height a 倍数 or a 最小值 line is really
+ * measured against. Two places the file can put it: the run's own resolved size (§17.7.2's ladder, docDefaults
+ * included, so a run that states no `w:sz` still has one) and the paragraph mark's (§17.3.1.4). Taking the
+ * greater of the two is what keeps a floor from clipping: 63 of the 201 WPS-written documents' 1,298 snapped
+ * multiplier paragraphs hold text taller than their own mark (`.scratch/em-ref-impact.ts`), so a floor read off
+ * the mark alone would draw those lines under the glyphs. Undefined only when the file says nothing about any
+ * of it, which is where `em` and the page's own size are all there is to draw against.
+ */
+const textHeightPt = (p: Paragraph): number | undefined => {
+  const sizes: number[] = [];
+  if (p.markSizePt !== undefined && p.markSizePt > 0) sizes.push(p.markSizePt);
+  for (const i of p.inlines) if (i.sizePt !== undefined && i.sizePt > 0) sizes.push(i.sizePt);
+  return sizes.length ? Math.max(...sizes) : undefined;
+};
+
+/**
  * The paragraph's line height as one CSS value, in the unit the file wrote it in. `w:line` counts 240ths of a
  * line under `w:auto` (13,396 of the corpus's elements) and twips under `w:exact`/`w:atLeast` (6,802 of them),
  * so drawing every one of them as a multiplier put 固定值 22 磅 at 1.83 倍行距 — a third of the heights in the
@@ -277,8 +296,8 @@ const gridLinesPx = (px: number, pitchPx: number): number => roundPx(Math.max(1,
  *
  * `exact` is a height, so it is simply that height; glyphs taller than it are cut, which is what 固定值 does.
  * `atLeast` is a floor, and CSS has no line height that says "this much, or whatever the text needs", so it is
- * drawn as the greater of the stated height and `1em` — the least that cannot clip the paragraph's own glyphs.
- * 未取证 how much taller WPS makes such a line when the text needs more than `1em`, since that is a question
+ * drawn as the greater of the stated height and the paragraph's own tallest text — the least that cannot clip it.
+ * 未取证 how much taller WPS makes such a line when the text needs more than that, since that is a question
  * about font metrics and this page has none.
  *
  * `pitchPx` is the section's line grid, and when it is there and the paragraph has not opted out
@@ -287,24 +306,31 @@ const gridLinesPx = (px: number, pitchPx: number): number => roundPx(Math.max(1,
  * blocks saying nothing about the grid while the page drew them all at the App's own 1.62 × 12pt = 25.92px
  * against the files' 20.8px — and one that states a height takes that height rounded up to whole grid lines. A
  * `w:auto` multiplier is the one case CSS cannot round: `1.5倍` means one and a half times *the line's own text*,
- * which the browser only knows per line, so it is drawn as the greater of one grid line and that many `em`. The
- * grid reaching a table cell is the same reading as the same property on any other paragraph (§17.3.1.87 is a
- * paragraph property, and cells hold paragraphs); WPS' own in-cell grid is 未取证.
+ * which the browser only knows per line, so on a grid it is drawn as the greater of one grid line and that many
+ * times the paragraph's tallest text. That number has to be a length rather than `em`: `em` on a declaration
+ * taken by the whole paragraph resolves against the paragraph's own font size, and before this the paragraph
+ * carried none, so every one of those floors was measured against the App's 12pt — 735 of the 1,298 such
+ * paragraphs in the 201 documents draw a different height once the file's own size answers instead, in 22 of
+ * the files (`.scratch/em-ref-impact.ts`). The grid reaching a table cell is the same reading as the same
+ * property on any other paragraph (§17.3.1.87 is a paragraph property, and cells hold paragraphs); WPS' own
+ * in-cell grid is 未取证.
  */
 const lineHeight = (p: Paragraph, pitchPx?: number): string => {
   if (p.lineSpacing === 0) return "";
   const pitch = p.snapToGrid === false ? undefined : pitchPx;
+  const text = textHeightPt(p);
   if (!p.lineSpacing) return pitch === undefined ? "" : `${pitch}px`;
   if (p.lineSpacingRule === "exact") {
     const px = twipsToPx(p.lineSpacing);
     return `${pitch === undefined ? px : gridLinesPx(px, pitch)}px`;
   }
   if (p.lineSpacingRule === "atLeast") {
-    const px = twipsToPx(p.lineSpacing);
-    return `max(${pitch === undefined ? px : gridLinesPx(px, pitch)}px, 1em)`;
+    const floor = pitch === undefined ? twipsToPx(p.lineSpacing) : gridLinesPx(twipsToPx(p.lineSpacing), pitch);
+    return `max(${floor}px, ${text === undefined ? "1em" : `${ptToPx(text)}px`})`;
   }
   const multiple = p.lineSpacing / 240;
-  return pitch === undefined ? multiple.toFixed(2) : `max(${pitch}px, ${multiple}em)`;
+  if (pitch === undefined) return multiple.toFixed(2);
+  return `max(${pitch}px, ${text === undefined ? `${multiple}em` : `${ptToPx(text * multiple)}px`})`;
 };
 
 function renderParagraph(p: Paragraph, doc: WordDocument, counters: Map<string, number>, state: CommentState, gridPx?: number): string {
@@ -316,6 +342,12 @@ function renderParagraph(p: Paragraph, doc: WordDocument, counters: Map<string, 
   if (first) style.push(`text-indent:${first}`);
   if (p.spacingBefore !== undefined) style.push(`margin-top:${twipsToPx(p.spacingBefore)}px`);
   if (p.spacingAfter !== undefined) style.push(`margin-bottom:${twipsToPx(p.spacingAfter)}px`);
+  // The size the file's ladder resolves for this paragraph's own mark, on the paragraph. Without it the page's
+  // 12pt answers for the strut, for a run that states no size, and for the height of an empty paragraph — while
+  // 9,421 of the 201 WPS-written documents' 13,426 root-level paragraphs resolve *below* 12pt and 425 above it
+  // (`.scratch/em-ref-impact.ts`). A ladder that says nothing stays in the stylesheet's number: this draws the
+  // file's size where the file states one, never one it does not.
+  if (p.markSizePt !== undefined) style.push(`font-size:${p.markSizePt}pt`);
   const lh = lineHeight(p, gridPx);
   if (lh) style.push(`line-height:${lh}`);
   if (p.pageBreakBefore) style.push("page-break-before:always");

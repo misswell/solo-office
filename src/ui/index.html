@@ -343,7 +343,9 @@
         line-height: 1.62;
         color: #14161a;
       }
-      .page .para { margin: 0 0 8px; min-height: 1em; white-space: pre-wrap; }
+      /* An empty paragraph holds a whole line, not one em of it: `1lh` is the line height the file asked for, so
+         a blank line on a 312 缇 grid is 20.8px tall like the line under it rather than the stylesheet's 16px. */
+      .page .para { margin: 0 0 8px; min-height: 1lh; white-space: pre-wrap; }
       .page[contenteditable="true"] { outline: none; }
       .page[contenteditable="true"] .bullet { user-select: none; }
       .page .s-Title { font-size: 26pt; font-weight: 600; margin-bottom: 4px; }

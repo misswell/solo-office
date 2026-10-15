@@ -4,7 +4,7 @@ import { WordDocument } from "../src/core/docx.js";
 import { renderWord } from "../src/core/render.js";
 import { writeDocx } from "../src/core/write-docx.js";
 import { OpcPackage, text } from "../src/core/opc.js";
-import { makeSpacingDocx, makeSpacingRevisionDocx } from "./helpers/make-paragraph.js";
+import { makeChainDocx, makeSpacingDocx, makeSpacingRevisionDocx } from "./helpers/make-paragraph.js";
 
 const part = (bytes: Uint8Array): string => text(OpcPackage.from(bytes).bytes("word/document.xml")!);
 const open = (bytes: Uint8Array): WordDocument => WordDocument.openBytes(bytes);
@@ -124,8 +124,10 @@ describe("docx 行距（w:spacing@w:line 与 w:lineRule）：按文件写的单�
   });
 
   it("draws 最小值 as the greater of the stated height and one line of glyphs", () => {
-    // CSS has no line height that says "this much, or whatever the text needs". `1em` is the least height that
-    // cannot clip the paragraph's own glyphs; 未取证 how much taller WPS lets such a line get, since that is a
+    // CSS has no line height that says "this much, or whatever the text needs". The floor is one line of the
+    // paragraph's own glyphs — 14.667px is the 11 磅 this fixture's `w:docDefaults` states, the shape 67 of the
+    // 86 write there — because `1em` on a paragraph that carries no `font-size` answers with the stylesheet's
+    // 12pt, which is a number no file wrote. 未取证 how much taller WPS lets such a line get, since that is a
     // question about font metrics and this page has none.
     const doc = open(
       makeSpacingDocx([
@@ -133,8 +135,37 @@ describe("docx 行距（w:spacing@w:line 与 w:lineRule）：按文件写的单�
         { spacing: 'w:line="270" w:lineRule="atLeast"', text: "最小值 13.5 磅" },
       ]),
     );
-    expect(drawnLineHeight(doc, "最小值 18.15")).toBe("max(24.2px, 1em)");
-    expect(drawnLineHeight(doc, "最小值 13.5")).toBe("max(18px, 1em)");
+    expect(drawnLineHeight(doc, "最小值 18.15")).toBe("max(24.2px, 14.667px)");
+    expect(drawnLineHeight(doc, "最小值 13.5")).toBe("max(18px, 14.667px)");
+  });
+
+  it("leaves the floor to `em` when the ladder says nothing about a size", () => {
+    // The branch above has an absence on the other side: a file whose `w:docDefaults` states no `w:sz`, whose
+    // style lends none and whose mark states none gives the page no number to measure against. Drawing one here
+    // — 12pt, the stylesheet's — would put a size the file never wrote into the line it draws, so the floor stays
+    // `em` and the paragraph carries no `font-size` either.
+    const doc = open(
+      makeChainDocx([], [{ pPr: '<w:spacing w:line="363" w:lineRule="atLeast"/>', text: "阶梯什么都没说" }], '<w:rFonts w:ascii="Calibri"/>'),
+    );
+    expect(byText(doc, "阶梯什么都没说").markSizePt).toBeUndefined();
+    expect(drawnLineHeight(doc, "阶梯什么都没说")).toBe("max(24.2px, 1em)");
+    expect(drawnStyle(doc, "阶梯什么都没说")).not.toContain("font-size");
+  });
+
+  it("measures that floor against the tallest glyph the paragraph holds, mark included", () => {
+    // A 最小值 line is cut by the text it has to clear, and the two places the file can put that height are the
+    // run's `w:sz` (§17.7.2) and the paragraph mark's (§17.3.1.4). 63 of the 201 WPS-written documents hold a
+    // snapped multiplier paragraph whose mark is taller than its runs (`.scratch/em-ref-impact.ts`), so taking
+    // only one of the two would either clip the glyphs or leave the line under the mark it ends with.
+    const doc = open(
+      makeSpacingDocx([
+        { spacing: 'w:line="270" w:lineRule="atLeast"', runRPr: '<w:sz w:val="44"/>', text: "字是 22 磅" },
+        { spacing: 'w:line="270" w:lineRule="atLeast"', markRPr: '<w:rPr><w:sz w:val="56"/><w:szCs w:val="56"/></w:rPr>', text: "标记是 28 磅" },
+      ]),
+    );
+    // 18px is the stated 13.5 磅; 22 磅 = 29.333px and 28 磅 = 37.333px are what the paragraph's own glyphs need.
+    expect(drawnLineHeight(doc, "字是 22 磅")).toBe("max(18px, 29.333px)");
+    expect(drawnLineHeight(doc, "标记是 28 磅")).toBe("max(18px, 37.333px)");
   });
 
   it("takes the height and its unit from the paragraph's style when the paragraph states neither", () => {
@@ -210,7 +241,7 @@ describe("docx 行距（w:spacing@w:line 与 w:lineRule）：按文件写的单�
     expect(other.resolveRevisions("reject", 15)).toBe(1);
     expect(byText(other, "行距靠样式也被改过").lineSpacing).toBe(363);
     expect(byText(other, "行距靠样式也被改过").lineSpacingRule).toBe("atLeast");
-    expect(drawnLineHeight(other, "行距靠样式也被改过")).toBe("max(24.2px, 1em)");
+    expect(drawnLineHeight(other, "行距靠样式也被改过")).toBe("max(24.2px, 14.667px)");
     expect(spacingXml(save(other), "行距靠样式也被改过")).toBe("");
 
     // Accepting keeps the set as it stands, unit included.
@@ -339,16 +370,20 @@ describe("docx 行网格（w:docGrid 与 w:snapToGrid）：按节的间距量每
         [
           { spacing: 'w:line="363" w:lineRule="atLeast"', text: "最小值 18.15 磅" },
           { spacing: 'w:line="360" w:lineRule="auto"', text: "1.5 倍" },
+          { spacing: 'w:line="360" w:lineRule="auto"', runRPr: '<w:sz w:val="44"/>', text: "22 磅字的 1.5 倍" },
         ],
         "",
         GRID,
       ),
     );
-    // 24.2px on a 20.8px grid is two lines, and the floor keeps `1em` under it so the glyphs cannot be cut.
-    expect(drawnLineHeight(doc, "最小值")).toBe(`max(${PITCH * 2}px, 1em)`);
-    // A multiplier is measured against each line's own text, which only the browser knows, so the grid can only
-    // be a floor here: one line, or that many em, whichever is taller.
-    expect(drawnLineHeight(doc, "1.5 倍")).toBe(`max(${PITCH}px, 1.5em)`);
+    // 24.2px on a 20.8px grid is two lines, and the floor keeps one line of the paragraph's own glyphs under it
+    // (14.667px is the fixture's docDefaults 11 磅), so the text cannot be cut.
+    expect(drawnLineHeight(doc, "最小值")).toBe(`max(${PITCH * 2}px, 14.667px)`);
+    // A multiplier is measured against each line's own text, and the grid cannot round a CSS multiplier, so the
+    // two are drawn as whichever is taller: one grid line, or that many times the paragraph's tallest 11 磅.
+    expect(drawnLineHeight(doc, "1.5 倍")).toBe(`max(${PITCH}px, 22px)`);
+    // Same sentence with 22 磅 glyphs: 1.5 × 29.333px is what the text needs, and the grid stays under it.
+    expect(drawnLineHeight(doc, "22 磅字的")).toBe(`max(${PITCH}px, 44px)`);
   });
 
   it("lends the off down the style chain, which is where most of it is written", () => {

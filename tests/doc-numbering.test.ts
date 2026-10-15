@@ -371,7 +371,10 @@ describe("那颗符号的字号回退：级没写就用段落标记自己解析�
   it("标记的磅数只穿那颗符号：这一段自己的字照它 run 上解析出的大小", () => {
     const doc = open(makeNumberingDocx([{ pPr: numPr(8, 0) + markSz(28), text: "方块" }]));
     const para = drawnPara(doc, "方块");
-    expect((para.match(/font-size:14pt/g) ?? []).length).toBe(1);
+    // 14 磅现在站两处：那颗符号，和段落这个元素本身——它的支柱（`min-height:1lh`）就是这一段空着时占的那一行，
+    // 而空段落的那一行正是段落标记那一行（§17.3.1.4）。正文照旧穿自己级上解析出的 11 磅，没被标记盖过去。
+    expect(propOf(doc, "方块", "font-size")).toBe("14pt");
+    expect((para.match(/font-size:14pt/g) ?? []).length).toBe(2);
     expect(/<span class="bullet"[^>]*font-size:14pt/.test(para)).toBe(true);
     expect(para).toContain("font-size:11pt");
   });

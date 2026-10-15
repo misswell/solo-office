@@ -220,3 +220,195 @@ describe("docx 行距（w:spacing@w:line 与 w:lineRule）：按文件写的单�
     expect(spacingXml(save(yes), "行距被改过")).toBe('<w:spacing w:line="360" w:lineRule="auto"/>');
   });
 });
+
+/**
+ * `w:docGrid` (§17.3.2.9) and `w:snapToGrid` (§17.3.1.87), the line grid the files ask for and the paragraphs
+ * they take back off it. Counted over the 201 WPS-written documents now on disk (list sha256 `25bcf9f82306`;
+ * 235 `w:sectPr`, 27,852 `w:p` of which 159 are self-closed, 27,511 opened `w:pPr`): the sections come from
+ * `.scratch/wps-grid-audience.mjs`, the paragraphs from `.scratch/wps-snap-where.mjs`, which walks the ancestor
+ * stack and attributes every element to the **property slot** it sits in instead of slicing blocks — the slot is
+ * what decides whether it is a paragraph's say at all.
+ *
+ * - **234 of the 235 sections state a grid, and every one of those says `w:type="lines"`.** `w:linePitch` comes
+ *   with all of them: 312 缇 (20.8px) 211 times, 326 (21.733px) 16, 319 (21.267px) 7. No section says
+ *   `default`, `linesAndChars` or `snapToColumns`, and every `w:charSpace` in the corpus says `0`.
+ * - 0 of the 201 files state two different grids across their own sections, so one page draws one grid.
+ * - 3,394 of the 27,511 `w:pPr` blocks state `w:snapToGrid` at the paragraph's own slot and **1,994 of them state
+ *   it off**; the other 24,117 say nothing, which is the switch being on (§17.3.1.87 defaults to on). 72 more of
+ *   the corpus's 3,466 elements sit in a run-property slot (`w:pPr>w:rPr` 19, `w:p>w:r>w:rPr` 53), which is not a
+ *   paragraph's say and which this reader cannot see. `word/styles.xml` states it at a lendable slot 275 times
+ *   and **267 of those say off** (56 more in a `w:rPr`), and no table style states it at all.
+ * - 6,546 of the snapping paragraphs state their own `w:line`: `exact` 5,492 (360 缇 1,928 times, 400 1,546,
+ *   560 724), `auto` 1,051, `atLeast` 3. Of the 1,101 that opt out and state a height, 989 say `auto` and 112
+ *   `exact`. No paragraph's own `w:pPr` states `w:line="0"` in this cohort.
+ *
+ * The page drew none of this before: 234/235 of those sections were read for their paper and their margins and
+ * their grid was left in the bytes it travels in, so every line on every page came out at the App's own
+ * `line-height: 1.62` on 12pt = 25.92px — 24.6% taller than the 20.8px the files ask 211 of them to measure in.
+ */
+describe("docx 行网格（w:docGrid 与 w:snapToGrid）：按节的间距量每一行", () => {
+  const GRID = '<w:docGrid w:type="lines" w:linePitch="312"/>';
+  /** 312 缇 = 20.8px，语料里 211/234 枚间距都是这个数。 */
+  const PITCH = 20.8;
+
+  it("reads the grid the section states, and none at all when it states nothing", () => {
+    const doc = open(makeSpacingDocx([{ text: "正文" }], "", GRID));
+    expect(doc.sections[0]?.docGrid).toEqual({ type: "lines", linePitch: 312 });
+    // A section that never wrote the element is owed no grid: the page then draws the heights the file states.
+    expect(open(makeSpacingDocx([{ text: "正文" }])).sections[0]?.docGrid).toBeUndefined();
+  });
+
+  it("measures a paragraph that states no height in whole grid lines", () => {
+    // The corpus's dominant case: 24,117 of its 27,511 `w:pPr` blocks say nothing about the grid, which is the
+    // switch being on.
+    const doc = open(makeSpacingDocx([{ text: "没说行高" }], "", GRID));
+    expect(drawnLineHeight(doc, "没说行高")).toBe(`${PITCH}px`);
+  });
+
+  it("rounds a 固定值 up to the next whole grid line rather than drawing the number alone", () => {
+    // 1,928 of the 5,492 snapped 固定值 are 360 缇 = 24px on a 20.8px grid: two lines, not one and eleven
+    // twentieths. This is what 对齐到网格 does to a fixed height, and the file's own opt-out below is the knob.
+    const doc = open(
+      makeSpacingDocx(
+        [
+          { spacing: 'w:line="360" w:lineRule="exact"', text: "固定值 18 磅" },
+          { spacing: 'w:line="240" w:lineRule="exact"', text: "固定值 12 磅" },
+          { spacing: 'w:line="1200" w:lineRule="exact"', text: "固定值 60 磅" },
+        ],
+        "",
+        GRID,
+      ),
+    );
+    expect(drawnLineHeight(doc, "固定值 18 磅")).toBe(`${PITCH * 2}px`);
+    expect(drawnLineHeight(doc, "固定值 12 磅")).toBe(`${PITCH}px`);
+    expect(drawnLineHeight(doc, "固定值 60 磅")).toBe(`${PITCH * 4}px`);
+  });
+
+  it("keeps the height a paragraph was told not to snap", () => {
+    // 1,994 paragraphs state `w:val="0"` at their own slot and 1,101 of those state a height with it: the off is
+    // a statement, and the row the file asks for is the row it gets — exactly the numbers #72 drew.
+    const doc = open(
+      makeSpacingDocx(
+        [
+          { spacing: 'w:line="360" w:lineRule="exact"', snapToGrid: 'w:val="0"', text: "不吸网格的固定值" },
+          { snapToGrid: 'w:val="false"', text: "不吸网格没说自己行高" },
+        ],
+        "",
+        GRID,
+      ),
+    );
+    expect(byText(doc, "不吸网格的固定值").snapToGrid).toBe(false);
+    expect(drawnLineHeight(doc, "不吸网格的固定值")).toBe("24px");
+    expect(drawnLineHeight(doc, "不吸网格没说自己行高")).toBe("");
+  });
+
+  it("takes a bare w:snapToGrid as the switch stated on, not as silence", () => {
+    // 1,400 of the corpus's 3,394 paragraph-slot statements are this spelling — an element with no `w:val`.
+    const doc = open(makeSpacingDocx([{ snapToGrid: "", text: "光秃秃的一句吸网格" }], "", GRID));
+    expect(byText(doc, "光秃秃").snapToGrid).toBe(true);
+    expect(drawnLineHeight(doc, "光秃秃")).toBe(`${PITCH}px`);
+  });
+
+  it("reads the grid switch only where the paragraph says it, not where a run does", () => {
+    // 72 of the corpus's 3,466 `w:snapToGrid` elements sit in a `w:rPr`: 19 in the paragraph mark's own
+    // properties, 53 in a run's. §17.3.1.87 puts the switch on the paragraph, so a file that writes it on the
+    // mark or on the glyphs has not taken that paragraph off the grid — reading it there would put 72
+    // paragraphs on the opt-out path nobody asked for. The bytes still have to come back.
+    const doc = open(
+      makeSpacingDocx(
+        [
+          { spacing: 'w:line="360" w:lineRule="exact"', markRPr: '<w:rPr><w:snapToGrid w:val="0"/></w:rPr>', text: "段落标记里写的不吸" },
+          { spacing: 'w:line="360" w:lineRule="exact"', runRPr: '<w:snapToGrid w:val="0"/>', text: "run里写的不吸" },
+        ],
+        "",
+        GRID,
+      ),
+    );
+    for (const needle of ["段落标记里", "run里"]) {
+      expect(byText(doc, needle).snapToGrid).toBeUndefined();
+      expect(drawnLineHeight(doc, needle)).toBe(`${PITCH * 2}px`);
+    }
+    const out = save(doc);
+    expect(paraXml(out, "段落标记里")).toContain('<w:rPr><w:snapToGrid w:val="0"/></w:rPr>');
+    expect(paraXml(out, "run里")).toContain('<w:rPr><w:snapToGrid w:val="0"/></w:rPr>');
+  });
+
+  it("gives a 最小值 the grid's multiple as its floor and a 多倍 the taller of the two", () => {
+    const doc = open(
+      makeSpacingDocx(
+        [
+          { spacing: 'w:line="363" w:lineRule="atLeast"', text: "最小值 18.15 磅" },
+          { spacing: 'w:line="360" w:lineRule="auto"', text: "1.5 倍" },
+        ],
+        "",
+        GRID,
+      ),
+    );
+    // 24.2px on a 20.8px grid is two lines, and the floor keeps `1em` under it so the glyphs cannot be cut.
+    expect(drawnLineHeight(doc, "最小值")).toBe(`max(${PITCH * 2}px, 1em)`);
+    // A multiplier is measured against each line's own text, which only the browser knows, so the grid can only
+    // be a floor here: one line, or that many em, whichever is taller.
+    expect(drawnLineHeight(doc, "1.5 倍")).toBe(`max(${PITCH}px, 1.5em)`);
+  });
+
+  it("lends the off down the style chain, which is where most of it is written", () => {
+    // 267 of the 275 statements `word/styles.xml` makes at a lendable slot are the off, and the paragraph under
+    // one says nothing.
+    const doc = open(
+      makeSpacingDocx([{ pStyle: "Lent", spacing: 'w:line="360" w:lineRule="exact"', text: "行距靠样式、网格也靠样式" }], '<w:snapToGrid w:val="0"/>', GRID),
+    );
+    expect(byText(doc, "行距靠样式").snapToGrid).toBe(false);
+    expect(drawnLineHeight(doc, "行距靠样式")).toBe("24px");
+    // The paragraph's own statement beats the style's, both ways.
+    const both = open(
+      makeSpacingDocx([{ pStyle: "Lent", snapToGrid: "", text: "样式说不吸，段落自己说吸" }], '<w:snapToGrid w:val="0"/>', GRID),
+    );
+    expect(byText(both, "样式说不吸").snapToGrid).toBe(true);
+    expect(drawnLineHeight(both, "样式说不吸")).toBe(`${PITCH}px`);
+  });
+
+  it("draws the heights it always drew when the section asks for no grid", () => {
+    // The negative control for everything drawn before this round: every fixture in this file — and every page
+    // the DOM probes pack — spells a `w:sectPr` with no `w:docGrid`, so no existing line height may move.
+    const doc = open(
+      makeSpacingDocx([
+        { spacing: 'w:line="360" w:lineRule="exact"', text: "固定值 18 磅" },
+        { spacing: 'w:line="360" w:lineRule="auto"', text: "1.5 倍" },
+        { spacing: 'w:line="578" w:lineRule="exact"', text: "固定值 28.9 磅" },
+        { text: "没说行高" },
+      ]),
+    );
+    expect(drawnLineHeight(doc, "固定值 18 磅")).toBe("24px");
+    expect(drawnLineHeight(doc, "1.5 倍")).toBe("1.50");
+    expect(drawnLineHeight(doc, "固定值 28.9 磅")).toBe("38.53333333333333px");
+    expect(drawnLineHeight(doc, "没说行高")).toBe("");
+  });
+
+  it("draws no grid for a section that asks for a grid without a pitch, or a grid that is not a line grid", () => {
+    // §17.3.2.9 leaves `w:linePitch` optional and `w:type` defaulting to `default`. Neither is a line box the
+    // page could measure, and the corpus states neither: 234/234 state a pitch and all say `lines`.
+    for (const sect of ['<w:docGrid w:type="lines"/>', '<w:docGrid w:type="lines" w:linePitch="0"/>', '<w:docGrid w:type="linesAndChars" w:linePitch="312"/>']) {
+      const doc = open(makeSpacingDocx([{ text: "网格说不出间距" }], "", sect));
+      expect(drawnLineHeight(doc, "网格说不出间距")).toBe("");
+    }
+  });
+
+  it("puts the section's grid back as it came and never claims a borrowed opt-out", () => {
+    const doc = open(
+      makeSpacingDocx(
+        [
+          { spacing: 'w:line="360" w:lineRule="exact"', snapToGrid: 'w:val="0"', text: "自己说了不吸" },
+          { pStyle: "Lent", spacing: 'w:line="360" w:lineRule="exact"', text: "从样式借的不吸" },
+        ],
+        '<w:snapToGrid w:val="0"/>',
+        GRID,
+      ),
+    );
+    const out = save(doc);
+    expect(out).toContain(GRID);
+    expect(paraXml(out, "自己说了不吸")).toContain('<w:snapToGrid w:val="0"/>');
+    // The field is the paragraph's resolved set, not its own statement: a save that wrote the borrowed off onto
+    // the paragraph would make the file claim a property the user never touched.
+    expect(paraXml(out, "从样式借的")).not.toContain("snapToGrid");
+  });
+});

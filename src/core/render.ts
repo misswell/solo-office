@@ -238,6 +238,36 @@ const firstLineIndent = (p: Paragraph): string => {
   return chars > 0 ? `${(chars / 100).toFixed(2)}em` : "";
 };
 
+/** Three decimals is enough to place a line on a page and keeps the declaration readable in the DOM. */
+const roundPx = (px: number): number => Math.round(px * 1000) / 1000;
+
+/**
+ * The line grid the page measures snapped paragraphs in, in px, or `undefined` when the section asks for none.
+ * §17.3.2.9 gives `w:docGrid@w:type` four spellings and the corpus uses one: **234 of its 235 `w:sectPr` state a
+ * `w:docGrid` and every one of the 234 says `lines`** (`.scratch/wps-grid-audience.mjs`, per-section counters),
+ * so `default`, `linesAndChars` and `snapToColumns` all land here as "no line grid to draw" — which is also what
+ * a section that states no `w:docGrid` at all means, and what every fixture written before this round states. A
+ * grid with no `w:linePitch` says where the lines are but not how far apart they lie, and a number this model
+ * would have to invent is not a grid: all 234 state the pitch, so the branch is spec-guarded, not corpus-fed.
+ */
+const gridPitchPx = (sec: Section): number | undefined => {
+  const g = sec.docGrid;
+  if (!g || g.type !== "lines") return undefined;
+  const pitch = g.linePitch === undefined ? undefined : twipsToPx(g.linePitch);
+  return pitch !== undefined && pitch > 0 ? roundPx(pitch) : undefined;
+};
+
+/**
+ * The grid's own height for a line that needs `px`: the next whole number of grid lines, never less than one.
+ * This is what 对齐到网格 does to a line taller than the grid — 固定值 18 磅 on a 312 缇 grid draws 41.6px, two
+ * lines, which is the well-known "行距莫名其妙变大一倍" whose standard fix is unchecking that box (the corpus
+ * writes that box off itself 1,994 times at a paragraph's own property slot, `.scratch/wps-snap-where.mjs`).
+ * 未取证: how WPS rounds is a font-metrics question no observation here settles; the reading is §17.3.2.9's, and
+ * the direction — a snapped line never gets shorter than the height asked for — is the only one that keeps
+ * 固定值 a floor rather than a clip.
+ */
+const gridLinesPx = (px: number, pitchPx: number): number => roundPx(Math.max(1, Math.ceil(px / pitchPx - 1e-9)) * pitchPx);
+
 /**
  * The paragraph's line height as one CSS value, in the unit the file wrote it in. `w:line` counts 240ths of a
  * line under `w:auto` (13,396 of the corpus's elements) and twips under `w:exact`/`w:atLeast` (6,802 of them),
@@ -250,15 +280,34 @@ const firstLineIndent = (p: Paragraph): string => {
  * drawn as the greater of the stated height and `1em` — the least that cannot clip the paragraph's own glyphs.
  * 未取证 how much taller WPS makes such a line when the text needs more than `1em`, since that is a question
  * about font metrics and this page has none.
+ *
+ * `pitchPx` is the section's line grid, and when it is there and the paragraph has not opted out
+ * (`w:snapToGrid w:val="0"`, `undefined` reading as on), the grid is the unit: a paragraph that states no
+ * height of its own takes one grid line — which is the corpus's dominant case, 24,117 of its 27,511 `w:pPr`
+ * blocks saying nothing about the grid while the page drew them all at the App's own 1.62 × 12pt = 25.92px
+ * against the files' 20.8px — and one that states a height takes that height rounded up to whole grid lines. A
+ * `w:auto` multiplier is the one case CSS cannot round: `1.5倍` means one and a half times *the line's own text*,
+ * which the browser only knows per line, so it is drawn as the greater of one grid line and that many `em`. The
+ * grid reaching a table cell is the same reading as the same property on any other paragraph (§17.3.1.87 is a
+ * paragraph property, and cells hold paragraphs); WPS' own in-cell grid is 未取证.
  */
-const lineHeight = (p: Paragraph): string => {
-  if (!p.lineSpacing) return "";
-  if (p.lineSpacingRule === "exact") return `${twipsToPx(p.lineSpacing)}px`;
-  if (p.lineSpacingRule === "atLeast") return `max(${twipsToPx(p.lineSpacing)}px, 1em)`;
-  return (p.lineSpacing / 240).toFixed(2);
+const lineHeight = (p: Paragraph, pitchPx?: number): string => {
+  if (p.lineSpacing === 0) return "";
+  const pitch = p.snapToGrid === false ? undefined : pitchPx;
+  if (!p.lineSpacing) return pitch === undefined ? "" : `${pitch}px`;
+  if (p.lineSpacingRule === "exact") {
+    const px = twipsToPx(p.lineSpacing);
+    return `${pitch === undefined ? px : gridLinesPx(px, pitch)}px`;
+  }
+  if (p.lineSpacingRule === "atLeast") {
+    const px = twipsToPx(p.lineSpacing);
+    return `max(${pitch === undefined ? px : gridLinesPx(px, pitch)}px, 1em)`;
+  }
+  const multiple = p.lineSpacing / 240;
+  return pitch === undefined ? multiple.toFixed(2) : `max(${pitch}px, ${multiple}em)`;
 };
 
-function renderParagraph(p: Paragraph, doc: WordDocument, counters: Map<string, number>, state: CommentState): string {
+function renderParagraph(p: Paragraph, doc: WordDocument, counters: Map<string, number>, state: CommentState, gridPx?: number): string {
   const style: string[] = [];
   if (p.align && ALIGN[p.align]) style.push(`text-align:${ALIGN[p.align]}`);
   if (p.indentLeft) style.push(`margin-left:${twipsToPx(p.indentLeft)}px`);
@@ -267,7 +316,7 @@ function renderParagraph(p: Paragraph, doc: WordDocument, counters: Map<string, 
   if (first) style.push(`text-indent:${first}`);
   if (p.spacingBefore !== undefined) style.push(`margin-top:${twipsToPx(p.spacingBefore)}px`);
   if (p.spacingAfter !== undefined) style.push(`margin-bottom:${twipsToPx(p.spacingAfter)}px`);
-  const lh = lineHeight(p);
+  const lh = lineHeight(p, gridPx);
   if (lh) style.push(`line-height:${lh}`);
   if (p.pageBreakBefore) style.push("page-break-before:always");
   // The heading a paragraph is drawn as. `data-outline` is the outline level the model resolves — its own or
@@ -577,7 +626,7 @@ function mergeOf(t: Table): { rows: number; hidden: boolean }[][] {
   return out;
 }
 
-function renderTable(t: Table, doc: WordDocument, state: CommentState): string {
+function renderTable(t: Table, doc: WordDocument, state: CommentState, gridPx?: number): string {
   const table = t.borders;
   const merges = mergeOf(t);
   const css = [
@@ -623,7 +672,7 @@ function renderTable(t: Table, doc: WordDocument, state: CommentState): string {
             borderCss("border-right", [own?.right ?? own?.end, c2 < cells.length - 1 ? table?.insideV : undefined].find(isSet)),
           ].join("");
           const spans = [c.spanCols && c.spanCols > 1 ? ` colspan="${c.spanCols}"` : "", merge.rows > 1 ? ` rowspan="${merge.rows}"` : ""].join("");
-          return `<td${style ? ` style="${style}"` : ""}${spans}>${renderBlocks(c.paragraphs, doc, new Map(), state)}</td>`;
+          return `<td${style ? ` style="${style}"` : ""}${spans}>${renderBlocks(c.paragraphs, doc, new Map(), state, gridPx)}</td>`;
         })
         .join("")}</tr>`;
     })
@@ -631,9 +680,9 @@ function renderTable(t: Table, doc: WordDocument, state: CommentState): string {
   return `<table class="doc-table"${css ? ` style="${css}"` : ""}><tbody>${rows}</tbody></table>`;
 }
 
-function renderBlocks(blocks: Block[], doc: WordDocument, counters: Map<string, number> = new Map(), state: CommentState = { open: new Set(), numbers: new Map(), done: new Set() }): string {
+function renderBlocks(blocks: Block[], doc: WordDocument, counters: Map<string, number> = new Map(), state: CommentState = { open: new Set(), numbers: new Map(), done: new Set() }, gridPx?: number): string {
   return blocks
-    .map((b) => (b.kind === "paragraph" ? renderParagraph(b, doc, counters, state) : b.kind === "table" ? renderTable(b, doc, state) : renderCarried(b)))
+    .map((b) => (b.kind === "paragraph" ? renderParagraph(b, doc, counters, state, gridPx) : b.kind === "table" ? renderTable(b, doc, state, gridPx) : renderCarried(b)))
     .join("");
 }
 
@@ -693,6 +742,11 @@ export function renderWord(doc: WordDocument): string {
   // `w:gutter` is binding width: ECMA-376 §17.3.2.13 adds it to the margin on the binding side, and a section
   // that says nothing has none. This model holds no RTL section, so the binding side is the left.
   const gutter = sec.margins.gutter ?? 0;
+  // The line grid every snapping paragraph on this page is measured in. It comes from the same section the page
+  // box comes from, because one rendered page draws one section's text column — and on this corpus a later
+  // section cannot disagree with it anyway: 0 of the 201 WPS-written documents state two different `w:docGrid`
+  // over their own 235 sections (`.scratch/wps-grid-audience.mjs` counts one `(type, linePitch)` pair per file).
+  const gridPx = gridPitchPx(sec);
   const style = `--page-w:${width}px;--pad-t:${twipsToPx(sec.margins.top)}px;--pad-r:${twipsToPx(sec.margins.right)}px;--pad-b:${twipsToPx(sec.margins.bottom)}px;--pad-l:${twipsToPx(sec.margins.left + gutter)}px`;
   // The distance a band's text is held from the body's, taken from the section's own `w:header`/`w:footer`.
   // Those count from the **page edge**, so what separates a band from the body text is the margin it sits in
@@ -743,7 +797,7 @@ export function renderWord(doc: WordDocument): string {
     open: new Set(),
     numbers: new Map(doc.comments.map((c, i) => [c.id, i + 1])),
     done: new Set(doc.comments.filter((c) => c.resolved === true).map((c) => c.id)),
-  })}${borders}</div>${hf("footer")}`;
+  }, gridPx)}${borders}</div>${hf("footer")}`;
 }
 
 function renderSlideParagraph(p: SlideParagraph): string {

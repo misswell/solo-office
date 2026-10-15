@@ -237,6 +237,28 @@ export interface ParaStyle {
   keepNext?: boolean;
   keepLines?: boolean;
   widowControl?: boolean;
+  /**
+   * `w:snapToGrid` (§17.3.1.87): whether this paragraph's lines are measured in the section's line grid. The
+   * switch defaults to **on**, so `undefined` (nothing in the paragraph's own `w:pPr` or its style chain) and
+   * `true` (a bare `<w:snapToGrid/>`) both mean it snaps, and only a written `w:val="0"`/`"false"`/`"none"` takes
+   * it off — the same reading `w:widowControl` above gets, for the same reason: the corpus writes the off.
+   * Over the 201 WPS-written documents, 3,394 of the 27,511 `w:pPr` blocks state the element **in the paragraph's
+   * own property slot** and 1,994 of those state it off; `word/styles.xml` states it 275 times at a slot that can
+   * lend and 267 of those say off — so a paragraph whose own `w:pPr` says nothing can still be told not to snap,
+   * and the ladder has to be walked for those 267 to reach the paragraphs under it.
+   *
+   * The slot is what counts. Of the corpus's 3,466 `<w:snapToGrid>` elements, 72 sit in a run-properties slot
+   * instead (`w:pPr>w:rPr` 19, `w:p>w:r>w:rPr` 53, and 56 more among styles' 331), where §17.3.1.87 does not put
+   * the switch and this reader does not look — `pPr.snapToGrid` cannot see a child of a child. Slicing
+   * `<w:pPr>…</w:pPr>` with a non-greedy regex claims them: the first pass over this corpus counted 3,396 in the
+   * slices against 3,466 in the files, two of them paragraph-mark statements read as paragraph properties and 70
+   * never attributed. `.scratch/wps-snap-where.mjs` walks the ancestor stack so every element reaches a slot.
+   *
+   * Like the three keep flags, this is deliberately not in `PARA_STYLE_KEYS`: nothing in the writer spells it,
+   * the element travels in `pPrSlots`, and a `w:pPrChange` record's own `w:snapToGrid` comes back as the
+   * record's bytes rather than as a field re-spelled.
+   */
+  snapToGrid?: boolean;
   numPr?: { numId: number; ilvl: number };
   /**
    * `w:outlineLvl` (§17.3.2.26) as the file signed it: 0 is the first heading level through 8 the ninth, and
@@ -453,6 +475,13 @@ export interface Paragraph {
    * 160 of the styles in the corpus write the `w:val="0"` and 10,200 paragraphs inherit it (see `LENT_PARA_KEYS`).
    */
   widowControl?: boolean;
+  /**
+   * `w:snapToGrid`: whether this paragraph's lines are measured in the section's line grid. Same three-state
+   * reading as `widowControl` (defaults to on, and only a written off takes it off), and read through the style
+   * chain for the same reason — 267 of the 275 statements the corpus's `word/styles.xml` makes at a lendable slot
+   * are the off. See `ParaStyle` for the counts and `render.ts`'s `lineHeight` for what the page does with it.
+   */
+  snapToGrid?: boolean;
   /**
    * `w:outlineLvl`, this paragraph's own or the one its style chain states; see `ParaStyle` for what the number
    * means and `headingLevel` for the heading the page draws from it.
@@ -774,6 +803,29 @@ export interface PageBorder {
   frame?: boolean;
 }
 
+/**
+ * `w:docGrid` (§17.3.2.9), the line grid the section lays its text on.
+ *
+ * The corpus states this on nearly every section, and the two attributes it states are always the same two.
+ * Over the 201 WPS-written documents now on disk (`.scratch/wps-grid-audience.mjs`, list sha256 `25bcf9f82306`;
+ * 235 `w:sectPr` in all): **234 of the 235 say `w:docGrid`, and every one of those says `w:type="lines"`** —
+ * no section anywhere says `default`, `linesAndChars` or `snapToColumns`. `w:linePitch` comes with all 234 and
+ * takes three values, 312 缇 in 211 of them, 326 in 16 and 319 in 7 — which is 20.8px, 21.73px and 21.27px, and
+ * 20.8px is what 211 of the 201 files draw their body lines on. `w:charSpace` accompanies them and says `0`
+ * every single time (`.scratch/wps-layout-gap.mjs` counted the attribute's values across all 234 and got one
+ * entry, `0`), which is the horizontal grid switched off; no file ever asks for a character grid. So this model
+ * holds the two numbers that can move a line box (`type` and `linePitch`) and keeps no field for the one that
+ * is only ever spelled off — and the bytes of all three travel back unchanged through `sectionPropertiesXml`.
+ *
+ * Absent means the section asks for no grid at all. One section in the 235 says nothing, and every fixture this
+ * repository wrote before this round says nothing either: the page then draws the line heights the file itself
+ * states, or the ones nobody states, exactly as it did before this field existed.
+ */
+export interface DocGrid {
+  type: string;
+  linePitch?: number;
+}
+
 export interface Section {
   pageWidthTwips: number;
   pageHeightTwips: number;
@@ -801,6 +853,8 @@ export interface Section {
    * The reading and drawing of one is spec-derived; its fidelity to WPS is 未取证.
    */
   pageBorders?: { offsetFrom: "page" | "text"; sides: Partial<Record<PageBorderSide, PageBorder>> };
+  /** `w:docGrid`: the line grid every snapping paragraph in this section is measured in. See `DocGrid`. */
+  docGrid?: DocGrid;
 }
 
 /**
@@ -819,6 +873,7 @@ const copySection = (s: Section): Section => ({
   // The sides copy by value, the lines inside them do not: a `PageBorder` is read once and never edited in
   // place, so giving each copy its own map is enough to keep a caller's add-or-drop of a side contained.
   pageBorders: s.pageBorders ? { offsetFrom: s.pageBorders.offsetFrom, sides: { ...s.pageBorders.sides } } : undefined,
+  docGrid: s.docGrid ? { ...s.docGrid } : undefined,
 });
 
 /**
@@ -1840,6 +1895,7 @@ export class WordDocument {
       keepNext: onOff(pPr.keepNext) ?? lent?.keepNext,
       keepLines: onOff(pPr.keepLines) ?? lent?.keepLines,
       widowControl: onOff(pPr.widowControl) ?? lent?.widowControl,
+      snapToGrid: onOff(pPr.snapToGrid) ?? lent?.snapToGrid,
       numPr: numPrOf(pPr.numPr) ?? lent?.numPr,
       outlineLevel: outlineOf(pPr.outlineLvl) ?? lent?.outlineLevel,
       markSizePt: markSz === undefined ? lentRuns.sizePt : markSz / 2,
@@ -4018,6 +4074,8 @@ function paraStyle(pPr: any): ParaStyle {
   if (keepLines !== undefined) s.keepLines = keepLines;
   const widow = onOff(pPr.widowControl);
   if (widow !== undefined) s.widowControl = widow;
+  const snap = onOff(pPr.snapToGrid);
+  if (snap !== undefined) s.snapToGrid = snap;
   const numPr = numPrOf(pPr.numPr);
   if (numPr) s.numPr = numPr;
   const outline = outlineOf(pPr.outlineLvl);
@@ -4049,11 +4107,18 @@ export const PARA_STYLE_KEYS: (keyof ParaStyle)[] = [
  * `w:keepNext` and `w:keepLines` each appear 58 times in the styles and lend 83 paragraphs apiece (5 files).
  * `w:docDefaults/w:pPrDefault` states none of the three in any of the 115, so the ladder below the default
  * paragraph style still has nothing to lend here.
+ *
+ * `w:snapToGrid` joins the list on the same evidence, one rung up: over the 201 WPS-written documents,
+ * `word/styles.xml` states it at a slot that can lend 275 times and 267 of those say **off**, while 1,994
+ * paragraphs state the off on themselves (`.scratch/wps-snap-where.mjs`, which attributes every element to the
+ * slot its ancestor stack puts it in — the other 56 of styles' 331 and 72 of the body's 3,466 sit in `w:rPr`). A
+ * paragraph that says nothing about the grid and sits under one of those 267 styles is a paragraph the file told
+ * not to snap. Table styles lend none of it (0 in the corpus, `.scratch/wps-grid-audience.mjs`).
  */
 const LENT_PARA_KEYS: (keyof ParaStyle)[] = [
   "align", "indentLeft", "indentLeftChars", "indentRight", "indentFirstLine", "indentFirstLineChars",
   "indentHanging", "spacingBefore", "spacingAfter", "lineSpacing", "lineSpacingRule", "numPr", "outlineLevel",
-  "keepNext", "keepLines", "widowControl",
+  "keepNext", "keepLines", "widowControl", "snapToGrid",
 ];
 
 /** Every paragraph property the model holds for it, from its own `w:pPr` and from its styles. */
@@ -4825,6 +4890,7 @@ function sectionGeometry(xml: string): Section {
     return v === undefined || v === "" || Number.isNaN(Number(v)) ? undefined : Number(v);
   };
   const mar = attrs("pgMar");
+  const grid = attrs("docGrid");
   const borderEl = kids.find((k) => k.tag === "pgBorders");
   const sides: Partial<Record<PageBorderSide, PageBorder>> = {};
   if (borderEl) {
@@ -4857,6 +4923,10 @@ function sectionGeometry(xml: string): Section {
       gutter: stated(mar, "gutter"),
     },
     pageBorders: borderEl ? { offsetFrom: attrsOf(borderEl.xml)["offsetFrom"] === "text" ? "text" : "page", sides } : undefined,
+    // `w:docGrid`: the element and its `w:type` are read together, because a section that writes the element
+    // without a type asks for §17.3.2.9's default (`default`), which is no line grid — the same way an omitted
+    // `w:offsetFrom` above lands on the default that element gives it.
+    docGrid: grid ? { type: grid["type"] || "default", linePitch: stated(grid, "linePitch") } : undefined,
   };
 }
 

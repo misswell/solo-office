@@ -148,18 +148,44 @@ export function makeIndentRevisionDocx(): Uint8Array {
  * `.scratch/spacing-lent.ts` counted the other half of it: 5,110 paragraphs state no `w:line` while the style
  * named by their `w:pStyle` does (4,847 `auto`, 247 `exact`, 16 `atLeast`), which is what the `Lent` style
  * here is for.
+ *
+ * `.scratch/wps-snap-where.mjs` counts **where** the files write the grid switch: of the corpus's 3,466
+ * `<w:snapToGrid>`, 3,394 are children of a `w:pPr` — the slot §17.3.1.87 defines — and 72 are children of a
+ * `w:rPr` (19 in the paragraph mark's, 53 in a run's). `markRPr` and `runRPr` spell those two shapes so the read
+ * can be pinned to the slot; a section's `w:docGrid` comes in through `sectKids`.
  */
 export function makeSpacingDocx(
-  entries: readonly { readonly spacing?: string; readonly pStyle?: string; readonly text: string }[],
+  entries: readonly {
+    readonly spacing?: string;
+    readonly pStyle?: string;
+    readonly snapToGrid?: string;
+    /** Extra children appended to this paragraph's `w:pPr`, for the shapes that are not paragraph properties. */
+    readonly markRPr?: string;
+    /** Extra children of this paragraph's one run's `w:rPr`. */
+    readonly runRPr?: string;
+    readonly text: string;
+  }[],
   lentPPr = "",
+  sectKids = "",
 ): Uint8Array {
   const document =
     entries
       .map((e) => {
-        const kids = [e.pStyle ? `<w:pStyle w:val="${e.pStyle}"/>` : "", e.spacing ? `<w:spacing ${e.spacing}/>` : ""].join("");
-        return `<w:p>${kids ? `<w:pPr>${kids}</w:pPr>` : ""}<w:r><w:t>${e.text}</w:t></w:r></w:p>`;
+        const kids = [
+          e.pStyle ? `<w:pStyle w:val="${e.pStyle}"/>` : "",
+          // `w:snapToGrid` is written exactly as the file spells it: `w:val="0"` is the off, and an empty string
+          // here is the bare `<w:snapToGrid/>`, which is the switch stated *on* (§17.3.1.87 defaults to on).
+          e.snapToGrid === undefined ? "" : `<w:snapToGrid${e.snapToGrid ? ` ${e.snapToGrid}` : ""}/>`,
+          e.spacing ? `<w:spacing ${e.spacing}/>` : "",
+          e.markRPr ?? "",
+        ].join("");
+        const run = `<w:r>${e.runRPr ? `<w:rPr>${e.runRPr}</w:rPr>` : ""}<w:t>${e.text}</w:t></w:r>`;
+        return `<w:p>${kids ? `<w:pPr>${kids}</w:pPr>` : ""}${run}</w:p>`;
       })
-      .join("\n") + `<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800"/></w:sectPr>`;
+      .join("\n") +
+    // `sectKids` goes after `w:pgMar`, which is where §17.3 puts `w:docGrid`: a `w:pgMar` written after a
+    // `w:docGrid` is a file Word refuses to open (the order list in `docx.ts` keeps the same place).
+    `<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800"/>${sectKids}</w:sectPr>`;
   const styles = lentPPr
     ? STYLES.replace("</w:styles>", `<w:style w:type="paragraph" w:styleId="Lent"><w:name w:val="借来的"/><w:pPr>${lentPPr}</w:pPr></w:style></w:styles>`)
     : STYLES;

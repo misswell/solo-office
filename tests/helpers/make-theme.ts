@@ -56,10 +56,13 @@ const NUMBERING = `<w:numbering xmlns:w="${NS_W}">
 /**
  * Every way this model lets a `w:rFonts` name a face without naming one, each in the paragraph shape the files
  * write it in. The audience is measured, not assumed (`.scratch/theme-font-audience.ts` over the 201 documents
- * this machine's WPS wrote): 54,200 `w:rFonts` in the bodies, **5,702 of them carrying a theme attribute and not
- * one of those 5,702 also stating a literal face** — the reference is how the file says "no face of my own", not
- * an extra opinion next to one. 27,831 state only literal faces, so both shapes live in the same parts. By layer:
- * 2,756 sit in a paragraph's `w:pPr/w:rPr` and 2,946 in a run's own; by part, 264 more in `word/styles.xml` —
+ * this machine's WPS wrote): 54,200 `w:rFonts` in the bodies, **5,702 of them carrying a theme attribute**. That is
+ * per *element*, and the interesting count is per *slot* (`.scratch/theme-slot-pair.ts`, all 54,996 `w:rFonts` in
+ * every part of those files): **no slot ever states a literal face and a theme reference together — 0 elements**,
+ * while 5,229 elements do carry both, each one naming one slot literally and pointing another at the theme. So a
+ * reference is the slot saying "no face of my own", never an extra opinion next to a face the same slot named.
+ * 27,831 state only literal faces, so both shapes live in the same parts. By layer: 2,756 sit in a paragraph's
+ * `w:pPr/w:rPr` and 2,946 in a run's own; by part, 264 more in `word/styles.xml` —
  * of which 250 point at a *Latin* slot, and 58 of those are `w:docDefaults`, the whole run floor
  * (`.scratch/theme-font-latin-audience.ts`: in those 58 files, 8,962 body paragraphs state no literal face).
  * The part is reached as the files reach it: a `theme` relationship on `word/document.xml` with a *relative*
@@ -67,10 +70,12 @@ const NUMBERING = `<w:numbering xmlns:w="${NS_W}">
  * (`.scratch/theme-rel.ts`).
  *
  * What the fixtures therefore hold: the floor read through the theme (`地板给的脸`), a style's `w:rPr`
- * (`样式给的脸`), a literal face next to a reference for the case §17.3.2 leaves unranked (`字面先赢`, stated by 0
- * of the 201 — pinned as a rule, not as a shape), the East Asian slot reached through the run's own
- * `w:lang@w:eastAsia` (`汉字有语言`) and refused without it (`汉字无语言`, `标记只说hint`), and the paragraph
- * mark's own pair (`标记的脸`). `编号的脸` hands a list mark's PUA glyph to the theme: `word/numbering.xml` holds
+ * (`样式给的脸`), a literal face and a reference on the *same slot* for the case §17.3.2 leaves unranked
+ * (`字面先赢`, stated by 0 of the 54,996 — pinned as a rule, not as a shape), the East Asian slot reached through the
+ * run's own `w:lang@w:eastAsia` (`汉字有语言`) and refused without it (`汉字无语言`, `标记只说hint`), the paragraph
+ * mark's own pair (`标记的脸`), and all four slots handed to the theme at once (`整行交给主题`) — the shape the
+ * write side is measured against, since moving one of its slots must retire that slot's reference and leave the
+ * other three as they were. `编号的脸` hands a list mark's PUA glyph to the theme: `word/numbering.xml` holds
  * 421 `w:rFonts` in these files and **none** of them uses a theme attribute, so that one is the rule, not the
  * corpus.
  */
@@ -81,6 +86,7 @@ export function makeThemeDocx(opts: { theme?: string | null; defaults?: string }
 <w:p><w:r><w:rPr><w:rFonts w:eastAsiaTheme="minorEastAsia"/><w:lang w:eastAsia="zh-CN"/></w:rPr><w:t>汉字有语言</w:t></w:r></w:p>
 <w:p><w:r><w:rPr><w:rFonts w:eastAsiaTheme="minorEastAsia"/></w:rPr><w:t>汉字无语言</w:t></w:r></w:p>
 <w:p><w:r><w:rPr><w:rFonts w:eastAsiaTheme="minorEastAsia" w:hint="eastAsia"/></w:rPr><w:t>标记只说hint</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:rFonts w:asciiTheme="minorHAnsi" w:hAnsiTheme="minorHAnsi" w:eastAsiaTheme="minorEastAsia" w:cstheme="minorBidi"/><w:lang w:eastAsia="zh-CN"/></w:rPr><w:t>整行交给主题</w:t></w:r></w:p>
 <w:p><w:pPr><w:rPr><w:rFonts w:asciiTheme="majorHAnsi" w:eastAsiaTheme="majorEastAsia" w:hint="eastAsia"/><w:lang w:eastAsia="zh-CN"/></w:rPr></w:pPr><w:r><w:t>标记的脸</w:t></w:r></w:p>
 <w:p><w:pPr><w:rPr><w:rFonts w:asciiTheme="majorHAnsi" w:eastAsiaTheme="majorEastAsia" w:hint="eastAsia"/></w:rPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>编号的脸</w:t></w:r></w:p>
 <w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800"/></w:sectPr>`;

@@ -331,9 +331,17 @@ const RUN_PROPS: {
 
 /**
  * `w:rFonts` with the faces the model moved put onto the element as it was written. Only the attributes whose
- * field actually changed are replaced: `w:cs`, `w:hint` and the theme attributes have no field and travel as the
- * file spelled them, and a Latin face that has not moved keeps its own bytes even when the east-asian one does.
- * A moved field that now holds nothing takes its attribute with it — that is what refusing a font change means.
+ * field actually changed are replaced: `w:cs`, `w:cstheme` and `w:hint` have no field at all and always travel as
+ * the file spelled them, and a Latin face that has not moved keeps its own bytes even when the east-asian one
+ * does. A moved field that now holds nothing takes its attribute with it — that is what refusing a font change
+ * means.
+ *
+ * A moved slot takes its theme reference with it. Over the 54,996 `w:rFonts` in all the parts of the 201 documents
+ * this machine's WPS wrote, **no slot ever states a literal face and a theme reference side by side** — while
+ * 5,229 of those elements legitimately state one slot literally and another by theme, so the rule is per slot, not
+ * per element (`.scratch/theme-slot-pair.ts`). Writing `w:ascii` next to a standing `w:asciiTheme` would put the run
+ * in a state §17.3.2 gives no precedence for and the files never reach; leaving the reference standing is what the
+ * other half of the pair is for, since a slot the model did not move keeps saying where its face comes from.
  */
 function putRunFonts(xml: string, prefix: string, r: Inline): string {
   const gt = xml.indexOf(">");
@@ -344,8 +352,8 @@ function putRunFonts(xml: string, prefix: string, r: Inline): string {
   const eastMoved = !samePropValue(r.asRead?.fontEastAsia, r.fontEastAsia);
   const strip = (s: string, names: string): string => s.replace(new RegExp(`\\s[\\w.-]+:(?:${names})="[^"]*"`, "g"), "");
   let open = (selfClosed ? head.slice(0, -1) : head).trimEnd();
-  if (latinMoved) open = strip(open, "ascii|hAnsi");
-  if (eastMoved) open = strip(open, "eastAsia");
+  if (latinMoved) open = strip(open, "ascii|hAnsi|asciiTheme|hAnsiTheme");
+  if (eastMoved) open = strip(open, "eastAsia|eastAsiaTheme");
   const face = (name: string, val: string | undefined): string => (val ? ` ${prefix}:${name}="${XML_ESC(val)}"` : "");
   const latin = latinMoved ? face("ascii", r.font) + face("hAnsi", r.font) : "";
   const east = eastMoved ? face("eastAsia", r.fontEastAsia) : "";

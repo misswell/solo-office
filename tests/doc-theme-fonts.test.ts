@@ -21,10 +21,11 @@ const saved = (bytes: Uint8Array): string => {
 /**
  * A `w:rFonts` can name a face without naming one: the four `w:*Theme` attributes hold an `ST_ThemeFont` token,
  * which is a slot of the package's theme part rather than a font. 5,702 of the 54,200 `w:rFonts` in the bodies of
- * the 201 documents this machine's WPS wrote are stated that way, and not one of them also states a literal face
- * (`.scratch/theme-font-audience.ts`), so a reader that ignores them draws those runs with a face nobody wrote.
- * These tests pin which references the file lets this reader answer, and — just as deliberately — which it does
- * not.
+ * the 201 documents this machine's WPS wrote are stated that way, and the rule that shape follows is per slot —
+ * across every part of those files, **0 elements state a literal face and a theme reference for the same slot**,
+ * while 5,229 state one slot literally and point another at the theme (`.scratch/theme-slot-pair.ts`). These tests
+ * pin which references the file lets this reader answer, and — just as deliberately — which it does not, then which
+ * half of the element a face edit is allowed to rewrite.
  */
 describe("docx theme fonts", () => {
   it("reads the document floor's face out of the theme when docDefaults names no literal one", () => {
@@ -43,8 +44,8 @@ describe("docx theme fonts", () => {
   });
 
   it("keeps a literal face ahead of a theme reference on the same element", () => {
-    // §17.3.2.11 ranks neither attribute over the other and 0 of the 201 files write both, so this is pinned as a
-    // rule: the face the file named is the face the page draws.
+    // §17.3.2.11 ranks neither attribute over the other, and per slot 0 of the 54,996 elements in these files write
+    // both (`.scratch/theme-slot-pair.ts`), so this is pinned as a rule for a shape the corpus never reaches.
     expect(runAt(open(makeThemeDocx()), "字面先赢").font).toBe("Times New Roman");
   });
 
@@ -102,5 +103,103 @@ describe("docx theme fonts", () => {
     const again = open(out);
     expect(runAt(again, "地板给的脸").font).toBe("Calibri");
     expect(runAt(again, "汉字有语言").fontEastAsia).toBe("仿宋");
+  });
+});
+
+/**
+ * The other half of the same attribute set: what a face edit may leave behind. Re-spelling a moved slot into an
+ * element that still carried that slot's `w:*Theme` was the one shape the corpus never reaches — simulating that
+ * edit over the 201 files produced 2,808 same-slot collisions from 2,804 themed runs
+ * (`.scratch/theme-both-on-edit.ts`), against a corpus count of 0 (`.scratch/theme-slot-pair.ts`). A reference is
+ * that slot's own sentence about where its face comes from, so moving the slot retires the sentence and the slots
+ * nobody moved keep theirs.
+ */
+describe("docx theme fonts under a face edit", () => {
+  /**
+   * The `w:rFonts` of the run in `needle`'s paragraph. That paragraph carries no `w:pPr`, so its first `w:rFonts`
+   * is the run's own and not the paragraph mark's.
+   */
+  const fontsOf = (body: string, needle = "整行交给主题"): string =>
+    /<w:rFonts\b[^>]*>/.exec(body.split("</w:p>").find((p) => p.includes(needle)) ?? "")?.[0] ?? "";
+
+  const edited = (mutate: (r: Inline) => void): { body: string; out: Uint8Array } => {
+    const doc = open(makeThemeDocx());
+    mutate(runAt(doc, "整行交给主题"));
+    const out = writeDocx(doc);
+    return { body: part(out, "word/document.xml"), out };
+  };
+
+  it("retires the Latin slot's theme reference when the model moves that face", () => {
+    const { body, out } = edited((r) => (r.font = "SimSun"));
+    const tag = fontsOf(body);
+    expect(tag).toContain('w:ascii="SimSun"');
+    expect(tag).not.toContain("asciiTheme");
+    expect(tag).not.toContain("hAnsiTheme");
+    expect(tag).toContain('w:eastAsiaTheme="minorEastAsia"');
+    expect(tag).toContain('w:cstheme="minorBidi"');
+    // What comes back out of the saved bytes is what the page then draws: the named face for the moved slot, and
+    // the theme's Han face still resolved for the slot the edit never touched.
+    const again = runAt(open(out), "整行交给主题");
+    expect(again.font).toBe("SimSun");
+    expect(again.fontEastAsia).toBe("仿宋");
+  });
+
+  it("retires only the East Asian reference when the model moves that face", () => {
+    const { body, out } = edited((r) => (r.fontEastAsia = "宋体"));
+    const tag = fontsOf(body);
+    expect(tag).toContain('w:eastAsia="宋体"');
+    expect(tag).not.toContain("eastAsiaTheme");
+    expect(tag).toContain('w:asciiTheme="minorHAnsi"');
+    expect(tag).toContain('w:hAnsiTheme="minorHAnsi"');
+    const again = runAt(open(out), "整行交给主题");
+    expect(again.font).toBe("Calibri");
+    expect(again.fontEastAsia).toBe("宋体");
+  });
+
+  it("leaves the moved slot stating nothing of its own when the change is refused", () => {
+    // A refusal already took the literal name away; leaving the reference standing would hand the slot back to the
+    // theme by a route the file never wrote, so the slot resolves from the docDefaults floor instead — which is the
+    // same fallback any refused field gets. The other three slots are untouched by a Latin refusal.
+    const { body, out } = edited((r) => {
+      r.font = "SimSun";
+      r.font = undefined;
+    });
+    const tag = fontsOf(body);
+    expect(tag).not.toContain("w:ascii=");
+    expect(tag).not.toContain("asciiTheme");
+    expect(tag).toContain('w:eastAsiaTheme="minorEastAsia"');
+    expect(tag).toContain('w:cstheme="minorBidi"');
+    expect(runAt(open(out), "整行交给主题").font).toBe("Calibri");
+  });
+
+  it("writes no same-slot collision anywhere in the document it saved", () => {
+    // The guard the corpus count is: same slot, both attributes, in one element. A face edit on every themed run
+    // must retire the fixture's one intentional `字面先赢` pair and add none.
+    // `[^"]+` and not `[^"]`: the shorter form demands a one-character value and reports every real face as absent.
+    const SLOTS: [string, string][] = [
+      ["w:ascii", "w:asciiTheme"],
+      ["w:hAnsi", "w:hAnsiTheme"],
+      ["w:eastAsia", "w:eastAsiaTheme"],
+      ["w:cs", "w:cstheme"],
+    ];
+    const stated = (tag: string, name: string): boolean => new RegExp(`${name}="[^"]+`).test(tag);
+    const collisions = (xml: string): number =>
+      (xml.match(/<w:rFonts\b[^>]*>/g) ?? []).filter((t) => SLOTS.some(([lit, them]) => stated(t, lit) && stated(t, them))).length;
+    const bytes = makeThemeDocx();
+    expect(collisions(part(bytes, "word/document.xml"))).toBe(1);
+    const doc = open(bytes);
+    let moved = 0;
+    for (const p of paragraphs(doc))
+      for (const r of p.inlines)
+        if (r.rPrSlots?.some((s) => s.tag === "rFonts" && s.xml.includes("Theme"))) {
+          r.font = "SimSun";
+          r.fontEastAsia = "宋体";
+          moved++;
+        }
+    // Five runs in the fixture hand a slot to the theme; the count is here so a fixture edit cannot empty this test.
+    expect(moved).toBe(5);
+    // Including `字面先赢`, whose same-slot pair is retired by the same rule — the writer leaves no element that
+    // states a slot twice, so nothing downstream has to pick a precedence §17.3.2 does not give.
+    expect(collisions(part(writeDocx(doc), "word/document.xml"))).toBe(0);
   });
 });

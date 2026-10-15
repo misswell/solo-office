@@ -5029,8 +5029,10 @@ function runStyle(rPr: any, theme?: ThemeFonts): RunStyle {
     if (east) s.fontEastAsia = east;
     // A face can also be stated by pointing at the theme instead of naming one, and these files do it for
     // 250 of styles.xml's references and 58 documents' whole run floor (`.scratch/theme-font-audience.ts`).
-    // Only where no literal face was written: §17.3.2 gives no precedence between the two, and nothing in
-    // the 201 documents needs it — every theme-referencing `w:rFonts` there states no literal face at all.
+    // Only where no literal face was written: §17.3.2 gives no precedence between the two, and per slot the files
+    // never need one — across the 54,996 `w:rFonts` of the 201 documents, **0 state a literal face and a theme
+    // reference in the same slot**, though 5,229 elements state one slot literally and another by theme
+    // (`.scratch/theme-slot-pair.ts`). So each slot is asked on its own and a slot that named a face is not asked.
     if (theme) {
       const script = themeFontScript(asArray(rPr.lang)[0]?.["@_eastAsia"]);
       if (!s.font) {

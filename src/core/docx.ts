@@ -433,6 +433,14 @@ export interface Paragraph {
   /** `w:keepLines` (§17.3.1.13): this paragraph's lines do not split across pages. Same reading as `keepNext`. */
   keepLines?: boolean;
   /**
+   * `w:widowControl` (§17.3.2.90): a page break inside this paragraph leaves at least two lines on each side of
+   * the seam. The reading is inverted against the two keep flags: `ST_OnOff` here defaults to **on**, so
+   * `undefined` (the file said nothing at this paragraph) means the rule applies and only `false` — a written
+   * `w:val="0"`/`"false"`/`"none"` — turns it off. Read off this paragraph's own `w:pPr`; the style chain's
+   * statement is not looked up.
+   */
+  widowControl?: boolean;
+  /**
    * `w:outlineLvl`, this paragraph's own or the one its style chain states; see `ParaStyle` for what the number
    * means and `headingLevel` for the heading the page draws from it.
    */
@@ -1791,6 +1799,7 @@ export class WordDocument {
       pageBreakBefore: pPr.pageBreakBefore !== undefined,
       keepNext: onOff(pPr.keepNext),
       keepLines: onOff(pPr.keepLines),
+      widowControl: onOff(pPr.widowControl),
       numPr: numPrOf(pPr.numPr) ?? lent?.numPr,
       outlineLevel: outlineOf(pPr.outlineLvl) ?? lent?.outlineLevel,
       markSizePt: markSz === undefined ? lentRuns.sizePt : markSz / 2,

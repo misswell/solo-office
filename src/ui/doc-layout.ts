@@ -95,6 +95,11 @@ export type LayoutUnit = {
   keepNext?: boolean;
   /** 段首这一枚身上的**整段高度**（段落说 `w:keepLines`）：这一坨不拆页（比一页还高时不算数）。 */
   keepLines?: number;
+  /**
+   * 这一枚在**所属段落行盒序列**里的枚序与总枚数（段落没说「关孤行控制」时才有）。装箱那趟用它把落在段中
+   * 的页界挪到不落单行的地方：段首行不许独自留在页尾，段尾行不许独自落在页头。
+   */
+  widowLine?: { index: number; total: number };
 };
 
 /**
@@ -309,6 +314,13 @@ function unitBlocksOf(page: HTMLElement): { el: HTMLElement; units: PlacedUnit[]
       if (el.dataset.keepNext === "1" && last.height > 0) last.keepNext = true;
       if (el.dataset.keepLines === "1") units[0] = { ...units[0]!, keepLines: units.reduce((n, u) => n + u.height, 0) };
     }
+    // 孤行控制（`w:widowControl`）：**缺省即开**，只有 render.ts  stamped 的 `data-widow="0"`（文件显式说关）
+    // 才算关。开着且这一段有两枚以上行盒时，给每一枚带上它在段里的枚序与总数，装箱那趟据此避开单行跨页。
+    // 表格（一枚是表行不是行盒）与只读容器不在此列；段里自己就有声明断点时也不标——那一截一截是文件说好的
+    // 切开处，与 keepNext/keepLines 同一退让。
+    if (!internalBreak && units.length > 1 && el.tagName !== "TABLE" && !el.classList.contains(CARRY_CLASS) && el.dataset.widow !== "0") {
+      for (let ui = 0; ui < units.length; ui++) units[ui] = { ...units[ui]!, widowLine: { index: ui, total: units.length } };
+    }
     out.push({ el, units });
     cursor = Math.max(cursor, rect.bottom);
   }
@@ -332,8 +344,21 @@ export function sheetOf(section: Section): Sheet | undefined {
 }
 
 /**
+ * 段中那道页界该落在哪一枚上（`placementsAcrossSections` 的孤行控制修正）：边界本来要落在 `i`，
+ * 若 `i` 是段里的第 2 枚（页尾只剩段首一行）或段里只剩最后一枚（页头只落段尾一行），就把边界往前挪一枚
+ * ——两条修正都只是把内容**下移**到新的一页，那一页只会更空、不会溢出。往前挪不能越过声明的断点
+ * （`units[i-1].forcePage`：那一枚自己就是一页的开头，页界由文件说死，孤行控制没着力点）。
+ */
+function widowBoundary(units: readonly LayoutUnit[], i: number): number {
+  const w = units[i]!.widowLine;
+  if (!w || w.total < 2 || w.index === 0) return i;
+  if (w.index !== 1 && w.total - w.index !== 1) return i;
+  return units[i - 1]!.forcePage ? i : i - 1;
+}
+
+/**
  * 纯的那一半（多节版）：一列单位在 `unitSections[i]` 说的那一节的纸上各落在第几页（与 `units` 一一对应）。
- * 每一节内的铺法是「单节」那一套再加两条**文件声明的保持规则**（`w:keepNext` / `w:keepLines`）：
+ * 每一节内的铺法是「单节」那一套再加三条**文件声明的保持规则**（`w:keepNext` / `w:keepLines` / `w:widowControl`）：
  *
  * - `keepNext`（段尾那一枚上的旗子）：它和**下一枚**得同页。装这一枚时把下一枚的位子也带上一起算，
  *   带不下就这一枚先挪到下一页（下一块自己整段不拆时，带的就是它那整坨），到了空页还带不下就不硬凑，
@@ -341,6 +366,10 @@ export function sheetOf(section: Section): Sheet | undefined {
  *   （`forcePage`，声明断点）时链不成立，各走各的。
  * - `keepLines`（段首那一枚上带着整段高度）：这一段不拆页——装它的第一枚时若一页装不下整段，整段挪到
  *   下一页起头；比一页还高时这条不算数（那样整段放哪都在拆）。
+ * - `widowControl`（**缺省即开**，只有文件显式说关才关）：一段拆在两张纸上时两边都至少留两行——段首行
+ *   不许独自留在页尾（widow），段尾行不许独自落在页头（orphan）。落点由 `widowBoundary` 定，两条修正都
+ *   只把内容往下一页挪。它与 `keepNext` 撞上时（挪下去的第一枚正是上一块 `keepNext` 指着的那枚）这一片让
+ *   孤行控制赢、上一块的链退让——两条都是文件声明的，谁先谁后 WPS 真机**未取证**。
  *
  * **节界必另起一页**（断点是声明，哪怕上一节那一页还空着），从下一节的第一枚起换用那一节的容量；
  * 保持规则不跨节（隔着一道声明的页界，链谈不上）。单节件就是 `sheets` 一张的特例——两处的答案必须逐枚相同。
@@ -373,8 +402,16 @@ export function placementsAcrossSections(units: readonly LayoutUnit[], unitSecti
     const nextH = next ? (next.keepLines !== undefined && next.keepLines <= contentHeightPx + FIT_SLACK ? Math.min(next.keepLines, contentHeightPx) : Math.min(Math.max(next.height, 0), contentHeightPx)) : 0;
     const need = Math.max(h + nextH, atomic);
     if (used > 0 && used + need > contentHeightPx + FIT_SLACK) {
+      // 孤行控制：页界的落点还要再过一道 `widowBoundary`——段首行不许独自留在页尾、段尾行不许独自落在页头。
+      // 往前挪出去的那几枚改记到新的一页上，它们的体重一并带下去（那一页因此可能比纸还挤一点：一段的行盒
+      // 高过一页时按装箱这趟照常续排，不为它多算一页）。
+      const b = widowBoundary(units, i);
       page++;
       used = 0;
+      for (let j = b; j < i; j++) {
+        pages[j] = page;
+        used += Math.min(Math.max(units[j]!.height, 0), contentHeightPx);
+      }
     }
     used += h;
     pages.push(page);

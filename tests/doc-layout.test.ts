@@ -272,3 +272,39 @@ describe("keepNext / keepLines：文件声明的两条保页规则", () => {
     expect(placementsOf(units, 100)).toEqual([1, 1, 2]);
   });
 });
+
+describe("widowControl：缺省即开的孤行控制", () => {
+  /** 一段 `n` 枚行盒，每枚带上它在段里的枚序（`unitBlocksOf` 在段落说「没关」时盖的就是这一族）。 */
+  const run = (height: number, n: number): LayoutUnit[] =>
+    Array.from({ length: n }, (_, index) => ({ height, forcePage: false, widowLine: { index, total: n } }));
+  const loose = (units: readonly LayoutUnit[]): LayoutUnit[] => units.map((u) => ({ height: u.height, forcePage: u.forcePage }));
+
+  it("页尾只剩段首一行：那一行也挪下去（整段起页），比没写时多带一枚", () => {
+    const units: LayoutUnit[] = [{ height: 60, forcePage: false }, ...run(30, 3)];
+    expect(placementsOf(units, 100)).toEqual([1, 2, 2, 2]);
+    expect(placementsOf(loose(units), 100)).toEqual([1, 1, 2, 2]);
+  });
+  it("页头只剩段尾一行：把它前面那一行一起带下去（新页至少两行）", () => {
+    const units: LayoutUnit[] = [{ height: 30, forcePage: false }, ...run(30, 3)];
+    expect(placementsOf(units, 100)).toEqual([1, 1, 2, 2]);
+    expect(placementsOf(loose(units), 100)).toEqual([1, 1, 1, 2]);
+  });
+  it("两行的段：两条修正同时命中，等价于整段不拆（keepLines 的两行特例）", () => {
+    const units: LayoutUnit[] = [{ height: 60, forcePage: false }, ...run(30, 2)];
+    expect(placementsOf(units, 100)).toEqual([1, 2, 2]);
+    expect(placementsOf(loose(units), 100)).toEqual([1, 1, 2]);
+  });
+  it("页界本来就落在段首（枚序 0）时不动：不为此多挪一枚、也不多算一页", () => {
+    const units: LayoutUnit[] = [{ height: 80, forcePage: false }, ...run(30, 3)];
+    expect(placementsOf(units, 100)).toEqual(placementsOf(loose(units), 100));
+    expect(placementsOf(units, 100)).toEqual([1, 2, 2, 2]);
+  });
+  it("往前挪不越过声明的断点：段首那枚自己 `forcePage` 时页界由文件说死，让给它", () => {
+    const units: LayoutUnit[] = [
+      { height: 50, forcePage: false },
+      { height: 30, forcePage: true, widowLine: { index: 0, total: 2 } },
+      { height: 30, forcePage: false, widowLine: { index: 1, total: 2 } },
+    ];
+    expect(placementsOf(units, 55)).toEqual([1, 2, 3]);
+  });
+});

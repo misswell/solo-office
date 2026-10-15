@@ -502,14 +502,24 @@ function writingMode(direction: string): string {
   return "horizontal-tb";
 }
 
-/** A row's own height and hiding. `atLeast` is a floor; `exact` is the band the row may not leave. */
+/**
+ * A row's own height and hiding. `w:trHeight` (§17.3.2.77) states the row's own box, so the declaration has to
+ * be one the browser treats as a floor: measured in the engine this page runs in
+ * (`.scratch/row-height-css.html`), `min-height` on a `<tr>` — or on its `<td>` — is **ignored** (a row
+ * declaring 200px draws 23px), while `height` is the row's height when the content is shorter (200px) and only
+ * a floor when it is taller (203px). The corpus is one-sided about which of the two this is: all 2,112 row
+ * heights its 115 table-bearing WPS files state say `w:hRule="atLeast"` and none says `exact`, and none is
+ * taller than a page. The page measures its tables off these boxes (`doc-layout.ts` reads one row as one
+ * unit), so a floor the browser drops draws — and paginates — a table shorter than the file says.
+ *
+ * `exact` would additionally clip content that does not fit; a table row here cannot be forced below its
+ * content, so the rule this corpus never uses draws as the same floor. The distinction stays in the model and
+ * saves back unchanged, and WPS's own clipping on an `exact` row is 未取证.
+ */
 function rowStyle(row?: RowInfo): string {
   if (!row) return "";
   let css = row.hidden ? "display:none;" : "";
-  if (row.heightTwips) {
-    const px = twipsToPx(row.heightTwips);
-    css += row.heightRule === "exact" ? `height:${px}px;max-height:${px}px;` : `min-height:${px}px;`;
-  }
+  if (row.heightTwips) css += `height:${twipsToPx(row.heightTwips)}px;`;
   return css;
 }
 

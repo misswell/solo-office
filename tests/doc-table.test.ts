@@ -194,15 +194,30 @@ describe("docx table rendering", () => {
 
   it("gives a row its height and hides the one that is hidden", () => {
     const html = page();
-    expect(html).toContain('<tr style="min-height:40px;">');
-    expect(html).toContain('<tr style="display:none;height:20px;max-height:20px;">');
+    // 地板要写成浏览器认的那一句：`min-height` 落在 `<tr>`（或 `<td>`）上整条被丢掉——实测声明 200px 的行
+    // 画 23px（`.scratch/row-height-css.html`），而表里的行高是铺排量的依据（`doc-layout.ts` 一行算一枚），
+    // 认不到的下限就是「表比文件说的矮」。`height` 才是内容短时按它高、内容长时自己长的下限。
+    expect(html).toContain('<tr style="height:40px;">');
+    expect(html).toContain('<tr style="display:none;height:20px;">');
+  });
+
+  it("atLeast 与 exact 在纸上画同一下限，各自那句仍留在模型里", () => {
+    const doc = open(makeTableFidelityDocx());
+    const t = tableOf(doc);
+    expect([t.rows[0][0]!.row!.heightRule, t.rows[1][0]!.row!.heightRule]).toEqual(["atLeast", "exact"]);
+    const html = renderWord(doc);
+    // 这一版没法把表行压到内容之下，exact 那句的「裁掉」画不出来；但下限必须画出来，且两句都不许退回
+    // min-height（那条在这套引擎里整条无效，见 `.scratch/row-height-css.html`）。
+    expect(html).toContain('<tr style="height:40px;">');
+    expect(html).toContain('<tr style="display:none;height:20px;">');
+    expect(html).not.toContain("min-height:");
   });
 
   it("renders the nested table inside its cell, and marks an inserted row on the row", () => {
     expect(page().split('<table class="doc-table"').length - 1).toBe(2);
     const signature = renderWord(open(makeRowSignatureDocx()));
     expect(signature).toContain('<tr class="rev-row rev-ins" data-row-rev="ins" data-row-rev-id="51"');
-    expect(signature).toContain('style="min-height:46.666666666666664px;"');
+    expect(signature).toContain('style="height:46.666666666666664px;"');
   });
 
   it("spans a vertical merge over the rows it covers, and keeps the covered cell on the page", () => {

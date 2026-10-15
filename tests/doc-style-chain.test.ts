@@ -336,3 +336,136 @@ describe("docx 样式链解析：w:basedOn 整链、默认段落样式兜底、�
     expect(pPrXml(save(doc), "什么都没写")).toBe("");
   });
 });
+
+/** The paragraph's opening tag as the page draws it, so a test can read the `data-*` stamps off it. */
+const openTag = (doc: WordDocument, needle: string): string => {
+  for (const m of renderWord(doc).matchAll(/<(?:div|h[1-6])\s[^>]*class="para[^"]*"[^>]*>(?:(?!<\/(?:div|h[1-6])>)[\s\S])*<\/(?:div|h[1-6])>/g)) {
+    if (m[0].includes(needle)) return m[0].slice(0, m[0].indexOf(">"));
+  }
+  return "";
+};
+
+/**
+ * The three page-keeping rules through the same ladder — the case #126 left open. `w:widowControl` makes it the
+ * biggest of them, because its default is on: a style that writes the `w:val="0"` does not add a rule to the
+ * paragraphs that borrow it, it removes one every one of them already had.
+ *
+ * `.scratch/wps-keep-lent.mjs` over the 115 WPS-written documents with a table that are on disk now: 113 of them
+ * state `w:widowControl` in `word/styles.xml` (220 times, 160 of those saying off) and 10,205 paragraphs take
+ * that off from the chain while their own `w:pPr` says nothing; `w:keepNext` and `w:keepLines` appear 58 times
+ * apiece in the styles and lend 83 paragraphs each. `w:docDefaults/w:pPrDefault` states none of the three in any
+ * of the 115, so the rung under the default paragraph style still has nothing to lend here.
+ */
+describe("docx 保持规则从样式链借：三条开关走同一阶梯，孤行控制反向的缺省也照借", () => {
+  it("借到样式说的那句关：段落自己没说，data-widow 照样盖上", () => {
+    const doc = open(
+      makeChainDocx(
+        [
+          { id: "Off", pPr: '<w:widowControl w:val="0"/>' },
+          { id: "Keep", pPr: "<w:keepNext/><w:keepLines/>" },
+        ],
+        [{ pStyle: "Off", text: "样式说关" }, { pStyle: "Keep", text: "样式说保" }],
+      ),
+    );
+    expect(byText(doc, "样式说关").widowControl).toBe(false);
+    expect(openTag(doc, "样式说关")).toContain('data-widow="0"');
+    expect(byText(doc, "样式说保").keepNext).toBe(true);
+    expect(byText(doc, "样式说保").keepLines).toBe(true);
+    expect(openTag(doc, "样式说保")).toContain('data-keep-next="1"');
+    expect(openTag(doc, "样式说保")).toContain('data-keep-lines="1"');
+    expect(openTag(doc, "样式说保")).not.toContain("data-widow");
+  });
+
+  it("沿 w:basedOn 往上找：祖父说的关算到孙子段落头上", () => {
+    const doc = open(
+      makeChainDocx(
+        [
+          { id: "Root", pPr: '<w:widowControl w:val="none"/>' },
+          { id: "Mid", basedOn: "Root", pPr: '<w:jc w:val="center"/>' },
+          { id: "Leaf", basedOn: "Mid" },
+        ],
+        [{ pStyle: "Leaf", text: "隔两级借" }],
+      ),
+    );
+    expect(byText(doc, "隔两级借").widowControl).toBe(false);
+    expect(byText(doc, "隔两级借").align).toBe("center");
+  });
+
+  it("子样式裸标签把祖先那句关说回开：取第一个说的，不合并", () => {
+    const doc = open(
+      makeChainDocx(
+        [
+          { id: "Off", pPr: '<w:widowControl w:val="0"/>' },
+          { id: "Take", basedOn: "Off", pPr: "<w:widowControl/>" },
+        ],
+        [{ pStyle: "Take", text: "取回开" }, { pStyle: "Off", text: "还是关" }],
+      ),
+    );
+    expect(byText(doc, "取回开").widowControl).toBe(true);
+    expect(openTag(doc, "取回开")).not.toContain("data-widow");
+    expect(byText(doc, "还是关").widowControl).toBe(false);
+  });
+
+  it("段落自己写的压过链，包括把链借来的开取消掉", () => {
+    const doc = open(
+      makeChainDocx(
+        [{ id: "On", pPr: "<w:widowControl/><w:keepNext/>" }],
+        [{ pStyle: "On", pPr: '<w:widowControl w:val="0"/><w:keepNext w:val="0"/>', text: "自己写的" }],
+      ),
+    );
+    expect(byText(doc, "自己写的").widowControl).toBe(false);
+    expect(byText(doc, "自己写的").keepNext).toBe(false);
+    expect(openTag(doc, "自己写的")).toContain('data-widow="0"');
+    expect(openTag(doc, "自己写的")).not.toContain("data-keep-next");
+  });
+
+  it("默认段落样式说关：连 w:pPr 都没有的段落也跟着关", () => {
+    const doc = open(
+      makeChainDocx([{ id: "Normal", isDefault: true, pPr: '<w:widowControl w:val="0"/>' }], [{ text: "什么都没写" }]),
+    );
+    expect(byText(doc, "什么都没写").widowControl).toBe(false);
+    expect(openTag(doc, "什么都没写")).toContain('data-widow="0"');
+  });
+
+  it("借来的关不抄成段落自己的直接格式，样式那一侧一字不动", () => {
+    const bytes = makeChainDocx([{ id: "Off", pPr: '<w:widowControl w:val="0"/>' }], [{ pStyle: "Off", text: "借来的关" }]);
+    const out = save(open(bytes));
+    expect(paraXml(out, "借来的关")).toBe(
+      '<w:p><w:pPr><w:pStyle w:val="Off"/></w:pPr><w:r><w:t>借来的关</w:t></w:r></w:p>',
+    );
+    const stylesOf = (b: Uint8Array): string => text(OpcPackage.from(b).bytes("word/styles.xml")!);
+    expect(stylesOf(writeDocx(open(bytes)))).toBe(stylesOf(bytes));
+  });
+
+  it("段落自己写的那句关往返不丢、也不被复制成第二枚", () => {
+    const doc = open(
+      makeChainDocx([{ id: "Off", pPr: '<w:widowControl w:val="0"/>' }], [
+        { pStyle: "Off", pPr: '<w:widowControl w:val="0"/>', text: "自己说关" },
+        { pStyle: "Off", text: "借来说关" },
+      ]),
+    );
+    const out = save(doc);
+    expect((pPrXml(out, "自己说关").match(/<w:widowControl/g) ?? []).length).toBe(1);
+    expect(pPrXml(out, "借来说关")).not.toContain("widowControl");
+    expect(byText(open(writeDocx(doc)), "自己说关").widowControl).toBe(false);
+  });
+
+  it("回车拆段：上一段自己写的关跟着走，只从链借来的留给新样式说", () => {
+    const own = open(
+      makeChainDocx(
+        [{ id: "Head", next: "Body" }, { id: "Body" }],
+        [{ pStyle: "Head", pPr: '<w:widowControl w:val="0"/>', text: "自己写的关" }],
+      ),
+    );
+    expect(own.nextSplit(byText(own, "自己写的关"))!.widowControl).toBe(false);
+    const borrowed = open(
+      makeChainDocx(
+        [{ id: "Head2", next: "Body2", pPr: '<w:widowControl w:val="0"/>' }, { id: "Body2" }],
+        [{ pStyle: "Head2", text: "借来的关" }],
+      ),
+    );
+    const split = borrowed.nextSplit(byText(borrowed, "借来的关"))!;
+    expect(split.styleId).toBe("Body2");
+    expect(split.widowControl).toBeUndefined();
+  });
+});

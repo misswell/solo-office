@@ -228,6 +228,15 @@ export interface ParaStyle {
    */
   lineSpacingRule?: LineSpacingRule;
   pageBreakBefore?: boolean;
+  /**
+   * The three page-keeping rules (§17.3.1.14 `w:keepNext`, §17.3.1.13 `w:keepLines`, §17.3.2.90 `w:widowControl`)
+   * as this `w:pPr` states them: `undefined` for nothing said, `true`/`false` for the written switch. A style's
+   * statement is what `paraLent` lends, so these live in the same set as the indent a style lends; the paragraph
+   * field docs say which of the three defaults to on when nobody says.
+   */
+  keepNext?: boolean;
+  keepLines?: boolean;
+  widowControl?: boolean;
   numPr?: { numId: number; ilvl: number };
   /**
    * `w:outlineLvl` (§17.3.2.26) as the file signed it: 0 is the first heading level through 8 the ninth, and
@@ -426,8 +435,8 @@ export interface Paragraph {
   pageBreakBefore?: boolean;
   /**
    * `w:keepNext` (§17.3.1.14): this paragraph's last line stays on the page where the next block starts.
-   * Read off this paragraph's own `w:pPr`; `undefined` means the file here said nothing (the style chain's
-   * statement is not looked up). The packer honours it through the `data-keep-next` the renderer stamps.
+   * `undefined` means neither this paragraph's `w:pPr` nor its style chain said anything. The packer honours it
+   * through the `data-keep-next` the renderer stamps.
    */
   keepNext?: boolean;
   /** `w:keepLines` (§17.3.1.13): this paragraph's lines do not split across pages. Same reading as `keepNext`. */
@@ -435,9 +444,9 @@ export interface Paragraph {
   /**
    * `w:widowControl` (§17.3.2.90): a page break inside this paragraph leaves at least two lines on each side of
    * the seam. The reading is inverted against the two keep flags: `ST_OnOff` here defaults to **on**, so
-   * `undefined` (the file said nothing at this paragraph) means the rule applies and only `false` — a written
-   * `w:val="0"`/`"false"`/`"none"` — turns it off. Read off this paragraph's own `w:pPr`; the style chain's
-   * statement is not looked up.
+   * `undefined` (nobody in the paragraph's own `w:pPr` or its style chain said) means the rule applies and only
+   * `false` — a written `w:val="0"`/`"false"`/`"none"` — turns it off. That is why the chain has to be read:
+   * 160 of the styles in the corpus write the `w:val="0"` and 10,200 paragraphs inherit it (see `LENT_PARA_KEYS`).
    */
   widowControl?: boolean;
   /**
@@ -1797,9 +1806,9 @@ export class WordDocument {
       lineSpacing: sp.lineSpacing ?? lent?.lineSpacing,
       lineSpacingRule: sp.lineSpacingRule ?? lent?.lineSpacingRule,
       pageBreakBefore: pPr.pageBreakBefore !== undefined,
-      keepNext: onOff(pPr.keepNext),
-      keepLines: onOff(pPr.keepLines),
-      widowControl: onOff(pPr.widowControl),
+      keepNext: onOff(pPr.keepNext) ?? lent?.keepNext,
+      keepLines: onOff(pPr.keepLines) ?? lent?.keepLines,
+      widowControl: onOff(pPr.widowControl) ?? lent?.widowControl,
       numPr: numPrOf(pPr.numPr) ?? lent?.numPr,
       outlineLevel: outlineOf(pPr.outlineLvl) ?? lent?.outlineLevel,
       markSizePt: markSz === undefined ? lentRuns.sizePt : markSz / 2,
@@ -2433,9 +2442,16 @@ export class WordDocument {
     const nextId = this.nextStyleOf(previous.styleId);
     if (nextId === undefined) return undefined;
     const lent: ParaStyle = { ...this.paragraphStyleOf(nextId) };
-    const own = ownParaStyle(this.paragraphStyleOf(previous.styleId), paraStyleOf(previous));
+    const before = this.paragraphStyleOf(previous.styleId);
+    const own = ownParaStyle(before, paraStyleOf(previous));
     delete own.styleId;
     const fields: ParaStyle = { ...lent, ...own };
+    // 三条保持规则不在 `PARA_STYLE_KEYS` 里（写出靠 `w:pPr` 的槽位带回），`ownParaStyle` 认不到它们，
+    // 所以「上一段自己写的 keepNext」得按同一条判据再认一次：与旧链说的不一样，就是这一段自己写的，跟着走。
+    for (const key of ["keepNext", "keepLines", "widowControl"] as const) {
+      const stated = previous[key];
+      if (stated !== undefined && stated !== before?.[key]) fields[key] = stated;
+    }
     // 「拆段不改直接格式」在这一条上有例外：`w:pageBreakBefore` 说的不是这一段的排版，是「这一段之前必须断一页」，
     // 跟着走就是每按一次回车多一页。新段落按它自己的样式画。
     delete fields.pageBreakBefore;
@@ -3965,6 +3981,12 @@ function paraStyle(pPr: any): ParaStyle {
   if (align !== undefined) s.align = String(align);
   Object.assign(s, indOf(pPr.ind), spacingOf(pPr.spacing));
   if (pPr.pageBreakBefore !== undefined) s.pageBreakBefore = true;
+  const keepNext = onOff(pPr.keepNext);
+  if (keepNext !== undefined) s.keepNext = keepNext;
+  const keepLines = onOff(pPr.keepLines);
+  if (keepLines !== undefined) s.keepLines = keepLines;
+  const widow = onOff(pPr.widowControl);
+  if (widow !== undefined) s.widowControl = widow;
   const numPr = numPrOf(pPr.numPr);
   if (numPr) s.numPr = numPr;
   const outline = outlineOf(pPr.outlineLvl);
@@ -3986,10 +4008,21 @@ export const PARA_STYLE_KEYS: (keyof ParaStyle)[] = [
  * `w:pageBreakBefore` is deliberately out: no paragraph in the 86 WPS-written documents asks a style for a
  * page break it does not state itself (`.scratch/basedon-chain.ts` counts the `w:pPr` children the styles do
  * write, and `w:pageBreakBefore` is not among the ones a paragraph borrows).
+ *
+ * The three page-keeping rules are in, and the audience for them is the largest this list has. Over the 115
+ * WPS-written documents with a table that are on disk now (`.scratch/wps-keep-lent.mjs`; the 86-line list the
+ * earlier rounds read is gone with `/tmp` and re-deriving it from the same filter gives 115, so every figure
+ * here is against the new one): 113 of the 115 state `w:widowControl` in `word/styles.xml` — 220 of them, 160
+ * saying **off** — and 10,205 paragraphs take that off from their chain while stating nothing of their own.
+ * A reader that only looks at the paragraph's own `w:pPr` widow-protects all 10,205, which is what #126 did.
+ * `w:keepNext` and `w:keepLines` each appear 58 times in the styles and lend 83 paragraphs apiece (5 files).
+ * `w:docDefaults/w:pPrDefault` states none of the three in any of the 115, so the ladder below the default
+ * paragraph style still has nothing to lend here.
  */
 const LENT_PARA_KEYS: (keyof ParaStyle)[] = [
   "align", "indentLeft", "indentLeftChars", "indentRight", "indentFirstLine", "indentFirstLineChars",
   "indentHanging", "spacingBefore", "spacingAfter", "lineSpacing", "lineSpacingRule", "numPr", "outlineLevel",
+  "keepNext", "keepLines", "widowControl",
 ];
 
 /** Every paragraph property the model holds for it, from its own `w:pPr` and from its styles. */

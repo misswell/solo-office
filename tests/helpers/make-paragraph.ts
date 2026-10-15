@@ -196,6 +196,8 @@ export interface ChainStyle {
   id: string;
   name?: string;
   basedOn?: string;
+  /** `w:next`: the style a paragraph takes when Enter splits the one naming this one (§17.7.2.24). */
+  next?: string;
   /** `w:default="1"`: the style a paragraph that names none falls back on. */
   isDefault?: boolean;
   /** The style's `w:pPr` children, written the way the files write them. */
@@ -239,7 +241,7 @@ ${styles
     const attrs = [`w:type="${s.type ?? "paragraph"}"`, s.isDefault ? 'w:default="1"' : "", `w:styleId="${s.id}"`]
       .filter(Boolean)
       .join(" ");
-    return `<w:style ${attrs}><w:name w:val="${s.name ?? s.id}"/>${s.basedOn ? `<w:basedOn w:val="${s.basedOn}"/>` : ""}${
+    return `<w:style ${attrs}><w:name w:val="${s.name ?? s.id}"/>${s.basedOn ? `<w:basedOn w:val="${s.basedOn}"/>` : ""}${s.next ? `<w:next w:val="${s.next}"/>` : ""}${
       s.type === "character" ? "" : "<w:qFormat/>"
     }${s.pPr ? `<w:pPr>${s.pPr}</w:pPr>` : ""}${s.rPr ? `<w:rPr>${s.rPr}</w:rPr>` : ""}</w:style>`;
   })

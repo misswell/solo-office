@@ -8,7 +8,9 @@ const NS_PKG = "http://schemas.openxmlformats.org/package/2006/relationships";
 const CT_W = "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml";
 const CT_STY = "application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml";
 
-const STYLES = `<w:styles xmlns:w="${NS_W}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri"/><w:sz w:val="22"/></w:rPr></w:rPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style></w:styles>`;
+const STYLES = `<w:styles xmlns:w="${NS_W}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri"/><w:sz w:val="22"/></w:rPr></w:rPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>`;
+/** Close the styles part, with any styles the caller added sitting after the default one. */
+const stylesPart = (extra: string): string => `${STYLES}${extra}</w:styles>`;
 
 /**
  * A `w:sectPr` in the shape the corpus writes: paper size plus the four body margins, spelled in the order the
@@ -35,7 +37,7 @@ export interface SectionPara {
  * where the model has to count it from. `bodySectPr` swaps the last section's paper for the fixtures about
  * per-section geometry; the break paragraphs state their paper in their own `pPr`, so it stays the caller's.
  */
-export function makeSectionsDocx(blocks: readonly SectionPara[], options: { bodySectPr?: string } = {}): Uint8Array {
+export function makeSectionsDocx(blocks: readonly SectionPara[], options: { bodySectPr?: string; styles?: string } = {}): Uint8Array {
   const body =
     blocks
       .map((b) => `<w:p>${b.pPr ? `<w:pPr>${b.pPr}</w:pPr>` : ""}${b.text === undefined ? "" : `<w:r><w:t>${b.text}</w:t></w:r>`}</w:p>`)
@@ -53,7 +55,7 @@ export function makeSectionsDocx(blocks: readonly SectionPara[], options: { body
         XML_DECL + `<Relationships xmlns="${NS_PKG}"><Relationship Id="rId1" Type="${NS_R}/styles" Target="styles.xml"/></Relationships>`,
       ),
       "word/document.xml": strToU8(XML_DECL + `<w:document xmlns:w="${NS_W}" xmlns:r="${NS_R}"><w:body>${body}</w:body></w:document>`),
-      "word/styles.xml": strToU8(XML_DECL + STYLES),
+      "word/styles.xml": strToU8(XML_DECL + stylesPart(options.styles ?? "")),
     },
     { level: 6 },
   );

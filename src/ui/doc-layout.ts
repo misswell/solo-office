@@ -358,7 +358,8 @@ function widowBoundary(units: readonly LayoutUnit[], i: number): number {
 
 /**
  * 纯的那一半（多节版）：一列单位在 `unitSections[i]` 说的那一节的纸上各落在第几页（与 `units` 一一对应）。
- * 每一节内的铺法是「单节」那一套再加三条**文件声明的保持规则**（`w:keepNext` / `w:keepLines` / `w:widowControl`）：
+ * 每一节内的铺法是「单节」那一套再加三条**文件声明的保持规则**（`w:keepNext` / `w:keepLines` / `w:widowControl`，
+ * 段落自己写的与它的样式链说的都算——渲染器盖章时早已按 `docx.ts` 的阶梯把两者合成一个值了）：
  *
  * - `keepNext`（段尾那一枚上的旗子）：它和**下一枚**得同页。装这一枚时把下一枚的位子也带上一起算，
  *   带不下就这一枚先挪到下一页（下一块自己整段不拆时，带的就是它那整坨），到了空页还带不下就不硬凑，

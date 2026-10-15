@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { Paragraph } from "../src/core/docx.js";
 import { WordDocument } from "../src/core/docx.js";
@@ -445,5 +446,103 @@ describe("docx 行网格（w:docGrid 与 w:snapToGrid）：按节的间距量每
     // The field is the paragraph's resolved set, not its own statement: a save that wrote the borrowed off onto
     // the paragraph would make the file claim a property the user never touched.
     expect(paraXml(out, "从样式借的")).not.toContain("snapToGrid");
+  });
+});
+
+/**
+ * 段前段后 as the 201 WPS-written documents leave it (`.scratch/spacing-audience.ts`, counted on the model's
+ * *resolved* fields, so a paragraph whose style states a gap counts as stated — not on the paragraph's own
+ * bytes): of their 13,426 root-level paragraphs 12,162 say nothing about 段前, 12,183 say nothing about 段后,
+ * and 11,977 say nothing about both. Where a gap exists it is named per paragraph or on a style: 517 resolve a
+ * non-zero 段前 and 747 a stated `0`; 463 and 780 for 段后.
+ *
+ * `word/styles.xml` read from the part's own bytes (`.scratch/styles-spacing.ts`) puts `w:spacing` on 117 of
+ * the 201 files (327 of their 1,893 `w:style` entries) and in **none** of their `w:pPrDefault` or
+ * `w:docDefaults`. So the OOXML default of 0 is what the silence means, and there is no document-wide gap for a
+ * file to have meant. The page stylesheet used to add `margin-bottom: 8px` to every `.para` anyway: on a 312 缇
+ * line grid that turns a 20.8px cell into a 28.8px step and cuts a page from 44 lines to 31
+ * (`.scratch/para-gap-dom.ts`), so the gap has two owners here and both are pinned — the renderer draws the
+ * file's, and the stylesheet invents none.
+ */
+describe("docx 段前段后（w:spacing@w:before/@w:after）：文件没说就没有，App 不代劳", () => {
+  const marginOf = (doc: WordDocument, needle: string, side: "top" | "bottom"): string =>
+    new RegExp(`(?:^|;)margin-${side}:([^;]*)`).exec(drawnStyle(doc, needle))?.[1] ?? "";
+
+  it("draws no gap on a paragraph the file says nothing about", () => {
+    const doc = open(makeSpacingDocx([{ text: "没说段前后" }, { spacing: 'w:line="360" w:lineRule="auto"', text: "只说行距" }]));
+    expect(byText(doc, "没说段前后").spacingBefore).toBeUndefined();
+    expect(byText(doc, "没说段前后").spacingAfter).toBeUndefined();
+    expect(marginOf(doc, "没说段前后", "top")).toBe("");
+    expect(marginOf(doc, "没说段前后", "bottom")).toBe("");
+    // A paragraph that states a line and no gap gets the line and no gap — the two halves of `w:spacing` are
+    // read apart, so 行距 never smuggles a 段前后 in.
+    expect(drawnLineHeight(doc, "只说行距")).toBe("1.50");
+    expect(marginOf(doc, "只说行距", "top")).toBe("");
+    expect(marginOf(doc, "只说行距", "bottom")).toBe("");
+  });
+
+  it("keeps the page stylesheet from inventing a gap under a paragraph", () => {
+    // A paragraph's vertical gap has exactly one owner: `renderParagraph`, inline, from `w:before`/`w:after`.
+    // So no rule that reaches a `.para` element may answer one. Comments are stripped first — the justification
+    // above the rule says "8px" in prose and is not a declaration.
+    const sheet = readFileSync(new URL("../src/ui/index.html", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+    const rules = [...sheet.matchAll(/([^{}]+)\{([^}]*)\}/g)].filter(([, sel]) => /\.para\b/.test(sel));
+    expect(rules.length).toBeGreaterThan(0); // the scan must not go vacuous on a renamed selector
+    const invented = rules.flatMap(([, sel, body]) =>
+      [...body.matchAll(/(?:^|;)\s*(margin(?:-(?:top|bottom))?)\s*:\s*([^;!]+)/g)].flatMap(([decl, prop, value]) =>
+        /^0(\s+0)*$/.test(value.trim()) ? [] : [`${sel.trim()}: ${prop}: ${value.trim()} (${decl})`],
+      ),
+    );
+    expect(invented).toEqual([]);
+    // Not covered here, and deliberately: `.page .s-Title` (4px), `.page .s-Subtitle` (18px) and
+    // `.page h1…h4` (20px 0 8px) put the same kind of invented gap on the 785 heading paragraphs the 86-document
+    // corpus resolves a heading level for (`.scratch/outline-census.ts`, cited in `render.ts`). Taking those off
+    // is what WPS draws for a heading whose style states no gap — un取证 so far, so they stay and this line says so.
+  });
+
+  it("draws the gap the file states, in the unit it is written", () => {
+    const doc = open(makeSpacingDocx([{ spacing: 'w:before="240" w:after="120"', text: "说了段前后" }]));
+    expect(byText(doc, "说了段前后").spacingBefore).toBe(240);
+    expect(byText(doc, "说了段前后").spacingAfter).toBe(120);
+    // 240 缇 = 16px, 120 缇 = 8px: the file's number, not the stylesheet's.
+    expect(marginOf(doc, "说了段前后", "top")).toBe("16px");
+    expect(marginOf(doc, "说了段前后", "bottom")).toBe("8px");
+  });
+
+  it("keeps a stated zero apart from the paragraph that says nothing", () => {
+    // 747 of the 201 files' paragraphs state 段前 as `0`, 780 state 段后 as `0`. Both must read back as stated,
+    // or the reader cannot tell them from the 12,162 that say nothing — and a save would drop the paragraph's
+    // own denial of an inherited gap.
+    const doc = open(
+      makeSpacingDocx(
+        [
+          { pStyle: "Lent", spacing: 'w:before="0" w:after="0"', text: "自己说没有" },
+          { pStyle: "Lent", text: "样式说有" },
+        ],
+        '<w:spacing w:before="240" w:after="240"/>',
+      ),
+    );
+    expect(byText(doc, "自己说没有").spacingBefore).toBe(0);
+    expect(marginOf(doc, "自己说没有", "top")).toBe("0px");
+    expect(marginOf(doc, "自己说没有", "bottom")).toBe("0px");
+    expect(byText(doc, "样式说有").spacingBefore).toBe(240);
+    expect(marginOf(doc, "样式说有", "top")).toBe("16px");
+
+    const out = save(doc);
+    expect(spacingXml(out, "自己说没有")).toBe('<w:spacing w:before="0" w:after="0"/>');
+    expect(paraXml(out, "样式说有")).not.toContain("w:before");
+  });
+
+  it("takes a gap the paragraph states over the one its style states", () => {
+    const doc = open(
+      makeSpacingDocx(
+        [{ pStyle: "Lent", spacing: 'w:before="60"', text: "自己写的压过样式" }],
+        '<w:spacing w:before="240" w:after="240"/>',
+      ),
+    );
+    expect(byText(doc, "自己写的压过样式").spacingBefore).toBe(60);
+    expect(marginOf(doc, "自己写的压过样式", "top")).toBe("4px");
+    // The style's 段后 still arrives where the paragraph says nothing about it.
+    expect(marginOf(doc, "自己写的压过样式", "bottom")).toBe("16px");
   });
 });

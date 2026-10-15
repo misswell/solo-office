@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { packPages, placementsAcrossSections, placementsOf, rowInPage, sheetOf, type LayoutUnit } from "../src/ui/doc-layout.js";
+import {
+  lineCharges,
+  packPages,
+  placementsAcrossSections,
+  placementsOf,
+  rowInPage,
+  sheetOf,
+  type LayoutUnit,
+} from "../src/ui/doc-layout.js";
 import { DEFAULT_SECTION, type Section } from "../src/core/docx.js";
 
 /**
@@ -306,5 +314,69 @@ describe("widowControl：缺省即开的孤行控制", () => {
       { height: 30, forcePage: false, widowLine: { index: 1, total: 2 } },
     ];
     expect(placementsOf(units, 55)).toEqual([1, 2, 3]);
+  });
+});
+
+/**
+ * 一枚行盒「占多高」这条口径的持久件。DOM 那侧由 `.scratch/pagination-dom.ts` 与 `.scratch/grid-dom.ts`
+ * 量真纸（闸门不进包，只护得住本地）；这里护的是**规则本身**，node 就能跑。
+ *
+ * 数是从闸门抄来的一组模型读数，不是随手整数：
+ * - 312 缇的网格（`w:docGrid w:linePitch="312"` = 20.8px）上一格 20.8，段的块上沿 206、第一行墨顶 205
+ *   （字自己洒进上一格 1px），三行的段块下沿 268.4——`para-gap-dom` 的 `原始账` 与 `grid-dom` 的格宽读数。
+ * - 11 磅中文行不吸网格时：声明 `line-height` 23.76px，块自己的推进 24.77px（`lh-drift-dom`）。
+ * 钉的是「按**流里的推进** charging」这一条：起点取 `from`、末枚收到 `to − from − 前面各枚`。
+ * 按碎片（墨水）边沿 charging 时每一枚多 1px，一页 44 格只数得出 42——第 132 轮的负控把这条亲手翻出来过：
+ * 那一版 `tests/` 883 条全绿，只有 DOM 闸门变红，所以规则必须在这里也钉一枚。
+ */
+describe("lineCharges：一枚行盒占多高，问它在纸上推进了多少", () => {
+  const PITCH = 20.8; // 312 缇
+  const grid = [
+    { top: 205, bottom: 226.8 },
+    { top: 225.8, bottom: 247.6 },
+    { top: 246.6, bottom: 268.4 },
+  ];
+
+  it("网格上三行：每枚正好一格，枚高之和 == 块画出来的推进", () => {
+    const c = lineCharges(grid, PITCH, 206, 268.4);
+    expect(c).toEqual([PITCH, PITCH, PITCH]);
+    expect(c.reduce((a, b) => a + b, 0)).toBeCloseTo(268.4 - 206, 10);
+  });
+
+  it("墨顶比格顶高那 1px 不花流里的地：拿碎片边沿 charging 就凭空多出一格的一截", () => {
+    // `from`/`to` 不可信（下一个 `br` 零高、量不到自己那行）才退回边沿——那是这一族唯一的退路。
+    const ink = lineCharges(grid, PITCH, Number.NaN, Number.NaN);
+    expect(ink[0]).toBeCloseTo(20.8, 10);
+    expect(ink[ink.length - 1]).toBeCloseTo(21.8, 10);
+    const flow = lineCharges(grid, PITCH, 206, 268.4).reduce((a, b) => a + b, 0);
+    expect(ink.reduce((a, b) => a + b, 0) - flow).toBeCloseTo(1, 10);
+  });
+
+  it("一页装几格由这个口径决定：按推进 charging 得 44 格，按墨水边沿 charging 只数得出 42", () => {
+    // 930.53px 的一页：44 × 20.8 = 915.2 装得下，45 × 20.8 = 936 溢出。
+    expect(packPages(column(44, PITCH), A4_BODY)).toBe(1);
+    expect(packPages(column(45, PITCH), A4_BODY)).toBe(2);
+    // 同样三行、每枚 21.8（墨顶到墨底）：42 枚 915.6 还在纸上，43 枚 937.4 就滚出第二页。
+    expect(packPages(column(42, 21.8), A4_BODY)).toBe(1);
+    expect(packPages(column(43, 21.8), A4_BODY)).toBe(2);
+  });
+
+  it("声明够矮时跟着字体内容盒长：11 磅中文行的枚高是 24.77，不是那句 23.76", () => {
+    const runs = [
+      { top: 101, bottom: 125 },
+      { top: 125.77, bottom: 150 },
+      { top: 150.54, bottom: 174 },
+    ];
+    const c = lineCharges(runs, 23.76, 100, 174.31);
+    expect(c[0]).toBeCloseTo(25.77, 10); // 块上沿 100 到下一枚墨顶：段首那截空白也是这段占的
+    expect(c[1]).toBeCloseTo(24.77, 10);
+    expect(c[2]).toBeCloseTo(23.77, 10); // 末枚收在总推进减去前面各枚，不超纸
+    expect(c.reduce((a, b) => a + b, 0)).toBeCloseTo(74.31, 10);
+  });
+
+  it("一行的段没有「前面各枚」可减：整段就是它画出来的那一截推进", () => {
+    expect(lineCharges([{ top: 205, bottom: 225 }], PITCH, 206, 226.8)[0]).toBeCloseTo(20.8, 10);
+    // 行高比推进大时（`exact` 那一族反过来）地板是行高本身。
+    expect(lineCharges([{ top: 205, bottom: 210 }], 30, 206, 211)).toEqual([30]);
   });
 });

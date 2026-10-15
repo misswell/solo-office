@@ -184,16 +184,46 @@ function lineHeightOf(el: HTMLElement): number {
 }
 
 /**
- * 一个范围里量出来的行盒：同一行上的碎片按 `top` 归成一堆。
- * 比的是**这一堆第一条**的 `top`：同行上字号不一的碎片最多差几像素，跨行至少差一整行高。
+ * 一堆行盒（同一条线上的碎片归成一堆）加上这一截在纸上的流上下沿，算**每一枚占多高**。
+ * 归堆比的是**这一堆第一条**的 `top`：同行上字号不一的碎片最多差几像素，跨行至少差一整行高。
  *
- * 一枚行盒占多高，问的是**它在纸上推进了多少**：本堆上沿到下一堆上沿，最后一堆到这一截在纸上的下沿
- * （`to`）。不是问 `line-height` 那句声明——浏览器排一行用的是字体自己的内容高，声明够矮时行盒比声明高：
- * 11 磅的中文行在 `.scratch/lh-drift-dom.ts` 里量到「声明 23.76px、画出来 24.77px」（run 那颗 span 的
- * 内容盒 21px，按基线一摆就把行盒顶出声明之外）。一枚差 1px 看着不要紧，六十段就累出 60px——装箱照声明
- * charging，正文会一路铺过纸的底边距、页数少算一页，而 `pageAtCaret` 读的是画出来的位置，两处从此不是
- * 同一个数。量不出下沿（`to` 不可信、`NaN`）时退回声明那句。
+ * 一枚行盒占多高，问的是**它在纸上推进了多少**：本堆上沿到下一堆上沿，最后一堆收到「这一截在纸上的总推进
+ * 减去前面各枚」。不是问 `line-height` 那句声明，也不是问墨水洒到哪：11 磅的中文行在 `.scratch/lh-drift-dom.ts`
+ * 里量到「声明 23.76px、块自己的推进 24.77px」——声明够矮时行盒跟着字体内容高长，所以不能按声明 charging。
+ * 反过来，312 缇的网格上一枚量到「声明 20.8px、块推进 20.8px、墨顶比格顶还高 1px」（同一份件在
+ * `.scratch/para-gap-dom.ts` 的 `原始账`：块上 206 而墨顶 205）——那 1px 是字自己洒进上一格的墨水，不花流里的
+ * 地。按碎片边沿 charging 时每枚量到 21.8px，930.53px 的一页只装 42 行而不是纸上 real 有的 44.7 格，而吸网格
+ * 的段落正是语料里最大的那一档（13,426 个根层段落里 9,884 个按一格画）。两件事在这里合成一条：
+ * **起点用流上沿（`from`）而不是碎片上沿，末枚收到 `to − from − 前面各枚`；`from`/`to` 不可信（下一个 `br`
+ * 零高量不到自己那行）时才退回碎片边沿**。
+ * 一枚差 1px 看着不要紧，六十段就累出一张纸——装箱与 `pageAtCaret` 读的是同一列画出来的位置，两处必须
+ * 是同一个数。
  */
+export function lineCharges(
+  runs: readonly { top: number; bottom: number }[],
+  lh: number,
+  from: number,
+  to: number,
+): number[] {
+  // 第一枚那一格的高从这一截在纸上的**流上沿**（`from`）起算：`from` 比碎片上沿高时，那截空白也是这段占的。
+  const starts = runs.map((g, i) => (i === 0 && Number.isFinite(from) ? from : g.top));
+  const heights = runs.map((g, i) => {
+    const start = starts[i]!;
+    const lastBottom = i + 1 < runs.length ? runs[i + 1]!.top : Number.isFinite(to) ? to : g.bottom;
+    return Math.max(lh, lastBottom - start);
+  });
+  // 末枚不量「最后一行的墨水上沿到这一截的下沿」，量「这一截在流里的总推进减去前面各枚」：中文行的墨顶比
+  // 它那一格的上沿高 1px（206 的格量到 205 的墨顶，`para-gap-dom` 的 `原始账`），拿墨顶当起点就多出 1px，
+  // 而三行的段子里前面每一枚都按墨顶到墨顶量——只有末枚把这一路的偏差都吃进去。收在 `to − from` 上，
+  // 一段的枚高之和恒等于它画出来的推进，装箱读的就是纸上走的数。
+  if (runs.length > 1 && Number.isFinite(from) && Number.isFinite(to)) {
+    const rest = heights.slice(0, -1).reduce((a, b) => a + b, 0);
+    heights[heights.length - 1] = Math.max(lh, to - from - rest);
+  }
+  return heights;
+}
+
+/** 一个范围里量出来的行盒：同一行上的碎片按 `top` 归成一堆，每枚占多高见 `lineCharges`。 */
 function lineBoxesOf(range: Range, lh: number, from: number, to: number): { top: number; height: number }[] {
   const rects = [...range.getClientRects()].filter((r) => r.height > 0);
   if (!rects.length) return [];
@@ -208,15 +238,10 @@ function lineBoxesOf(range: Range, lh: number, from: number, to: number): { top:
     }
     runs.push({ top: r.top, bottom: r.bottom });
   }
-  // 第一枚那一格的高从这一截在纸上的上沿起算（`from` 比碎片上沿还高时，那截空白也是这段占的），但**报出来的
-  // 上沿仍是碎片的**：切纸的推距（`applySheetGaps`）与「纵向位置」那一格都要把内容对齐到纸沿，取点换了 1px
-  // 就等于把每一张纸的第一行都往上挪 1px。
-  const starts = runs.map((g, i) => (i === 0 && Number.isFinite(from) ? Math.min(from, g.top) : g.top));
-  return runs.map((g, i) => {
-    const start = starts[i]!;
-    const lastBottom = i + 1 < runs.length ? runs[i + 1]!.top : Number.isFinite(to) ? Math.max(to, g.bottom) : g.bottom;
-    return { top: g.top, height: Math.max(lh, lastBottom - start) };
-  });
+  const heights = lineCharges(runs, lh, from, to);
+  // **报出来的上沿仍是碎片的**：切纸的推距（`applySheetGaps`）与「纵向位置」那一格都要把内容对齐到纸沿，
+  // 取点换了 1px 就等于把每一张纸的第一行都往上挪 1px。
+  return runs.map((g, i) => ({ top: g.top, height: heights[i]! }));
 }
 
 /** `render.ts` 把 `w:pageBreakBefore` 写成 `page-break-before:always`，这里只认画出来的那一句。 */

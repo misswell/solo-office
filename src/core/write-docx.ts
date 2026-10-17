@@ -1,9 +1,9 @@
 import { strToU8, zipSync } from "fflate";
-import type { Block, BorderSet, Inline, ListAddition, ParaStyle, Paragraph, ParagraphFormatRevision, PropSlot, RunStyle, RowInfo, Table, TableBorder, TableCell, WordDocument } from "./docx.js";
+import type { Block, BorderSet, CellStyle, Inline, ListAddition, ParaStyle, Paragraph, ParagraphFormatRevision, PropSlot, RunStyle, RowInfo, Table, TableBorder, TableCell, TableStyle, WordDocument } from "./docx.js";
 import { bytesOfDataUrl } from "./media.js";
-import { BORDER_ORDER, ROW_REVISION_TAGS, ownParaStyle, ownRunStyle, paraStyleOf, preserve, revisionTag, runStyleOf, samePropValue } from "./docx.js";
+import { BORDER_ORDER, PBDR_ORDER, ROW_REVISION_TAGS, ownParaStyle, ownRunStyle, paraBorderChanges, paraStyleOf, preserve, revisionTag, runStyleOf, samePropValue, shadingFillToken } from "./docx.js";
 import { childSpans, elementContent } from "./opc.js";
-import { setChildren } from "./doc-table-revisions.js";
+import { changeRecordXml, setChildren } from "./doc-table-revisions.js";
 import { commentDirty, commentElement, commentParaIds, commentsRootInfo, type DocComment } from "./comments.js";
 
 /**
@@ -141,6 +141,22 @@ function paragraphProps(p: Paragraph): string {
   if (has("styleId")) parts.push(`<w:pStyle w:val="${XML_ESC(p.styleId ?? "")}"/>`);
   if (has("pageBreakBefore")) parts.push("<w:pageBreakBefore/>");
   if (has("numPr")) parts.push(`<w:numPr><w:ilvl w:val="${p.numPr!.ilvl}"/><w:numId w:val="${p.numPr!.numId}"/></w:numPr>`);
+  // 框与底纹两条路共用同一个口径 `paraBorderChanges`：**只有这一击动过的边**说出去。带 `w:pPr` 的段落由
+  // `syncParaSlots` 逐边认领（那条路保住件原来的字节与模型没有字段的那些属性），只剩字段的这一段才由这里说——
+  // 编辑器拆出来的段、以及件根本没写 `w:pPr` 的那 159 段就是这种。拼法照件：一边一枚 `<w:side>`、按 `CT_PBdr`
+  // 的边序（26 枚 `w:pBdr` 全是这个形状），底纹恒为 `w:val="clear" w:color="auto" w:fill="十六进制"`
+  // （30/30，`.scratch/pbdr-audience.ts`）；那一格填的不是颜色就按 token 原样写回（`auto`：段落层 0 例、
+  // `w:tcPr` 层 1,600 例，见 `shadingFillToken`）。件里的框 24 枚在 `word/styles.xml`、正文段落自己写的
+  // 0 枚（同一条探测），所以把样式链借来的整个盒子抄到段落身上，每一枚都是替文件新编的一句样式的话——
+  // 逐边比而不是整枚比，才知道这一段到底改了哪一边。
+  const box = paraBorderChanges(p);
+  if (box) {
+    const sides = PBDR_ORDER.filter((side) => box[side]);
+    parts.push(`<w:pBdr>${sides.map((side) => `<w:${side} ${borderAttrs(box[side]!)}/>`).join("")}</w:pBdr>`);
+  }
+  if (p.shading !== undefined && !samePropValue(p.asRead?.shading, p.shading)) {
+    parts.push(`<w:shd w:val="clear" w:color="auto" w:fill="${XML_ESC(shadingFillToken(p.shading))}"/>`);
+  }
   // 「对齐到网格」不在 `PARA_STYLE_KEYS` 里——带 `w:pPr` 的段落由 `syncParaSlots` 按件的原字节带着走，这一段
   // 却可能一个 slot 也没有（编辑器自己拆出来的段、或那 159 段没写 `w:pPr` 的），那时候勾选框只剩字段可说。
   // 拼法照件：说开裸写、说关 `w:val="0"`。只说**这一击动过的**，与 `ownParaStyle` 对着读快照同一条口径——
@@ -213,6 +229,21 @@ function rFontsTag(s: RunStyle, prefix = "w"): string {
   return latin || east ? `<${prefix}:rFonts${latin}${east}/>` : "";
 }
 
+/**
+ * The faces to spell into a `w:rFonts` for a run whose file wrote none. `w:rFonts` is the one element in this set
+ * that carries two fields, so the guard every other property has — a value the run borrowed from its style chain
+ * or from `w:docDefaults` is not a value the run states — needs saying again here: a run that only had its Latin
+ * slot moved must not have the Chinese face it was *reading through the floor* written into it, or one command
+ * would pin a sentence the file never wrote and take that run out from under the floor it belongs to
+ * (`.scratch/font-slot-shape.ts`: 5,444 Han-text runs and 5,483 Latin-text ones state no `w:rFonts` of their own).
+ */
+function movedFaces(r: Inline): RunStyle {
+  return {
+    font: samePropValue(r.asRead?.font, r.font) ? undefined : r.font,
+    fontEastAsia: samePropValue(r.asRead?.fontEastAsia, r.fontEastAsia) ? undefined : r.fontEastAsia,
+  };
+}
+
 /** `CT_RPr` children likewise: rFonts, b, i, strike, color, sz, szCs, highlight, u, vertAlign. */
 function runPropsInner(s: RunStyle): string {
   const parts: string[] = [];
@@ -269,7 +300,7 @@ const RUN_PROPS: {
         ? ""
         : source
           ? putRunFonts(source, prefix, r)
-          : rFontsTag(r, prefix),
+          : rFontsTag(movedFaces(r), prefix),
   },
   {
     key: "bold",
@@ -320,9 +351,11 @@ const RUN_PROPS: {
   {
     key: "underline",
     tags: ["u"],
-    // The cancellation is written, not deleted: the 86 body parts hold 952 `<w:u w:val="none"/>`, 254 of them on
-    // runs whose chain states nothing about `w:u` at all, so a save that drops the element is inventing a
-    // silence the file never wrote — exactly the mistake `<w:b w:val="0"/>` above refuses to make.
+    // The cancellation is written, not deleted: 授权 46 份的 `word/document.xml` 里 `<w:u w:val="none"/>` 有 30 枚
+    // （同一趟逐枚：`single` 1,565、`thick` 20、裸写 0），所以「取消」是文件自己说过的话，不是一个可以顺手省略的
+    // 默认值。作废语料上那句「952 枚、254 枚坐在链上什么都不说的 run 上」属旧读数（待重证），换成上面这组。
+    // A save that drops the element invents a silence the file never wrote — exactly the mistake
+    // `<w:b w:val="0"/>` above refuses to make.
     spell: (r, prefix) =>
       r.underline === undefined ? "" : r.underline ? `<${prefix}:u w:val="single"/>` : `<${prefix}:u w:val="none"/>`,
   },
@@ -336,11 +369,12 @@ const RUN_PROPS: {
  * does. A moved field that now holds nothing takes its attribute with it — that is what refusing a font change
  * means.
  *
- * A moved slot takes its theme reference with it. Over the 55,585 `w:rFonts` in every part of the 201 documents
- * this machine's WPS wrote (54,200 in `word/document.xml`, 796 in `word/styles.xml`, 156 in headers and footers,
- * 433 elsewhere), **no slot ever states a literal face and a theme reference side by side** — while 5,260 of those
- * elements legitimately state one slot literally and another by theme, so the rule is per slot, not
- * per element (`.scratch/theme-slot-pair.ts`). Writing `w:ascii` next to a standing `w:asciiTheme` would put the run
+ * A moved slot takes its theme reference with it. 授权 46 份全部件共 **14,646 枚 `w:rFonts`**（document 14,007 /
+ * styles 397 / 页脚 146 / numbering 84 / 页眉 8 / glossary 4；主题槽那一条腿先前数出的 14,642 与这个差 4，差在
+ * glossary 部件没进它那趟扫描——分母按部件对过，两个数各说各的口径），其中 1,957 枚带主题槽、11,905 枚带字面脸、
+ * 650 枚在**不同槽**上两种都写，而 **0 枚在同一槽里既写字脸又写主题引用**——所以这条规则按槽成立，不按元素成立
+ * （`.scratch/theme-slot-pair-authorized.mjs`）。作废语料上那组 55,585 / 54,200 / 796 / 156 / 433 与 5,260 属旧读数。
+ * Writing `w:ascii` next to a standing `w:asciiTheme` would put the run
  * in a state §17.3.2 gives no precedence for and the files never reach; leaving the reference standing is what the
  * other half of the pair is for, since a slot the model did not move keeps saying where its face comes from.
  */
@@ -430,10 +464,12 @@ function revisedRunProps(inline: Inline): string {
 
 function textRun(inline: Inline): string {
   if (inline.image) return imageRun(inline, inline.image.width, inline.image.height, "");
-  const props = revisedRunProps(inline);
-  const body = inline.tab ? "<w:tab/>" : inline.break ? breakXml(inline) : inline.rev?.kind === "del" ? delTextTag(inline.text) : textTag(inline.text);
-  return `<w:r>${props}${body}</w:r>`;
+  return `<w:r>${revisedRunProps(inline)}${runChild(inline)}</w:r>`;
 }
+
+/** What one inline puts inside its `w:r`: a tab, the break as the file wrote it, revised text, or text. */
+const runChild = (inline: Inline): string =>
+  inline.tab ? "<w:tab/>" : inline.break ? breakXml(inline) : inline.rev?.kind === "del" ? delTextTag(inline.text) : textTag(inline.text);
 
 /** A break goes back as the file wrote it — its type, its `w:clear`, all of it. Ours own is the plain soft return. */
 const breakXml = (inline: Inline): string => inline.brXml ?? "<w:br/>";
@@ -527,13 +563,16 @@ function inlinesXml(inlines: Inline[], rels: RelBuilder): string {
       // paragraph marker, not revised text, so it stays outside the wrapper instead of becoming "".
       const group: Inline[] = [];
       while (i < inlines.length && !inlines[i].anchor && sameRevision(inlines[i].rev, rev)) group.push(inlines[i++]);
-      out.push(`<w:${revisionTag(rev)} ${revAttrs(rev)}>${group.map((r) => runWrapped(r, rels)).join("")}</w:${revisionTag(rev)}>`);
+      out.push(`<w:${revisionTag(rev)} ${revAttrs(rev)}>${runsXml(group, (r) => runWrapped(r, rels), (run, r) => underLink(r, rels, run))}</w:${revisionTag(rev)}>`);
       continue;
     }
     const link = inlines[i].hyperlink;
     if (!link) {
-      out.push(runWrapped(inlines[i], rels));
-      i += 1;
+      // Plain neighbours go through one emitter so a source run the reader split can be joined back here.
+      const group: Inline[] = [];
+      while (i < inlines.length && !inlines[i].carry && !inlines[i].anchor && !inlines[i].rev && !inlines[i].hyperlink)
+        group.push(inlines[i++]);
+      out.push(runsXml(group, (r) => runWrapped(r, rels), (run) => run));
       continue;
     }
     // Runs join one `w:hyperlink` only while the element itself would be spelled the same: two links to the
@@ -542,7 +581,7 @@ function inlinesXml(inlines: Inline[], rels: RelBuilder): string {
     const extras = inlines[i].linkAttrs;
     const group: Inline[] = [];
     while (i < inlines.length && inlines[i].hyperlink === link && inlines[i].linkAttrs === extras) group.push(inlines[i++]);
-    const inner = group.map((r) => runXml(r, rels)).join("");
+    const inner = runsXml(group, (r) => runXml(r, rels), (run) => run);
     out.push(`<w:hyperlink ${linkAttrs(link, rels, extras)}>${inner}</w:hyperlink>`);
   }
   return out.join("");
@@ -567,6 +606,52 @@ const runWrapped = (r: Inline, rels: RelBuilder): string =>
   // it, because a run put outside is read as text nobody revised and the record next to it loses its cover.
   r.carry ? r.carry.xml : r.hyperlink ? `<w:hyperlink ${linkAttrs(r.hyperlink, rels, r.linkAttrs)}>${runXml(r, rels)}</w:hyperlink>` : runXml(r, rels);
 
+/**
+ * The reader gives every child of a `w:r` its own inline — a tab standing next to text is two of them — so a
+ * save that emitted one `w:r` per inline would hand back two runs where the file had one, each carrying its
+ * own copy of that run's `w:rPr` and with it every slot the model has no field for (`w:cs`, `w:hint`).
+ * Neighbours that came from the same source run and whose properties spell identically go back as the one run
+ * the file wrote; a run whose other half really did get its own formatting is still two.
+ *
+ * `single` spells a run that cannot join: inside a `w:hyperlink` or a revision wrapper the caller has already
+ * opened the element, so the per-run emitter it hands in is the bare run — passing the wrapper instead would
+ * nest a second `w:hyperlink` around text the file put under one. `joined` places a run that DID join, and is
+ * the caller's because only the caller knows whether the link wrapper is already open around it.
+ */
+function runsXml(runs: Inline[], single: (r: Inline) => string, joined: (run: string, first: Inline) => string): string {
+  const out: string[] = [];
+  for (let i = 0; i < runs.length; ) {
+    const first = runs[i];
+    const props = joinableRun(first) ? revisedRunProps(first) : "";
+    let j = i + 1;
+    if (props)
+      while (
+        j < runs.length &&
+        joinableRun(runs[j]) &&
+        runs[j].rPrSlots === first.rPrSlots &&
+        runs[j].hyperlink === first.hyperlink &&
+        runs[j].linkAttrs === first.linkAttrs &&
+        revisedRunProps(runs[j]) === props
+      )
+        j++;
+    if (j > i + 1) {
+      out.push(joined(`<w:r>${props}${runs.slice(i, j).map(runChild).join("")}</w:r>`, first));
+      i = j;
+      continue;
+    }
+    out.push(single(first));
+    i += 1;
+  }
+  return out.join("");
+}
+
+/** The link a run of these inlines belongs under, spelled once for whoever closes them into a run. */
+const underLink = (r: Inline, rels: RelBuilder, run: string): string =>
+  r.hyperlink ? `<w:hyperlink ${linkAttrs(r.hyperlink, rels, r.linkAttrs)}>${run}</w:hyperlink>` : run;
+
+/** Only a carried run with no anchor, picture or carried bytes rejoins — each of those needs its own element. */
+const joinableRun = (r: Inline): boolean => Boolean(r.rPrSlots) && !r.image && !r.anchor && !r.carry;
+
 const sameRevision = (a: Inline["rev"], b: Inline["rev"]): boolean =>
   a !== undefined && b !== undefined && a.kind === b.kind && a.move === b.move && a.id === b.id && a.author === b.author;
 
@@ -589,17 +674,26 @@ const bordersXml = (tag: string, set?: BorderSet): string => {
  */
 function cellPropsXml(cell: TableCell): string {
   if (cell.tcPrXml) return cell.tcPrXml;
+  const props = cellPropsInner(cell);
+  // 没有 `w:tcPr` 的格子（编辑器自己造的）没有原件文字可挂记录，这一击签下的 `w:tcPrChange` 就拼在这里。
+  const rec = cell.revs?.find((r) => r.tag === "tcPrChange");
+  if (rec) props.push(changeRecordXml("tcPrChange", rec, slotsXml(rec.prevSlots) || cellPropsInner(rec.prev).join("")));
+  return props.length ? `<w:tcPr>${props.join("")}</w:tcPr>` : "";
+}
+
+/** 一格说过的属性，按 `CT_TcPrBase` 的孩子序——现下的格与记录里那一套「改之前」共用这一份拼法。 */
+function cellPropsInner(cell: CellStyle): string[] {
   const props: string[] = [];
   if (cell.widthTwips) props.push(`<w:tcW w:w="${Math.round(cell.widthTwips)}" w:type="dxa"/>`);
   if (cell.spanCols && cell.spanCols > 1) props.push(`<w:gridSpan w:val="${cell.spanCols}"/>`);
   if (cell.spanRows !== undefined) props.push(cell.spanRows === 1 ? '<w:vMerge w:val="restart"/>' : "<w:vMerge/>");
   const borders = bordersXml("tcBorders", cell.borders);
   if (borders) props.push(borders);
-  if (cell.shading) props.push(`<w:shd w:val="clear" w:color="auto" w:fill="${XML_ESC(cell.shading.replace(/^#/, "").toUpperCase())}"/>`);
+  if (cell.shading) props.push(`<w:shd w:val="clear" w:color="auto" w:fill="${XML_ESC(shadingFillToken(cell.shading))}"/>`);
   if (cell.noWrap) props.push("<w:noWrap/>");
   if (cell.textDirection) props.push(`<w:textDirection w:val="${XML_ESC(cell.textDirection)}"/>`);
   if (cell.valign) props.push(`<w:vAlign w:val="${XML_ESC(cell.valign)}"/>`);
-  return props.length ? `<w:tcPr>${props.join("")}</w:tcPr>` : "";
+  return props;
 }
 
 function cellXml(cell: TableCell, rels: RelBuilder): string {
@@ -645,7 +739,18 @@ function gridXml(t: Table): string {
 /** `w:tblPr` for a table the editor built; a table off the page returns what the page wrote. */
 function tablePropsXml(t: Table): string {
   if (t.tblPrXml) return t.tblPrXml;
-  const props = [
+  const props = tablePropsInner(t);
+  // 与格子同一条：编辑器自己造的表没有原件文字，签名留下的记录只能在这里拼出来——不拼就是「改了、存了、
+  // 记录没了」，正是那条静默交回原字节的坑。
+  const rec = t.revFormat;
+  if (rec) props.push(changeRecordXml("tblPrChange", rec, slotsXml(rec.prevSlots) || tablePropsInner(rec.prev).join("")));
+  const inner = props.join("");
+  return inner ? `<w:tblPr>${inner}</w:tblPr>` : "";
+}
+
+/** 表说过的属性，按 `CT_TblPr` 的孩子序——现下的表与记录里那一套「改之前」共用这一份拼法。 */
+function tablePropsInner(t: TableStyle): string[] {
+  return [
     t.styleId ? `<w:tblStyle w:val="${XML_ESC(t.styleId)}"/>` : "",
     // `w:w="0" w:type="auto"` is what "no width declared" already means, so a table that never said one
     // gains nothing from being given the tag and a save that writes it is inventing a property.
@@ -653,10 +758,15 @@ function tablePropsXml(t: Table): string {
     t.align ? `<w:jc w:val="${XML_ESC(t.align)}"/>` : "",
     t.indentTwips !== undefined ? `<w:tblInd w:w="${Math.round(t.indentTwips)}" w:type="dxa"/>` : "",
     bordersXml("tblBorders", t.borders),
+    // 与 `cellPropsXml` 同一枚形状：`w:val="clear" w:color="auto"` 带头、颜色写在 `w:fill`。
+    // 表这一层的底纹在授权语料里 0 枚（`.scratch/shd-audience.ts`），摆的位置是 `CT_TblPr` 给的序。
+    t.shading ? `<w:shd w:val="clear" w:color="auto" w:fill="${XML_ESC(shadingFillToken(t.shading))}"/>` : "",
     t.layout ? `<w:tblLayout w:type="${XML_ESC(t.layout)}"/>` : "",
-  ].join("");
-  return props ? `<w:tblPr>${props}</w:tblPr>` : "";
+  ].filter(Boolean);
 }
+
+/** 一枚记录带着的属性原文：件里怎么写的就怎么回去，模型没有字段的属性也在这一份里。 */
+const slotsXml = (slots: PropSlot[]): string => slots.map((s) => s.xml).join("");
 
 function tableXml(t: Table, rels: RelBuilder): string {
   // A row that somebody added or removed signs itself on the row, before any of the row's cells.
@@ -733,8 +843,11 @@ function sectPrXml(doc: WordDocument): string {
   // a page that never moved.
   if (doc.source() && !doc.sectReferenceTags() && !doc.pageSetupStated()) return "";
   const s = doc.sections[0];
-  // `w:orient` is spelled only for landscape. None of the 93 portrait sections in the 86 files this machine's
-  // WPS wrote says so, while every one of its 22 landscape sections does and puts the long edge in `w:w`.
+  // `w:orient` is spelled only for landscape, because that is what the spec says the token is for (§17.3.2.12) —
+  // not a corpus measurement: over the authorized 46 WPS templates all 58 sections are portrait (56 write
+  // 11906×16838, 2 write 11907×16840) and **0 of the 58 state `w:orient`**, so the landscape half of this rule
+  // has no authorized witness and its old numbers (93 portrait / 22 landscape sections) are 待重证.
+  // `.scratch/authorized-families2.mjs` prints the section and `w:pgSz` counts.
   const size = s
     ? ` w:w="${s.pageWidthTwips}" w:h="${s.pageHeightTwips}"${s.pageWidthTwips > s.pageHeightTwips ? ' w:orient="landscape"' : ""}`
     : "";
@@ -1078,8 +1191,9 @@ export function writeDocx(doc: WordDocument): Uint8Array {
     }
   }
 
-  // A list the document never defined owes bytes too: the part is created when the package had none — the shape
-  // of 文件 → 新建, where 47 of the 86 corpus files carry no `word/numbering.xml` at all — and joined onto the
+  // A list the document never defined owes bytes too: the part is created when the package had none — 授权 46 份里
+  // **24 份根本没有 `word/numbering.xml`**（带的那 22 份去重成 13 个模板），这就是 文件 → 新建 的形状——
+  // and joined onto the
   // file's own definitions when it did. The body relationship is the other half of the promise; a part no
   // relationship reaches is a part Word ignores, and the mark the user just asked for would not draw.
   if (doc.listDirty()) {

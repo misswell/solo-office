@@ -12,12 +12,14 @@ const CT_HDR = "application/vnd.openxmlformats-officedocument.wordprocessingml.h
 const CT_FTR = "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml";
 
 /**
- * The section's reference to the header, in the order the local WPS corpus writes it — `r:id` first on
- * every one of its 59 header and 57 footer references, self-closed, and with the id attribute prefixed.
+ * The section's reference to the header, in the order the authorized WPS templates write it: 授权 46 份的
+ * **38 枚 `w:headerReference`/`w:footerReference` 全部是 `r:id` 在前、`w:type` 在后、自闭合，且 38 枚全写 `w:type`**
+ * （`.scratch/band-per-section.ts`；枚数按类型分：`footer:default` 26、`header:default` 6、`footer:even` 4、
+ * `footer:first` 2）。
  */
 export const REFERENCE_ID_FIRST = '<w:headerReference r:id="rId5" w:type="default"/>';
 
-/** Word's own order, which none of the 116 references in the corpus uses. Both have to read. */
+/** Word's own order, which 授权 46 份的 38 枚引用里没有一枚使用。两种都得读。 */
 export const REFERENCE_TYPE_FIRST = '<w:headerReference w:type="default" r:id="rId5"/>';
 
 /** A section that binds only a first-page header. Shown only when the section also states `w:titlePg`. */
@@ -63,9 +65,10 @@ export function makeFooterDocx(footerPart: string): Uint8Array {
 }
 
 /**
- * A header in the shape the local WPS corpus writes: parts declare around 17 namespaces and every one of
- * them carries `mc:Ignorable`, and of the 86 parts a text edit can reach, 85 give their paragraph a
- * `w:pStyle` and 18 a `w:jc`; 2 hold a literal `w:tab`. So the first paragraph here has all of it — the
+ * A header in the shape the authorized WPS templates write: 授权 46 份共 **38 个 `word/header*.xml` /
+ * `word/footer*.xml` 部件，38/38 的根元素都带 `mc:Ignorable`，根上合计声明 646 个命名空间（平均 17 个）；
+ * 部件内 **76 段**，其中 **62 段给段落写了 `w:pStyle`、12 段写了 `w:jc`、2 段带一个字面 `w:tab`**。
+ * So the first paragraph here has all of it — the
  * tab stop `w:pPr/w:tabs` defines, which is not text, beside the tab the run holds, which is — and the
  * second is the plain one an edit elsewhere must leave alone.
  *
@@ -108,20 +111,35 @@ const fldChar = (stage: "begin" | "separate" | "end"): string => `<w:r><w:fldCha
 const instr = (text: string): string => `<w:r><w:instrText xml:space="preserve">${text}</w:instrText></w:r>`;
 
 /**
- * A page field as the local WPS corpus writes one — and as `insertPageNumber` writes one: `begin`, the
- * instruction, `separate`, the number it last showed, `end`. Of that corpus's 21 fields that sit at run level
- * in a header or footer part, 16 spell the instruction exactly this way, 2 spell `PAGE` with no switch at
- * all, and all 21 cache a digit.
+ * A page field as the authorized templates write one — and as `insertPageNumber` writes one: `begin`, the
+ * instruction, `separate`, the number it last showed, `end`. 授权 46 份的 `word/header*.xml` / `word/footer*.xml`
+ * 里数到 **38 枚 `w:instrText` 与 112 枚 `w:fldChar`（begin 38 / separate 36 / end 38）**——差的那 2 枚是
+ * **不带 `separate` 的域**，即没有缓存结果的写法：指令首词 **PAGE 36 枚、NUMPAGES 2 枚**；带 `\* MERGEFORMAT` 的 28 枚、
+ * 不带的 10 枚；指令串两侧留空格的 34 枚、不留的 4 枚；**36 枚缓存着一串数字**、2 枚没有缓存结果。作废语料那句
+ * 「21 枚 / 16 枚这样拼 / 2 枚裸写 PAGE / 21 枚都缓存」不再是可引读数。
  */
 export const pageFieldRuns = (instruction = " PAGE  \\* MERGEFORMAT ", cached = "1"): string =>
   `${fldChar("begin")}${instr(instruction)}${fldChar("separate")}<w:r><w:t>${cached}</w:t></w:r>${fldChar("end")}`;
 
-/** 「第 」, a page field, 「 页」 — the shape those 4 corpus paragraphs that are not field-only take. */
+/**
+ * The same field with **no `separate` and therefore no cached number**. 授权 46 份的 38 枚域里有 **2 枚**是这个
+ * 形状，其余 36 枚都带缓存结果；0 枚嵌套域（`.scratch/field-stage-shapes.ts` 按深度走了一遍，与枚数口径 112/112
+ * 一致）。这一支问的是「文件没说这一页是第几页」时我们别自己编一个。
+ */
+export const pageFieldWithoutResult = (instruction = " PAGE  \\* MERGEFORMAT "): string =>
+  `${fldChar("begin")}${instr(instruction)}${fldChar("end")}`;
+
+/** 「第 」, a page field, 「 页」 — the shape a page band takes when it is not the field alone. */
 export const PAGE_FOOTER = footerPart(
   `<w:p><w:pPr><w:pStyle w:val="Footer"/></w:pPr><w:r><w:t xml:space="preserve">第 </w:t></w:r>${pageFieldRuns()}<w:r><w:t xml:space="preserve"> 页</w:t></w:r></w:p><w:p><w:r><w:t>普通一行</w:t></w:r></w:p>`,
 );
 
-/** A footer whose only content is the field, which is 17 of the 21 in that corpus. */
+/** 「第 」与「 页」中间那枚域不带缓存结果 —— 授权语料那 2 枚的形状。 */
+export const PAGE_NO_RESULT_FOOTER = footerPart(
+  `<w:p><w:pPr><w:pStyle w:val="Footer"/></w:pPr><w:r><w:t xml:space="preserve">第 </w:t></w:r>${pageFieldWithoutResult()}<w:r><w:t xml:space="preserve"> 页</w:t></w:r></w:p>`,
+);
+
+/** A footer whose only content is the field — the majority shape among the 38 fields counted above. */
 export const PAGE_ONLY_FOOTER = footerPart(`<w:p>${pageFieldRuns()}</w:p>`);
 
 /** The field alone in its paragraph, with the paragraph's formatting on the run that carries the digit. */
@@ -129,46 +147,70 @@ export const PAGE_ONLY_FOOTER_STYLED = footerPart(
   `<w:p><w:pPr><w:pStyle w:val="Footer"/></w:pPr><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGE  \\* MERGEFORMAT </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>1</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>`,
 );
 
+/** The footer the opening section binds, and the one the closing section binds. Different parts, different text. */
+export const FIRST_SECTION_FOOTER = footerPart(`<w:p><w:pPr><w:pStyle w:val="Footer"/></w:pPr><w:r><w:t>开篇页脚</w:t></w:r></w:p>`);
+export const LAST_SECTION_FOOTER = footerPart(`<w:p><w:r><w:t>结尾页脚</w:t></w:r></w:p>`);
+
 /**
  * A document with two sections: the break hanging off the first paragraph ends the opening one, and the
  * body's own `sectPr` is the closing one. Each carries its own header and its own page box — portrait first,
  * landscape last — and each `sectPr` wears a distinguishable `w:rsidR`, so a test can say which section an
- * edited file put a reference in.
+ * edited file put a reference in. `footers` gives the sections footers too: `both` one each, `first` only the
+ * opening section cites one (so the closing section carries it forward), `last` only the **later** section
+ * cites one (so the opening section shows none), `none` neither.
  *
- * The corpus is the reason this shape matters: 18 of the 86 files WPS wrote here have more than one section,
- * and in 4 of them the header is cited only by a later one, in 5 the footer is.
+ * 授权口径的受众（`.scratch/section-band-audience.mjs` 与 `.scratch/band-per-section.ts` 两条口径同为 46 份 58 节）：
+ * **多节的件 8 个实例 = 4 个模板身份 × 各自的本地化副本**；这 4 个模板里 **2 个的第一节什么都不 cite、后面的节各
+ * cite 一枚页脚**（labor contract 是 `[沉默, footer:default]`，project plan 是 `[沉默, footer:default,
+ * footer:default]`），另外 2 个每一节都 cite。「页眉只由后面的节 cite」这条在授权口径上 **0 份**，所以 `last` 这一
+ * 支只喂页脚那一半的问题；作废语料那句「18 of 86 多节 / 4 份页眉只由后面的节 cite / 5 份页脚」不再可引。
  */
-export function makeTwoSectionDocx(o: { firstRef?: string; lastRef?: string; firstLandscape?: boolean; firstMarginTwips?: number } = {}): Uint8Array {
+export function makeTwoSectionDocx(o: { firstRef?: string; lastRef?: string; firstLandscape?: boolean; firstMarginTwips?: number; footers?: "both" | "first" | "last" | "none" } = {}): Uint8Array {
   const firstRef = o.firstRef === undefined ? '<w:headerReference r:id="rId5" w:type="default"/>' : o.firstRef;
   const lastRef = o.lastRef === undefined ? '<w:headerReference r:id="rId6" w:type="default"/>' : o.lastRef;
+  // 带子按节取要看的是「末张的那一份归谁」：两节各 cite 一枚页脚时，纸盒外那份得是第二节的，第一节的那份
+  // 降级成母本；只有第一节 cite 时末张接着第一节的，纸盒外不再有第二份；只有第二节 cite 时第一节什么都不显示
+  // ——向前继承不回头（§17.10.3 的 linkToPrevious 只往回找，不往后找）。
+  const ftr = o.footers ?? "none";
+  const firstFtr = ftr === "none" || ftr === "last" ? "" : '<w:footerReference r:id="rId7" w:type="default"/>';
+  const lastFtr = ftr === "both" || ftr === "last" ? '<w:footerReference r:id="rId8" w:type="default"/>' : "";
   // The opening section's page box either way round, so a check can tell "the band follows the section that
   // owns it" from "the band matches a portrait page by coincidence" — the stylesheet's own fallback is 794px.
   const firstBox = o.firstLandscape ? '<w:pgSz w:w="16838" w:h="11906"/>' : '<w:pgSz w:w="11906" w:h="16838"/>';
-  // 24 of the 24 corpus files that show a band give their opening section margins other than the 1440 default
-  // (15 of them 1800), so the fixture wears that shape too — otherwise a band drawn at the stylesheet's fixed
-  // 96px padding lines up by accident and the check proves nothing.
+  // 授权 46 份里 cite 过带的 **22 份，首节全都写 `w:pgMar`，且 22/22 不是 1440 那个默认值**（全体 46 份的首节里
+  // 36 份写 1800/1800，其余是 1701、1361、1080、1588/1474、1588/1418 这些取整值），所以 the fixture wears that
+  // shape too — otherwise a band drawn at the stylesheet's fixed 96px padding lines up by accident and the
+  // check proves nothing.
   const firstMar = o.firstMarginTwips ?? 1440;
+  // 每一枚 cite 都得有它自己的件、关系与 `[Content_Types]` 声明：`footers: "last"` 引用 rId8 却没有 `word/footer2.xml`
+  // 是一枚悬空引用，严格读法直接拒件，那这一支测的就不是「向前继承不回头」而是包装本身。
+  const hasFirstFtr = ftr === "both" || ftr === "first";
+  const hasLastFtr = ftr === "both" || ftr === "last";
+  const footerTypes = (hasFirstFtr ? `<Override PartName="/word/footer1.xml" ContentType="${CT_FTR}"/>` : "") + (hasLastFtr ? `<Override PartName="/word/footer2.xml" ContentType="${CT_FTR}"/>` : "");
+  const footerRels = (hasFirstFtr ? `<Relationship Id="rId7" Type="${NS_R}/footer" Target="footer1.xml"/>` : "") + (hasLastFtr ? `<Relationship Id="rId8" Type="${NS_R}/footer" Target="footer2.xml"/>` : "");
+  const footerParts = { ...(hasFirstFtr ? { "word/footer1.xml": strToU8(FIRST_SECTION_FOOTER) } : {}), ...(hasLastFtr ? { "word/footer2.xml": strToU8(LAST_SECTION_FOOTER) } : {}) };
   return zipSync(
     {
       "[Content_Types].xml": strToU8(
         XML_DECL +
-          `<Types xmlns="${NS_CT}"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="${CT_W}"/><Override PartName="/word/header1.xml" ContentType="${CT_HDR}"/><Override PartName="/word/header2.xml" ContentType="${CT_HDR}"/></Types>`,
+          `<Types xmlns="${NS_CT}"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="${CT_W}"/><Override PartName="/word/header1.xml" ContentType="${CT_HDR}"/><Override PartName="/word/header2.xml" ContentType="${CT_HDR}"/>${footerTypes}</Types>`,
       ),
       "_rels/.rels": strToU8(XML_DECL + `<Relationships xmlns="${NS_PKG}"><Relationship Id="rId1" Type="${NS_R}/officeDocument" Target="word/document.xml"/></Relationships>`),
       "word/document.xml": strToU8(
         XML_DECL +
           `<w:document xmlns:w="${NS_W}" xmlns:r="${NS_R}"><w:body>` +
-          `<w:p><w:pPr><w:sectPr w:rsidR="00A1">${firstRef}${firstBox}<w:pgMar w:top="1440" w:right="${firstMar}" w:bottom="1440" w:left="${firstMar}"/></w:sectPr></w:pPr><w:r><w:t>第一节</w:t></w:r></w:p>` +
+          `<w:p><w:pPr><w:sectPr w:rsidR="00A1">${firstRef}${firstFtr}${firstBox}<w:pgMar w:top="1440" w:right="${firstMar}" w:bottom="1440" w:left="${firstMar}"/></w:sectPr></w:pPr><w:r><w:t>第一节</w:t></w:r></w:p>` +
           `<w:p><w:r><w:t>第二节</w:t></w:r></w:p>` +
-          `<w:sectPr w:rsidR="00B2">${lastRef}<w:pgSz w:w="16838" w:h="11906"/></w:sectPr>` +
+          `<w:sectPr w:rsidR="00B2">${lastRef}${lastFtr}<w:pgSz w:w="16838" w:h="11906"/></w:sectPr>` +
           `</w:body></w:document>`,
       ),
       "word/_rels/document.xml.rels": strToU8(
         XML_DECL +
-          `<Relationships xmlns="${NS_PKG}"><Relationship Id="rId5" Type="${NS_R}/header" Target="header1.xml"/><Relationship Id="rId6" Type="${NS_R}/header" Target="header2.xml"/></Relationships>`,
+          `<Relationships xmlns="${NS_PKG}"><Relationship Id="rId5" Type="${NS_R}/header" Target="header1.xml"/><Relationship Id="rId6" Type="${NS_R}/header" Target="header2.xml"/>${footerRels}</Relationships>`,
       ),
       "word/header1.xml": strToU8(FIRST_SECTION_HEADER),
       "word/header2.xml": strToU8(LAST_SECTION_HEADER),
+      ...footerParts,
     },
     { level: 6 },
   );
@@ -185,13 +227,14 @@ export const BAND_EVEN_TEXT = "偶数页眉";
  * A section that cites the whole first-page band set the way this machine's WPS cites it, with 「首页不同」
  * either on or off — the fixture the question 「首页不同」 opened on which part is the page's is about.
  *
- * Observed over the 115 sections of the 86 files: 14 cite `w:type` first, default and even for both bands in
- * that order (`h:first > f:first > h:default > f:default > h:even > f:even`, every one `r:id` before `w:type`)
- * while stating no `w:titlePg` at all; 1 section cites a first-page footer with `w:titlePg` and no default; and
- * `w:evenAndOddHeaders` appears in **none** of the files' `word/settings.xml`, which is why an even reference is
- * here as a part held rather than a part shown. `w:titlePg` follows `w:pgMar` and `w:cols` because that is where
- * the sections that state it put it. Only the header side of the interleaving is spelled out — the question is
- * which header the page shows, and reading each kind on its own is what the model does.
+ * 授权口径量到的形状（`.scratch/sect-ref-order.ts`，46 份 58 节）：**58 节里 28 节什么都不 cite、24 节只 cite
+ * 一枚、6 节 cite 多枚**，多枚那 6 节按 `w:type` 分档写——`footer:default > footer:even`（2 节）、
+ * `header:default > footer:even`（2 节）、`footer:first > header:default > footer:default`（2 节）；
+ * `w:type="first"` 在授权口径上**只出现在页脚那一侧（2 枚）**，「first 档里页眉页脚谁前谁后」因此是 **未取证**。
+ * 正文里说 `w:titlePg` 的只有 **2 枚**，而 **46/46 的 `word/settings.xml` 都没说 `evenAndOddHeaders`**：这就是
+ * 为什么一枚 even 引用在这里是「部件持有」而不是「这一张显示」。`w:titlePg` 排在 `w:pgMar` 与 `w:cols` 之后，
+ * 按的是写了它的那两节自己的位置。这里只把页眉那一侧的交错拼出来——问的是这一张纸显示哪一份页眉，而模型的读法
+ * 本来就是两类各问各的。
  *
  * The part names, the relationship ids and the three texts are ours; the shapes are transcriptions.
  */

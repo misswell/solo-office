@@ -236,3 +236,35 @@ export function makeRibbonEchoDocx(): Uint8Array {
 </w:tc></w:tr></w:tbl>`;
   return pack(document);
 }
+
+/**
+ * 一枚 `w:r` 装好几样内容元素的形状：§17.3 的 `EG_RunInnerContent` 是无上限序列，所以 `w:tab` 挨着 `w:t`
+ * 是合法且 WPS 真写的一种摆法。受众按本机 WPS 写出的 201 件正文数（`.scratch/run-split-scope.ts`）：
+ * 32,207 枚 run 里 **2** 枚多孩子，形状都是 `tab,t`，**2** 枚都带自己的 `w:rFonts`，带 `w:rPrChange` 的 **0** 枚。
+ *
+ * 读入侧一枚孩子给一条 inline，所以这两枚 run 写回时若不并回去就是四枚，各自带一份 `w:rPr`——`w:cs`、`w:hint`
+ * 这类模型没有字段的槽因此被写两遍（改脸前 27,156 枚 `w:cs`、47,208 枚 `w:hint`，改脸后各多 2 枚）。
+ * 下面的成对形状是为了让「该并的并、不该并的不并」两头都有东西指着：同名同式的两枚兄弟 run 仍是两枚。
+ * 链接与修订里那两例语料尚无受众（这 201 件里没有带 tab 的 `w:hyperlink`/`w:ins`），只为把 wrapper 只套一层的
+ * 规矩钉住。
+ */
+export function makeTabRunDocx(): Uint8Array {
+  const SET = `<w:rPr><w:rFonts w:hint="eastAsia" w:ascii="Times New Roman" w:eastAsia="宋体" w:cs="Times New Roman"/><w:sz w:val="24"/><w:szCs w:val="28"/><w:lang w:val="en-US" w:eastAsia="zh-CN"/></w:rPr>`;
+  const document = `<w:p><w:r>${SET}<w:tab/><w:t>挨着 tab 的字</w:t></w:r></w:p>
+<w:p><w:r>${SET}<w:t>同名同式的前半</w:t></w:r><w:r>${SET}<w:t>同名同式的后半</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:rFonts w:ascii="Calibri" w:cs="Calibri"/></w:rPr><w:br w:type="page"/><w:t>分页符后的字</w:t></w:r></w:p>
+<w:p><w:hyperlink r:id="rId2"><w:r><w:rPr><w:rStyle w:val="Hyperlink"/><w:rFonts w:cs="Calibri"/></w:rPr><w:tab/><w:t>链接里的 tab</w:t></w:r></w:hyperlink></w:p>
+<w:p><w:ins ${REV(21, "顾峰")}><w:r><w:rPr><w:rFonts w:cs="Calibri"/><w:kern w:val="28"/></w:rPr><w:tab/><w:t>修订里的 tab</w:t></w:r></w:ins></w:p>`;
+  return pack(document);
+}
+
+/**
+ * #143 用的夹具：两枚 run 都没预留 `w:eastAsia`，说的却是中文。第一段文件里只有一个孩子，第二段是 `tab,t`。
+ * 「在汉字段里插分页符，再改一遍脸」那条命令走的路要把同源的两半并回一枚，判据得问整枚 run 而不是问孩子。
+ */
+export function makeHanFaceDocx(): Uint8Array {
+  const SET = `<w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:cs="Calibri"/><w:sz w:val="24"/></w:rPr>`;
+  const document = `<w:p><w:r>${SET}<w:t>这一句只写了西文脸</w:t></w:r></w:p>
+<w:p><w:r>${SET}<w:tab/><w:t>文件里就带 tab 的一句</w:t></w:r></w:p>`;
+  return pack(document);
+}

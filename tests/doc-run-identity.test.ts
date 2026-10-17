@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { Inline, Paragraph, PropSlot } from "../src/core/docx.js";
-import { WordDocument } from "../src/core/docx.js";
+import { WordDocument, applyFacePick, applyRunPatch } from "../src/core/docx.js";
 import { SEEN_BY_VIEW, inlineLength, keepRunIdentity } from "../src/core/run-identity.js";
 import { writeDocx } from "../src/core/write-docx.js";
 import { OpcPackage, text } from "../src/core/opc.js";
 import { makeChainDocx } from "./helpers/make-paragraph.js";
-import { makeHighlightDocx, makeOnOffDocx, makeUnderlineDocx } from "./helpers/make-run.js";
+import { makeHanFaceDocx, makeHighlightDocx, makeOnOffDocx, makeTabRunDocx, makeUnderlineDocx } from "./helpers/make-run.js";
 
 /**
  * #78 — the page is a rendering of the resolved run style, and the editor re-derives the model from it on every
@@ -102,6 +102,7 @@ const FULL: Inline = {
   brXml: '<w:br w:type="clear"/>',
   tab: true,
   rPrSlots: [{ tag: "kern", xml: '<w:kern w:val="2"/>' } as PropSlot],
+  runText: "正文（同一枚 run 里还有 tab）",
   asRead: { bold: true },
 };
 
@@ -297,6 +298,59 @@ describe("a run rebuilt from the page keeps what the page cannot show", () => {
     const before = rPrs(save(doc));
     for (const p of paragraphs(doc)) p.inlines = retyped(p.inlines, p.inlines.map((r) => r.text).join(""), "打的字");
     expect(rPrs(save(doc))).toEqual(before);
+  });
+
+  it("页面重拼之后，同一枚 run 的两半改一遍脸仍并回一枚", () => {
+    // #143：「这枚 run 说的是中文」不在页面上，靠 `keepRunIdentity` 从原点带回来。少了它，插在汉字段里的断行
+    // 改字体时不补 `w:eastAsia`，两半各写一份性质，`w:cs`/`w:hint` 跟着多写一遍（§86 那份 9/9/9 就是这么来的）。
+    const doc = open(makeTabRunDocx());
+    const p = paragraphs(doc).find((x) => x.inlines.some((r) => r.break))!;
+    const prev = p.inlines;
+    const next = prev.map((r) => viewOf(r));
+    keepRunIdentity(next, prev);
+    for (const r of next) Object.assign(r, applyRunPatch(r, { font: "黑体" }));
+    p.inlines = next;
+    const para = paraXmlOf(save(doc), "分页符后的字");
+    expect(para).toMatch(/<w:br w:type="page"\/><w:t>分页符后的字<\/w:t>/);
+    expect(para).toContain('w:eastAsia="黑体"');
+    expect((para.match(/<w:r\b/g) ?? []).length).toBe(1);
+    expect((para.match(/w:cs=/g) ?? []).length).toBe(1);
+  });
+
+  it("原点是单孩子的 run，插在中间的分页符跟着整枚 run 回答「这说的是中文」", () => {
+    // 上面那条走的是文件里本来就并列两个孩子的 run，`runText` 能从原点带回来。这一条是**我们自己造出的形状**：
+    // 读进来时只有一枚 `w:t`（没有 `runText`），InsertPageBreak 之后页面上是三截。断行自己没有字，它问不到
+    // 「这枚 run 说的是哪种文字」，只能问同一枚 run 的那一套 `w:rPr` 引用的兄弟们——引用就是写端并回一枚的依据。
+    const doc = open(makeHanFaceDocx());
+    const p = paraAt(doc, "这一句只写了西文脸");
+    const prev = p.inlines.map((r) => ({ ...r }));
+    // 页面上那枚断行是一个 `br[data-brk]` 元素，`inlinesOf` 把它推成 `{...ctx, break:true, brXml}`：段里解析出来
+    // 的磅数它照旧带着，缺的是 `w:rPr` 与「这枚 run 说了哪种文字」。
+    const next: Inline[] = [
+      viewOf(prev[0]!, "这一"),
+      { ...viewOf(prev[0]!, ""), break: true, brXml: '<w:br w:type="page"/>' },
+      viewOf(prev[0]!, "句只写了西文脸"),
+    ];
+    keepRunIdentity(next, prev);
+    expect(next[1]!.runText).toBe("这一句只写了西文脸");
+    for (const r of next) Object.assign(r, applyRunPatch(r, { font: "黑体" }));
+    p.inlines = next;
+    const para = paraXmlOf(save(doc), "这一");
+    expect(para).toMatch(/<w:br w:type="page"\/><w:t[^>]*>句只写了西文脸<\/w:t>/);
+    expect((para.match(/<w:r\b/g) ?? []).length).toBe(1);
+    expect((para.match(/w:cs=/g) ?? []).length).toBe(1);
+    expect((para.match(/<w:sz\b/g) ?? []).length).toBe(1);
+    expect(para).toContain('w:eastAsia="黑体"');
+  });
+
+  it("没带回槽引用的孩子不替别的 run 说话", () => {
+    // 槽引用为空时写端本来也不会并（`joinableRun`），所以这里没有「同一枚 run」可问——汉字的判断照旧落在孩子
+    // 自己那句话上。这一条钉住上面那条规矩的边界：重算只按引用并组，不按相邻。
+    const prev: Inline[] = [{ text: "汉字" }, { text: "", break: true, brXml: "<w:br/>" }];
+    const next = prev.map((r) => viewOf(r));
+    keepRunIdentity(next, prev);
+    expect(next[1]!.runText).toBeUndefined();
+    expect(applyFacePick(next[1]!, "黑体")).toEqual({ font: "黑体" });
   });
 });
 

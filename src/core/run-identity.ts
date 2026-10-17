@@ -72,6 +72,30 @@ function runAt(inlines: Inline[], pos: number): Inline | undefined {
 }
 
 /**
+ * Re-derives, for the rebuilt list, the text each run says — `Inline.runText`, the one property of a run that no
+ * child holds by itself. A run that arrives from the file already multi-child gets it from its origin; a run that
+ * *becomes* multi-child here — a page break inserted into a Han sentence — has no origin holding it, and the mark
+ * that was inserted would answer "which script does this run speak" from its own empty text. So it answers from the
+ * run's: the `w:rPr` reference the children carry back is what makes them one run again (the writer joins on
+ * exactly that reference), and the text of such a group is recomputed after the fields have come back.
+ *
+ * A rebuilt child with no carried reference is left alone: without one the writer never joins its neighbours, so
+ * there is no run for a group to speak for.
+ */
+function restampRunText(next: Inline[]): void {
+  for (let i = 0; i < next.length; ) {
+    const slots = next[i].rPrSlots;
+    let j = i + 1;
+    if (slots) while (j < next.length && next[j].rPrSlots === slots) j += 1;
+    if (slots && j - i > 1) {
+      const runText = next.slice(i, j).map((run) => run.text).join("");
+      for (let k = i; k < j; k++) next[k].runText = runText;
+    }
+    i = j;
+  }
+}
+
+/**
  * Gives each rebuilt run the fields the view cannot carry, from the run its text came from.
  *
  * Typing moves text, so the two lists are matched by what did not move: everything up to the first difference
@@ -126,4 +150,5 @@ export function keepRunIdentity(next: Inline[], prev: Inline[]): void {
     }
     pos += inlineLength(run);
   }
+  restampRunText(next);
 }

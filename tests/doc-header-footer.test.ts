@@ -7,10 +7,14 @@ import {
   BAND_DEFAULT_TEXT,
   BAND_EVEN_TEXT,
   BAND_FIRST_TEXT,
+  FIRST_SECTION_HEADER,
+  FIRST_SECTION_FOOTER,
   LAST_SECTION_HEADER,
+  LAST_SECTION_FOOTER,
   PAGE_FOOTER,
   PAGE_ONLY_FOOTER,
   PAGE_ONLY_FOOTER_STYLED,
+  PAGE_NO_RESULT_FOOTER,
   footerPart,
   LOGO_RUN,
   PAGE_BOX_DISAGREEING_RUN,
@@ -26,6 +30,7 @@ import {
   makeStyledHeaderDocx,
   makeTwoSectionDocx,
   pageFieldRuns,
+  pageFieldWithoutResult,
   REFERENCE_EVEN_ONLY,
   REFERENCE_FIRST_PAGE_ONLY,
   REFERENCE_ID_FIRST,
@@ -198,8 +203,9 @@ describe("docx header/footer parts travel as the file wrote them", () => {
     expect(renderWord(on)).toContain(BAND_FIRST_TEXT);
     expect(renderWord(on)).not.toContain(BAND_DEFAULT_TEXT);
 
-    // The even band is cited by 29 of the corpus's sections and displayed by none of them: a file with only an
-    // even reference has a part, and this page is not the one it belongs to.
+    // The even band is held but displayed by no section: 授权 46 份 cite 的 38 枚引用里 `w:type="even"` 只有
+    // **4 枚，全在页脚那一侧**，而 **46/46 的 `word/settings.xml` 都没说 `evenAndOddHeaders`**（0 枚）——开关是
+    // 文件的，不是渲染器的（#164）。所以一份只 cite even 的件有部件，但这一张纸不是它归属的那张。
     const even = WordDocument.openBytes(makeHeaderFooterDocx(STYLED_HEADER, REFERENCE_EVEN_ONLY));
     expect(even.header).toBeUndefined();
   });
@@ -263,21 +269,33 @@ describe("docx header/footer parts travel as the file wrote them", () => {
 });
 
 describe("docx 页眉页脚：显示", () => {
-  it("draws one line per paragraph, outside the page, with the tab kept", () => {
+  it("draws one line per paragraph on the paper, with the tab kept", () => {
     const html = renderWord(WordDocument.openBytes(makeStyledHeaderDocx()));
     expect(html).toContain('<div class="hf-p">机密\t第一段</div>');
     expect(html).toContain('<div class="hf-p">第二段</div>');
-    expect(html.indexOf('class="hf hf-header"')).toBeLessThan(html.indexOf('class="page"'));
+    // 带子排在纸盒**之内**、正文块之后（#157：此前它排在纸盒之外，画在纸上看不到，正文也从没为它让位）。
+    // 排在最后一条与页面边框同一先例：编辑器按块在 `.page` 孩子里的下标寻址，任何排在前面的装饰会把下标顶偏。
+    expect(html.indexOf('class="page"')).toBeLessThan(html.indexOf('solo-hf-master'));
+    expect(html.indexOf('<div class="para"')).toBeLessThan(html.indexOf('solo-hf-master'));
   });
 
-  it("puts the footer under the page and names the band it offers to edit", () => {
+  it("puts the footer on the last sheet and names the band it offers to edit", () => {
     const html = renderWord(WordDocument.openBytes(makeFooterDocx(plainFooter("第 1 页"))));
     expect(html).toContain('data-hf="footer"');
-    expect(html).toContain('class="hf hf-footer hf-bottom"');
+    expect(html).toContain('class="hf hf-footer hf-bottom solo-hf-master"');
     expect(html).toContain('title="点击编辑页脚"');
     expect(html).toContain('<div class="hf-p">第 1 页</div>');
     expect(html.indexOf('class="page"')).toBeLessThan(html.indexOf("hf hf-footer"));
-    expect(renderWord(WordDocument.openBytes(makeStyledHeaderDocx()))).toContain('class="hf hf-header"');
+    expect(renderWord(WordDocument.openBytes(makeStyledHeaderDocx()))).toContain('class="hf hf-header solo-hf-master"');
+  });
+
+  it("keeps the band on the paper uneditable until it is opened", () => {
+    // 带子住在可编辑的纸盒里，`contenteditable="false"` 就是它 resting 状态唯一的来源（挂在纸盒外时那句是继承来的）。
+    // 缺了它，`editHF` 开头那句 `isContentEditable` 直接 return：带子点不开，打字落进正文，读回又把它当装饰跳过。
+    const html = renderWord(WordDocument.openBytes(makeStyledHeaderDocx()));
+    const master = /<div class="hf hf-header[^"]*"[^>]*>/.exec(html)?.[0] ?? "";
+    expect(master).toContain('contenteditable="false"');
+    expect(master).toContain('data-hf-part="word/header1.xml"');
   });
 
   it("offers no band for a section that binds nothing", () => {
@@ -337,6 +355,181 @@ describe("docx 页眉页脚：多节文档按节取", () => {
       [11906, 16838],
       [16838, 11906],
     ]);
+  });
+
+  /**
+   * #157：纸上那一条带子的**字**得跟着节走。这一节自己 cite 的用这一节的部件，什么都没说的一节接着它前面
+   * 最近的那一节——不是接着整份件的最后一份，也不是把开篇那一节的字贴到每一张纸上。
+   */
+  it("keeps what each section cites itself, and reads the closing section's part too", () => {
+    const doc = WordDocument.openBytes(makeTwoSectionDocx());
+    expect(doc.sectionRefs.map((p) => [p.header?.part, p.footer?.part])).toEqual([
+      ["word/header1.xml", undefined],
+      ["word/header2.xml", undefined],
+    ]);
+    expect(doc.sectionBand("header", 0)?.paragraphs).toEqual(["开篇页眉"]);
+    expect(doc.sectionBand("header", 1)?.paragraphs).toEqual(["结尾页眉"]);
+    // The band the editor draws and a save writes comes from the section the page starts in; a later section's
+    // part is a separate one, and the save writes only what somebody actually typed into.
+    expect(doc.header?.part).toBe("word/header1.xml");
+    expect(doc.sectionBand("header", 1)).not.toBe(doc.header);
+  });
+
+  it("carries a section that says nothing off the one before it, never off the one after", () => {
+    const quiet = WordDocument.openBytes(makeTwoSectionDocx({ lastRef: "" }));
+    expect(quiet.sectionRefs[1]).toEqual({});
+    expect(quiet.sectionBand("header", 1)?.part).toBe("word/header1.xml");
+    // Forward only: the opening section shows nothing, and the closing one's part does not reach back to it.
+    const firstQuiet = WordDocument.openBytes(makeTwoSectionDocx({ firstRef: "" }));
+    expect(firstQuiet.sectionBand("header", 0)).toBeUndefined();
+    expect(firstQuiet.sectionBand("header", 1)?.part).toBe("word/header2.xml");
+  });
+
+  it("hands one part to every section that cites it, so editing it is one edit", () => {
+    const shared = makeTwoSectionDocx({ lastRef: '<w:headerReference r:id="rId5" w:type="default"/>' });
+    const doc = WordDocument.openBytes(shared);
+    expect(doc.sectionBand("header", 1)).toBe(doc.header);
+  });
+
+  it("draws the later section's band as a母本 the page can copy, not as a second editable band", () => {
+    const html = renderWord(WordDocument.openBytes(makeTwoSectionDocx()));
+    expect(html).toContain('class="solo-hf-src" data-hf-part="word/header2.xml" data-hf-kind="header"');
+    expect(html).toContain("结尾页眉");
+    // 母本不占 `.hf` 这个名：`wireHF` 只认 `.hf`，认到两份就是两份都能改、改了各归各。
+    expect(/class="[^"]*solo-hf-src[^"]*hf-header/.test(html)).toBe(false);
+    expect((html.match(/class="hf hf-header[^"]*"/g) ?? []).length).toBe(1);
+    expect(html).toContain("display:none");
+    // A one-section file draws none of it.
+    expect(renderWord(WordDocument.openBytes(makeStyledHeaderDocx()))).not.toContain("solo-hf-src");
+  });
+
+  it("puts the closing section's footer on the last sheet and keeps the opening one as a母本", () => {
+    const doc = WordDocument.openBytes(makeTwoSectionDocx({ footers: "both" }));
+    const html = renderWord(doc);
+    expect(doc.sectionBand("footer", 1)?.part).toBe("word/footer2.xml");
+    const partOf = (which: "header" | "footer"): string =>
+      new RegExp(`class="hf hf-${which}[^"]*"[^>]*?data-hf-part="([^"]*)"`).exec(html)?.[1] ?? "";
+    expect(partOf("footer"), "纸盒外那一份页脚守的是最后一张，不是开篇那一张").toBe("word/footer2.xml");
+    expect(partOf("header")).toBe("word/header1.xml");
+    // 第一节那一份不再可见，就退成母本给纸上的复件抄——可见与母本合起来仍是一份部件只画一遍。
+    expect(html).toContain('class="solo-hf-src" data-hf-part="word/footer1.xml" data-hf-kind="footer"');
+    expect((html.match(/class="hf hf-footer/g) ?? []).length).toBe(1);
+  });
+
+  it("writes back the part the last sheet shows, not the one the document opens with", () => {
+    const bytes = makeTwoSectionDocx({ footers: "both" });
+    const doc = WordDocument.openBytes(bytes);
+    const part = doc.sectionBand("footer", 1)!.part;
+    expect(doc.setBandSegments("footer", part, [[{ text: "改过的结尾" }]])).toBe(true);
+    const out = writeDocx(doc);
+    const pkg = OpcPackage.from(out);
+    expect(text(pkg.bytes("word/footer2.xml")!)).toContain("改过的结尾");
+    // 没改过的三份各归各：开篇那一张的页脚、两张的页眉，还有正文，都按原字节交回去。
+    expect(text(pkg.bytes("word/footer1.xml")!)).toBe(FIRST_SECTION_FOOTER);
+    expect(text(pkg.bytes("word/header1.xml")!)).toBe(FIRST_SECTION_HEADER);
+    expect(text(pkg.bytes("word/document.xml")!)).toBe(text(OpcPackage.from(bytes).bytes("word/document.xml")!));
+    expect(WordDocument.openBytes(out).sectionBand("footer", 1)?.paragraphs).toEqual(["改过的结尾"]);
+  });
+
+  it("lists every part a section shows to the save, and marks clean ones clean", () => {
+    const doc = WordDocument.openBytes(makeTwoSectionDocx({ footers: "both" }));
+    expect(doc.headerFooterParts().map((p) => p.part).sort()).toEqual(["word/footer1.xml", "word/footer2.xml", "word/header1.xml", "word/header2.xml"]);
+    expect(doc.headerFooterParts().every((p) => !p.dirty), "nobody typed: no part is a write").toBe(true);
+    expect(doc.setBandSegments("header", "word/header2.xml", [[{ text: "结尾改版" }]])).toBe(true);
+    expect(doc.headerFooterParts().filter((p) => p.dirty).map((p) => p.part)).toEqual(["word/header2.xml"]);
+  });
+
+  it("shows one footer on both sheets when the closing section cites nothing", () => {
+    const doc = WordDocument.openBytes(makeTwoSectionDocx({ footers: "first" }));
+    expect(doc.sectionBand("footer", 1)?.part).toBe("word/footer1.xml");
+    const html = renderWord(doc);
+    expect(/class="hf hf-footer[^"]*"[^>]*?data-hf-part="word\/footer1.xml"/.test(html)).toBe(true);
+    // 同一份部件不另画母本：两份都叫 `.hf` 就两份都能改、改了各归各。
+    expect(html).not.toContain('data-hf-part="word/footer1.xml" data-hf-kind="footer"');
+    expect(doc.headerFooterParts().map((p) => p.part).sort()).toEqual(["word/footer1.xml", "word/header1.xml", "word/header2.xml"]);
+  });
+
+  /**
+   * #163 第三档：授权口径里 4 个多节模板身份有 **2 个的第一节什么都不 cite、后面的节各 cite 一枚页脚**
+   * （labor contract 是 `[沉默, footer:default]`，project plan 是 `[沉默, footer:default, footer:default]`；
+   * `.scratch/band-per-section.ts` 读的就是这 8 个实例）。这一支把那个形状钉在单元测试里：第一张纸没有页脚，
+   * 末张显示**第二节自己**那一份，向前继承不回头（§17.10.3）。
+   */
+  it("shows no footer on the first sheet when only a later section cites one", () => {
+    const doc = WordDocument.openBytes(makeTwoSectionDocx({ footers: "last" }));
+    expect(doc.footer, "开篇那一节没 cite，文档级页眉页脚就不该替它认领一份").toBeUndefined();
+    expect(doc.sectionRefs.map((p) => [p.header?.part ?? "-", p.footer?.part ?? "-"])).toEqual([
+      ["word/header1.xml", "-"],
+      ["word/header2.xml", "word/footer2.xml"],
+    ]);
+    expect(doc.sectionBand("footer", 0), "第二节那一份不回头够到第一张纸").toBeUndefined();
+    expect(doc.sectionBand("footer", 1)?.paragraphs).toEqual(["结尾页脚"]);
+    const html = renderWord(doc);
+    const partOf = (which: "header" | "footer"): string =>
+      new RegExp(`class="hf hf-${which}[^"]*"[^>]*?data-hf-part="([^"]*)"`).exec(html)?.[1] ?? "";
+    expect(partOf("footer")).toBe("word/footer2.xml");
+    expect(partOf("header")).toBe("word/header1.xml");
+    // 第一节没有页脚，也没有第二份页脚可降级：页脚这一侧纸上只有一份、母本零份。
+    expect((html.match(/class="hf hf-footer/g) ?? []).length).toBe(1);
+    expect(html).not.toContain('data-hf-part="word/footer2.xml" data-hf-kind="footer"');
+    expect(doc.headerFooterParts().map((p) => p.part).sort()).toEqual(["word/footer2.xml", "word/header1.xml", "word/header2.xml"]);
+  });
+
+  /** 同一形状的写回侧：#163 在 8 个授权实例上量到「逐节 cite 表一致 / 纸面显示一致」，这里钉住这一支。 */
+  it("saves a file whose opening section cites no footer with that section still silent", () => {
+    const bytes = makeTwoSectionDocx({ footers: "last" });
+    const out = writeDocx(WordDocument.openBytes(bytes));
+    expect(text(OpcPackage.from(out).bytes("word/document.xml")!)).toBe(text(OpcPackage.from(bytes).bytes("word/document.xml")!));
+    expect(text(OpcPackage.from(out).bytes("word/footer2.xml")!)).toBe(LAST_SECTION_FOOTER);
+    const again = WordDocument.openBytes(out);
+    expect(again.footer).toBeUndefined();
+    expect(again.sectionRefs.map((p) => [p.header?.part ?? "-", p.footer?.part ?? "-"])).toEqual([
+      ["word/header1.xml", "-"],
+      ["word/header2.xml", "word/footer2.xml"],
+    ]);
+    expect([again.sectionBand("footer", 0)?.part ?? "-", again.sectionBand("footer", 1)?.part ?? "-"]).toEqual(["-", "word/footer2.xml"]);
+  });
+
+  /**
+   * 新建那一枚引用**怎么写**也归 #163 的口径管：授权 46 份的 38 枚引用 38/38 是 `r:id` 在前、`w:type` 在后、
+   * 自闭合；cite 多枚的 6 节按 `w:type` 分档排（`first` → `default` → `even`），同档里页眉在页脚前
+   * （`.scratch/sect-ref-order.ts`）。这一支把两端钉住——落点归开篇那一节（`bandSectIsBody` 为假时走
+   * `citeBandReference`），形状按语料拼。
+   */
+  it("writes a band reference this session owes in the order the files use", () => {
+    const doc = WordDocument.openBytes(makeTwoSectionDocx({ footers: "last" }));
+    const made = doc.ensureHeaderFooter("footer");
+    expect(made?.part).toBe("word/footer1.xml");
+    const xml = docXml(writeDocx(doc));
+    // 排在第一节那枚 `header:default` **之后**，不是插到 `sectPr` 最前面。
+    expect(between(xml, 'w:rsidR="00A1"', 'w:rsidR="00B2"')).toContain('<w:headerReference r:id="rId5" w:type="default"/><w:footerReference r:id="rId9" w:type="default"/>');
+    expect(between(xml, 'w:rsidR="00A1"', 'w:rsidR="00B2"')).not.toContain("w:type=\"default\" r:id=");
+    // 第二节自己那一份一个字没动。
+    expect(xml.slice(xml.indexOf('w:rsidR="00B2"'))).toContain('<w:footerReference r:id="rId8" w:type="default"/>');
+    const again = WordDocument.openBytes(writeDocx(doc));
+    expect([again.sectionBand("footer", 0)?.part ?? "-", again.sectionBand("footer", 1)?.part ?? "-"]).toEqual(["word/footer1.xml", "word/footer2.xml"]);
+  });
+
+  it("puts a created default band after the first-page reference the section already wrote", () => {
+    // 授权那 2 节把 `w:type="first"` 写在 `default` 之前，一节连页脚的 first 都排在页眉的 default 前。
+    const doc = WordDocument.openBytes(makeFirstPageHeaderDocx({ titlePg: true, refs: ["first"] }));
+    expect(doc.header?.part).toBe("word/header2.xml");
+    expect(doc.footer).toBeUndefined();
+    doc.ensureHeaderFooter("footer");
+    const xml = docXml(writeDocx(doc));
+    expect(xml).toMatch(/<w:headerReference r:id="rId6" w:type="first"\/><w:footerReference r:id="rId\d+" w:type="default"\/>/);
+    const again = WordDocument.openBytes(writeDocx(doc));
+    expect(again.header?.part).toBe("word/header2.xml");
+    expect(again.footer?.part).toBe("word/footer1.xml");
+  });
+
+  it("saves a two-section file byte-identical when nobody typed, with both header parts intact", () => {
+    const bytes = makeTwoSectionDocx();
+    const out = writeDocx(WordDocument.openBytes(bytes));
+    const pkg = OpcPackage.from(out);
+    expect(text(pkg.bytes("word/header1.xml")!)).toBe(text(OpcPackage.from(bytes).bytes("word/header1.xml")!));
+    expect(text(pkg.bytes("word/header2.xml")!)).toBe(LAST_SECTION_HEADER);
+    expect(text(pkg.bytes("word/document.xml")!)).toBe(text(OpcPackage.from(bytes).bytes("word/document.xml")!));
   });
 
   it("gives the band the width of the section that owns it, both ways round", () => {
@@ -401,6 +594,25 @@ describe("docx page fields in a header or footer", () => {
     for (const part of [PAGE_FOOTER, PAGE_ONLY_FOOTER, PAGE_ONLY_FOOTER_STYLED]) {
       expect(footerOf(writeDocx(WordDocument.openBytes(makeFooterDocx(part))))).toBe(part);
     }
+  });
+
+  /**
+   * 授权语料那 **2 枚没有 `separate` 的域**（36 枚有；`.scratch/field-stage-shapes.ts`）。文件没写下「这一页是第
+   * 几页」的缓存结果，读的人就一个数都不该编：域仍是整枚带着的记号，正文里既不出现「1」也不出现空位，写回按原字节。
+   */
+  it("carries a field that has no separate and no cached result without inventing a number", () => {
+    const bytes = makeFooterDocx(PAGE_NO_RESULT_FOOTER);
+    const doc = WordDocument.openBytes(bytes);
+    expect(doc.footer?.editable).toBe(true);
+    expect(doc.footer?.paragraphs).toEqual(["第  页"]);
+    expect(doc.footer?.segments?.[0]?.map((s) => (s.carry ? `[${s.carry.tag}:${s.carry.show}]` : s.text))).toEqual(["第 ", "[fldChar:页码]", " 页"]);
+    expect(doc.footer?.segments?.[0]?.[1]?.carry?.xml).toBe(pageFieldWithoutResult());
+    const html = renderWord(doc);
+    expect(html).toContain("第");
+    expect(html).toContain("页");
+    expect(html.match(/data-tag="fldChar"/g) ?? []).toHaveLength(1);
+    expect(footerOf(writeDocx(doc))).toBe(PAGE_NO_RESULT_FOOTER);
+    expect(WordDocument.openBytes(writeDocx(doc)).footer?.paragraphs).toEqual(["第  页"]);
   });
 
   it("leaves the field's paragraph as its bytes when another one is edited", () => {
@@ -792,18 +1004,17 @@ describe("docx page fields in a header or footer", () => {
 });
 
 /**
- * `w:pgMar` states seven distances, not four (ECMA-376 §17.3.2.13), and all 115 of them in the 86 real files
- * this machine's WPS wrote state all seven. `w:header` and `w:footer` are measured from the **edge of the
- * paper**, so they say where a band sits rather than how wide the text column is; `w:gutter` is binding width
- * added to the margin it belongs to. Reading only four left every file's bands at the stylesheet's fixed gap
- * and its binding margin nowhere.
+ * `w:pgMar` states seven distances, not four (ECMA-376 §17.3.2.13), and all 58 of them in the authorized
+ * 46 份 state all seven (`.scratch/corpus-recheck.mjs`). `w:header` and `w:footer` are measured from the
+ * **edge of the paper**, so they say where a band sits rather than how wide the text column is; `w:gutter` is
+ * binding width added to the margin it belongs to. Reading only four left every file's bands at the
+ * stylesheet's fixed gap and its binding margin nowhere.
  *
- * 未取证: WPS' own scrolling view was not observed placing the band inside the margin, and here a band hangs
- * outside the paper box, so the declared distance can only show as the spacing that separates it from the
- * text — the numbers read are the file's, the mapping is this renderer's.
+ * 真机取到了带子的落点与让位（夹具 `/tmp/tall-header.docx`：页眉 10 行、四边 1440 缇、`w:header` 720 缇，
+ * WPS 正文上沿 ≈3445 缇，#159）。仍未取证的是**带子比整页还高**那一支——本版不裁，让它溢出纸。
  */
 describe("docx 页眉页脚：w:pgMar 的三个距离", () => {
-  /** One band's own box, which is where its spacing has to appear: the band is a sibling of `.page`. */
+  /** One band's own box, which is where its placement has to appear: the band lives inside `.page`. */
   const band = (html: string, which: "header" | "footer"): string =>
     new RegExp(`class="hf hf-${which}[^"]*"[^>]*?style="([^"]*)"`).exec(html)?.[1] ?? "";
   /** The page box's own `style`, which carries the four margins and the binding width. */
@@ -836,27 +1047,33 @@ describe("docx 页眉页脚：w:pgMar 的三个距离", () => {
     expect(m.gutter).toBeUndefined();
   });
 
-  it("holds the band off the text by the margin it sits in minus its own distance", () => {
-    // `w:header="720"` inside a 2160-twip top margin leaves 1440 twips = 96px; the footer's distance equals
-    // its margin, so nothing separates it from the text. Distinct numbers on both sides, because a swapped
-    // pair or a band measured against the wrong margin still lands somewhere plausible.
+  it("places the band at the distance its own section states", () => {
+    // §17.3.2.7/9 那两个数从**页边**量起，所以带子按自己的摆位落在纸上，而不是靠一句内边距把字撑开。
+    // 夹具 `/tmp/tall-header.docx` 在 WPS 真机上量到正文为页眉让位（正文上沿 ≈3445 缇），让位本身由
+    // `doc-layout.ts` 的 `applyBandYield` 在铺排前量，不在这一串字面里（`bandYieldPx` 钉的是那道算式）。
     const html = renderWord(
       WordDocument.openBytes(makePageDistanceDocx('w:top="2160" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="1440"')),
     );
-    expect(band(html, "header")).toContain(`;padding-bottom:${twipsToPx(2160 - 720)}px`);
-    expect(band(html, "footer")).toContain(`;padding-top:${twipsToPx(1440 - 1440)}px`);
+    expect(band(html, "header")).toContain(`;top:${twipsToPx(720)}px`);
+    expect(band(html, "footer")).toContain(`;bottom:${twipsToPx(1440)}px`);
+    // 两份带子都排在正文之后、纸盒之内：正文的下标不能被装饰顶偏。
+    expect(html.indexOf('<div class="para"')).toBeLessThan(html.indexOf('solo-hf-master'));
   });
 
-  it("never answers a distance past the margin with a negative gap", () => {
+  it("puts a distance past the margin on the paper rather than clamping it away", () => {
+    // 距离比边距还大时那一截落在正文里，由 `applyBandYield` 让出来——摆位没有「负的内边距」可写，
+    // 也就不会再出现旧那一句 `max(0, …)` 把数夹掉、纸上看不到带子的两支。
     const html = renderWord(WordDocument.openBytes(makePageDistanceDocx('w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="2160" w:footer="2160"')));
-    expect(band(html, "header")).toContain(";padding-bottom:0px");
-    expect(band(html, "footer")).toContain(";padding-top:0px");
+    expect(band(html, "header")).toContain(`;top:${twipsToPx(2160)}px`);
+    expect(band(html, "footer")).toContain(`;bottom:${twipsToPx(2160)}px`);
   });
 
-  it("leaves the stylesheet's gap where the file said nothing", () => {
+  it("puts the band on the paper edge where the file said no distance", () => {
     const html = renderWord(WordDocument.openBytes(makePageDistanceDocx('w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"')));
-    expect(band(html, "header")).not.toContain("padding-bottom");
-    expect(band(html, "footer")).not.toContain("padding-top");
+    expect(band(html, "header")).toContain(";top:0px");
+    expect(band(html, "footer")).toContain(";bottom:0px");
+    // 发明 Word 的 docDefaults（页眉 720 / 页脚 720）会把一个没人写过的数画到纸上。
+    expect(band(html, "header")).not.toContain(`top:${twipsToPx(720)}px`);
   });
 
   it("adds the binding width to the left margin the page and the bands draw with", () => {

@@ -78,12 +78,14 @@ function injectStyles(): void {
 const unitText = (tw: number | undefined): string => (tw === undefined ? "" : twipText(tw));
 
 /**
- * The sheets 「页面设置」 offers by name. `w:pgSz` carries no names — §17.3.2.12 stores two distances and all
- * 115 sections in the 86 files this machine's WPS wrote spell their own pair — so this list is the dialog's
+ * The sheets 「页面设置」 offers by name. `w:pgSz` carries no names — §17.3.2.12 stores two distances and every
+ * section spells its own pair (授权语料 46 份 WPS 自带模板的 58 节，`word/document.xml` 里 **58 节全写 `w:pgSz`**，
+ * `.scratch/authorized-families2.mjs` 与 ElementTree、xmllint 三口径一致) — so this list is the dialog's
  * convenience, not a vocabulary the part has. Its centimetres are the sizes as their own standards state them
  * (ISO 216 counts in whole tenths of a centimetre; 8.5, 11 and 14 inches are 21.59, 27.94 and 35.56 cm), and
- * each converts to the twip count a producer writes for that sheet: 「A4」 gives 11906×16838, the pair 111 of
- * the 115 spell. A sheet that is not here is 自定义, and its two boxes are what the save owes.
+ * each converts to the twip count a producer writes for that sheet: 「A4」 gives 11906×16838, the pair **56 of the
+ * 58** spell (the other 2 write 11907×16840 — 同一张纸的另一档取整). A sheet that is not here is 自定义, and its
+ * two boxes are what the save owes.
  *
  * 16 开 and 32 开 are deliberately absent: the numbers WPS gives them were never read off a dialog, and a
  * guess under a standard-looking name is how a document ends up on the wrong paper.

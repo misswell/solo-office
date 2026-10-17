@@ -6,9 +6,16 @@ import type { Unit } from "./doc-units.js";
 /**
  * 「段落」对话框：竖向节奏那三个数——段前、段后、行距，外加一颗「如果定义了文档网格，则对齐到网格」的勾。
  * #132 把样式表代劳的那 8px 判死之后，这一族**只剩文件自己
- * 说过的那一条路**，而这条路此前没有任何一条 UI 命令能走：段前/段后 13,426 段里 11,977 段两边都没说，说了的也只有
- * 段前 517 / 段后 463（`.scratch/spacing-audience.ts`，201 份）；行距这一家 201 份里 7,810 枚写了 `w:line`，其中
- * `w:lineRule="exact"` 5,627 枚、`auto` 2,178 枚、`atLeast` 5 枚（`.scratch/spacing-shape.ts`）。能画不能改，
+ * 说过的那一条路**，而这条路此前没有任何一条 UI 命令能走。授权口径（46 份 WPS 写出的件，`.scratch/corpus-recheck2.mjs`；
+ * 部件范围由 `.scratch/spacing-part-scope.py` 定死——「3,948」= 挂在真 `w:p` 的 `w:pPr` 里的 `w:spacing`，跨
+ * `word/document.xml` 3,924 + `word/footnotes.xml` 12 + `word/endnotes.xml` 12 三件；页眉页脚那 74 块 `w:pPr` 一枚不写，
+ * `word/styles.xml` 的 246 枚是样式自己的段落属性、不在这一档）：3,948 枚里说段前的只有 78 枚、说段后的
+ * 244 枚——绝大多数两边都
+ * 没说；行距那一家人人都连着规则一起说（`w:line` 与 `w:lineRule` 3,948/3,948 成对），规则档位 `auto` 2,890 /
+ * `exact` 1,004 / `atLeast` 54。换一只口径只看 `word/document.xml`、且不过滤父亲，给的是说行距 3,924 / 说段前 68 /
+ * 说段后 232，另有 14 枚同名的 `w:spacing` 坐在 `w:rPr` 里说的是字符间距而非段距，正文 7,430 段里 7,357 段写了
+ * `w:pPr`（`.scratch/ind-spacing-band-shapes.py`，与 `.scratch/ind-spacing-band-shapes.ts` 两种解析各数一遍相符）。
+ * 能画不能改，
  * 用户想说的是「0.5 行」而页面只会照着文件的旧数画，所以本片把这条命令接上。
  *
  * 摆位按 WPS 的 Writer 自己声明的那一族命令来：`wpsentries.kuip` 里
@@ -19,14 +26,16 @@ import type { Unit } from "./doc-units.js";
  * 只能在这个对话框里说。对话框上各条中文措辞（「段前」「行距」「固定值」…）是这一族软件的通用说法，
  * 本机这份 bundle 里 `.qm` 读不出（`doc-units.ts` 头记的是同一堵墙），**未取证**。
  *
- * **只写用户动过的那一句**。`w:line` 与 `w:lineRule` 在件里从来没单独出现过（201 份 7,810 枚成对、0 枚只写一边），
+ * **只写用户动过的那一句**。`w:line` 与 `w:lineRule` 在件里从来没单独出现过（授权口径那三件部件的 3,948 枚成对、
+ * 0 枚只写一边，部件范围见本节开头），
  * 所以行距那一格落下去必然连着规则一起交；段前段后两个格子留空 = 这一笔不改（与「页面设置」里那三格距离同一个
  * 口径），因为「没说」与「说了 0」是两件事——#132 的测试钉过这一点。用户没碰过的格子一个字节都不写：段落从样式链
  * 借来的那个数（`paraLent`）本来就是样式的话，抄到段落身上就是替文件编一句话。
  *
  * 段前段后的格子按状态栏那格的测量单位读数（`doc-units.ts`），缇只有一份、在这里换算一次。格子按该单位的
  * twip 精确位数预填（「页面设置」那条同一个口径），所以没人改过的对话框按一次「确定」不改任何字节。
- * 件把同一个间距用两笔写（`w:before` 缇 + `w:beforeLines` 1/100 行，201 份里段前 2,007 枚、段后 1,850 枚这么写）时，
+ * 件把同一个间距用两笔写（`w:before` 缇 + `w:beforeLines` 1/100 行，授权口径段前 16 枚、段后 64 枚这么写，80 枚里有
+ * 68 枚的商落在 312 缇那一档，`.scratch/line-tiers.mjs` 同批）时，
  * 下面那行小字把用户填的数按**件自己的那一档**换算成「几行」摆出来——那一档的来路在 `linePitchTwips`。
  *
  * 第三颗勾是「如果定义了文档网格，则对齐到网格」（`w:snapToGrid`，§17.3.1.87）。它的归属也是 WPS 自己声明的：
@@ -34,12 +43,13 @@ import type { Unit } from "./doc-units.js";
  * ="ParagraphGroupGridlines"）、`…GridlinesInParaLayoutTab`（ParagraphGridlines）与
  * `…SnapToGridInParaLayoutTab`（**ParagraphSnapToGrid**）。13 份 `.kuip` 里没有任何 `DocumentGrid`/`LinePitch`
  * 命令，即节那一层的网格档位**没有可照的 WPS 命令**，本片不做；做的这一颗正是段落级的 `ParagraphSnapToGrid`。
- * 受众（`.scratch/snap-grid-audience.ts`，同一批 201 份）：`document.xml` 里 3,466 枚 `w:snapToGrid`，
- * `p>w:pPr` 直接孩子 3,394 枚（另有 72 枚挂在 `w:rPr` 里，§17.3.1.87 不放它在那儿，读取也不看那儿）；
- * 正文段（13,426 段）里说开 1,353、说关 672，而**这 672 段全在定义了行网格的节下**（201 份里 200 份首节写
- * `w:docGrid w:type="lines"`，`w:linePitch` 312 缇 189 份 / 319 7 份 / 326 4 份）。拼法只有两种：说开**裸写**
- * 1,416 枚、说关 `w:val="0"` 2,381 枚，没有一枚写 `"1"` 或 `"false"`；`w:pPr` 里它的前后兄弟也固定是
- * `adjustRightInd → snapToGrid → spacing|jc|ind`（2,185 + 597 + 270 枚），与 `PPR_ORDER` 同一条。
+ * 受众（`.scratch/corpus-recheck2.mjs` 与 `.scratch/line-tiers.mjs`，同一套授权口径 46 份）：`document.xml` 里 406 枚
+ * `w:snapToGrid`，全部挂在 `w:pPr` 块里（不限层共 410 枚，`w:rPr` 里 0 枚，§17.3.1.87 不放它在那儿，读取也不看那儿）；
+ * 说了这一格的正文段里**说开 180（裸写）、说关 226（`w:val="0"`）**，而说关的 226 枚有 206 枚落在声明了行网格的节下
+ * （节级口径：按段落后面那一枚 `w:sectPr` 判定；剩下 20 枚在从来没要过网格的节里，关的是空气）；43/46 份首节声明了
+ * 行网格，首节 `w:linePitch` 取 312 缇 41 份 / 360 三份 / 285 两份。拼法只有两种：说开**裸写** 180 枚、说关
+ * `w:val="0"` 226 枚，没有一枚写 `"1"` 或 `"false"`；`w:pPr` 里它的前兄弟固定是 `adjustRightInd`（334/410 枚），
+ * 后兄弟最多是 `spacing`（284 枚）与 `textAlignment`（74 枚），与 `PPR_ORDER` 同一条。
  */
 const STYLE_ID = "solo-para-spacing-styles";
 

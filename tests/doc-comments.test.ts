@@ -8,6 +8,7 @@ import { OpcPackage, text } from "../src/core/opc.js";
 import { renderWord } from "../src/core/render.js";
 import { makeCommentedDocx, makeHeaderCommentDocx, makeReactionsDocx, makeThreadedDocx } from "./helpers/make-comments.js";
 import { makeDocx } from "./helpers/make.js";
+import { unstamped } from "./helpers/unstamp.js";
 
 const open = (bytes: Uint8Array): WordDocument => Doc.openBytes(bytes);
 
@@ -304,7 +305,7 @@ describe("docx 批注：解决状态、回复与扩展部件", () => {
     const bytes = makeThreadedDocx();
     const doc = open(bytes);
     expect(doc.edited).toBe(false);
-    expect(Buffer.from(writeDocx(doc))).toEqual(Buffer.from(bytes));
+    expect(unstamped(writeDocx(doc))).toEqual(unstamped(bytes));
   });
 
   it("writes the resolved flag onto the comment's own paragraph id", () => {
@@ -476,6 +477,6 @@ describe("docx 批注：富正文编辑", () => {
     // that case is what keeps a click in the panel from flattening a comment's markup.
     plain.paragraphs = [[{ text: text.slice(0, 3) }, { text: text.slice(3) }]];
     expect(doc.edited).toBe(false);
-    expect(Buffer.from(writeDocx(doc))).toEqual(Buffer.from(bytes));
+    expect(unstamped(writeDocx(doc))).toEqual(unstamped(bytes));
   });
 });

@@ -34,6 +34,28 @@ export const TABLE_RECORD_TAGS: ReadonlySet<string> = new Set([
 /** Which element wraps the recorded set inside a record of this tag — the property set's own name. */
 const WRAPPER: Record<string, string> = { tblPrChange: "tblPr", trPrChange: "trPr", tcPrChange: "tcPr", tblPrExChange: "tblPrEx" };
 
+const ATTR_ESC = (s: string): string =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+/**
+ * A record this family spells: the signature, then the set as it was wrapped in an element of the set's own
+ * name (`<w:tblPrChange …><w:tblPr/></w:tblPrChange>`, §17.13.5). The prefix follows the part the record is
+ * hung on, attributes included — a namespace declared as `word:` has no `w:` to borrow. An empty recorded
+ * set is written self-closed: that is what "the part stated nothing before" amounts to, and the reader takes
+ * the wrapped-empty and the unwrapped-empty spellings alike.
+ */
+export function changeRecordXml(
+  tag: string,
+  sign: { id: number; author: string; date?: string },
+  recorded: string,
+  prefix = "w",
+): string {
+  const setTag = WRAPPER[tag]!;
+  const attrs = `${prefix}:id="${sign.id}" ${prefix}:author="${ATTR_ESC(sign.author)}"${sign.date ? ` ${prefix}:date="${ATTR_ESC(sign.date)}"` : ""}`;
+  const set = recorded ? `<${prefix}:${setTag}>${recorded}</${prefix}:${setTag}>` : `<${prefix}:${setTag}/>`;
+  return `<${prefix}:${tag} ${attrs}>${set}</${prefix}:${tag}>`;
+}
+
 /**
  * The properties a record holds, each as the source text it arrived with. `w:tblPrChange` and its kin
  * record a whole set; `w:cellMerge` records only the one property it touched. A record nested inside a

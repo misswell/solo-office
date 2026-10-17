@@ -151,6 +151,38 @@ describe("docx 段落缩进（w:ind）：首行、悬挂、右缩进读得出也
     expect(byText(doc, "只写右缩进")).toMatchObject({ indentRight: 220, indentFirstLine: 480, indentLeft: 420 });
   });
 
+  it("段落自己答过首行那一件事时，样式链上的 firstLine 不再盖住它", () => {
+    const doc = open(
+      makeIndentDocx(
+        [
+          { pStyle: "Lent", ind: 'w:left="425" w:leftChars="0" w:hanging="425" w:firstLineChars="0"', text: "文件那一枚" },
+          { pStyle: "Lent", ind: 'w:left="480" w:hanging="480"', text: "只写悬挂" },
+          { pStyle: "Lent", ind: 'w:firstLine="480"', text: "自己写缇" },
+          { pStyle: "Lent", ind: 'w:leftChars="0"', text: "左边只说字符零" },
+        ],
+        '<w:ind w:left="420" w:firstLine="883"/>',
+      ),
+    );
+    // 授权 46 份的 `word/document.xml` 里这样的 94 枚，其中 74 枚的样式链写了 `w:firstLine="883"`：段首先行
+    // 由段落自己说明白「不缩进」，链上那一枚不该把它盖掉（§17.3.1.14 + §17.7.2，见 `indResolve`）。
+    expect(byText(doc, "文件那一枚")).toMatchObject({ indentLeft: 425, indentFirstLine: undefined, indentFirstLineChars: 0, indentHanging: 425 });
+    expect(drawnStyle(doc, "文件那一枚")).toContain("margin-left:28.333333333333332px;text-indent:-28.333333333333332px");
+    // 62 枚只写自己的 `w:hanging`，其中 34 枚同样被链上的 883 盖过。
+    expect(byText(doc, "只写悬挂")).toMatchObject({ indentFirstLine: undefined, indentHanging: 480 });
+    expect(drawnStyle(doc, "只写悬挂")).toContain("text-indent:-32px");
+    // 段落自己写了缇那一枚时照旧由它上身——这一支与上面那支的分别只在「段自己有没有答过」。
+    expect(byText(doc, "自己写缇")).toMatchObject({ indentFirstLine: 480 });
+    // 48 枚写 `w:leftChars="0"` 而不写 `w:left`：左边这一件事也由段落答了，链上 420 缇不许叠上来。
+    expect(byText(doc, "左边只说字符零")).toMatchObject({ indentLeft: undefined, indentLeftChars: 0 });
+    expect(drawnStyle(doc, "左边只说字符零")).not.toContain("margin-left");
+    // 写回那一趟同样不许把链上那枚 883 塞进段落自己的 `w:ind`：认领的是段自己说过的属性。
+    const own = byText(doc, "文件那一枚");
+    syncParaSlots(own);
+    const written = own.pPrSlots?.find((s) => s.tag === "ind")?.xml ?? "";
+    expect(written).not.toContain('w:firstLine="883"');
+    expect(written).toContain('w:hanging="425"');
+  });
+
   it("saves what it read with every w:ind byte intact", () => {
     const bytes = makeIndentDocx([
       { ind: 'w:firstLine="480" w:firstLineChars="200"', text: "两笔都写" },

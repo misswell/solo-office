@@ -11,14 +11,18 @@ import { OpcPackage, parseOrderedXml, rawAttrs, rawChildren, rawFind, tagLocalOf
  * read — `majorAscii`/`majorHAnsi` are the Latin face, `*EastAsia` the East Asian one, `*Bidi` the complex-script
  * one, and that is the only mapping the token itself supports.
  *
- * Over the 201 documents this machine's WPS wrote (`.scratch/theme-font-audience.ts`, `.scratch/theme-font-slots.ts`,
- * `.scratch/theme-font-latin-audience.ts`): every one carries a theme part with `a:majorFont`/`a:minorFont`, and
- * every one writes a face into `a:latin` of both slots — while `a:ea` is empty in 200 of 201 and `a:cs` in all 201.
- * `w:rFonts` uses that split asymmetrically: 250 of the 264 theme references in `word/styles.xml` point at a Latin
- * slot (and 58 of them are the document floor, `w:docDefaults`), so those resolve here, from bytes the file wrote;
- * the 5,406 in `word/document.xml` point at an East Asian slot, whose face the theme leaves empty. 8,962 body
- * paragraphs sit under those 58 floors and state no literal face at all — today they draw with the page's own
- * default face, which is a number nobody wrote.
+ * Over the authorized corpus — 46 WPS-bundled templates, `.scratch/authorized-families.mjs` (theme part) and
+ * `.scratch/theme-slot-pair-authorized.mjs` (`w:rFonts` slots): **46 of 46 carry a theme part holding both
+ * `a:majorFont` and `a:minorFont`**, and across the 92 font slots (46 × major+minor) all 92 write a face into
+ * `a:latin`, while `a:ea` is empty in 84 (8 write one) and `a:cs` is empty in all 92. So the asymmetry this class
+ * resolves is measured here, not inherited: a themed Latin reference has a face to resolve to, a themed East Asian
+ * reference usually does not.
+ * The per-part split the old sentence quoted (250 of 264 `w:rFonts` theme references in `word/styles.xml` pointing
+ * at Latin, 5,406 in `word/document.xml` pointing at East Asian, 8,962 body paragraphs under 58 floors) was counted
+ * over the quarantined 201-file cohort and is **待重证** on the authorized list; what is re-measured is that
+ * `w:rFonts` uses the split asymmetrically — 1,957 of the 14,642 `w:rFonts` in the authorized files carry a theme
+ * slot, 11,905 carry a literal face, 650 carry both on different slots, and **0 state a literal face and a theme
+ * reference in the same slot**.
  *
  * An empty `a:ea` is not read as "fall back to whichever Han script this document looks like". The theme does
  * carry `a:font` entries per writing system, and picking one needs the text's script; where the *run* states its

@@ -9,6 +9,7 @@ import { isError } from "../core/formula.js";
 import { rangeSpec, rect, refOf, type Rect } from "../core/sheet-ops.js";
 import { SheetView } from "./sheet-view.js";
 import { DocEditor, type DocPath, type RevisionView } from "./doc-edit.js";
+import { type BorderLeg, type CellLeg, cellLegPatch, legPatch, tableLegPatch, type TableLeg } from "./doc-para-border.js";
 import { DocStatusBar } from "./doc-status-bar.js";
 import { DeckEditor, type PresetGeometry } from "./deck-edit.js";
 import { DeckShow } from "./deck-show.js";
@@ -266,8 +267,9 @@ const DOC_LINES = [1, 1.5, 2, 2.5, 3];
 
 /**
  * 突出显示's palette. The names are what `w:highlight w:val=` can hold (§17.17.64 has 17 members); these eight are
- * what this ribbon can paint. Measured over the 86 WPS documents, only `yellow` and `none` ever reach a run with
- * text in them, so the palette gap has no audience today and is left alone (`.scratch/ribbon-echo-measure.ts`).
+ * what this ribbon can paint. 授权 46 份里 `w:highlight` **0 枚**（对照：同一趟在那批件上数到 1,615 枚 `w:u`），所以
+ * 调色板缺不缺口今天没有语料能判——旧读数「86 份里只有 yellow 与 none 落到带文字的 run 上」属作废语料，待重证。
+ * 这八条留着是因为写端要把用户选的色拼成 §17.17.64 的成员名，不是因为读到过它们。
  */
 const DOC_HIGHLIGHTS: [string, string][] = [
   ["none", "高亮：无"],
@@ -281,6 +283,63 @@ const DOC_HIGHLIGHTS: [string, string][] = [
 ];
 
 const ctl: Record<string, HTMLElement> = {};
+
+/**
+ * 「边框」那一格按选区派发的三张下拉——WPS 那边本来就**是一枚控件**：`RbTableOutsideBorder` 的十条腿
+ * （`res/commands/wps/ongmani/CT_Home.kuip:272-287`，`:311`/`:362` 把它挂在**段落组**与表格工具两处）
+ * 每一条都绑同一条 `ksoCmd="TableOutsideBorderPalette"`，落在哪一层由选区决定。
+ * 段落那张摆九档：四条边 + 无框线 + 所有框线 + 外侧框线 + 内部横框线（= `w:between`）+ 那枚对话框。
+ * 少的那两档是 `CrossBorder`（横竖框线）与 `VMiddleBorder`（内部竖框线）——`CT_PBdr` 只有横着的那一枚
+ * `w:between`，竖着的「内部」在段落这一层没有对应的一句话（`w:bar` 说的是贯穿左边距的那一条，不是一层内部）。
+ * 表那张是十条腿的十档（去掉说不出来的 `between/start/end` 与对角线）。
+ * 格那张摆四边 + 无框线 + 所有框线 + 内部横竖（那两档照 WPS 派发去向表）：`CT_TcBorders` 没有 inside 槽；
+ * 「外侧框线」说的是**选区的周边**（选 2×2 时中间那十字不该画），这一层还没实现，先不摆——摆出来就是给用户
+ * 一条会落错的腿。
+ *
+ * 各档中文措辞在 `.qm`（UTF-16）里读不出，属**推断措辞**，不是取到的字面量。
+ */
+const BORDER_LEGS: Record<"para" | "table" | "cells", [string, string][]> = {
+  para: [
+    ["", "边框"],
+    ["bottom", "下框线"],
+    ["top", "上框线"],
+    ["left", "左框线"],
+    ["right", "右框线"],
+    ["none", "无框线"],
+    ["all", "所有框线"],
+    ["outside", "外侧框线"],
+    ["insideH", "内部横框线"],
+    ["more", "边框与底纹…"],
+  ],
+  table: [
+    ["", "边框"],
+    ["bottom", "下框线"],
+    ["top", "上框线"],
+    ["left", "左框线"],
+    ["right", "右框线"],
+    ["none", "无框线"],
+    ["all", "所有框线"],
+    ["outside", "外侧框线"],
+    ["cross", "横竖框线"],
+    ["insideH", "内部横框线"],
+    ["insideV", "内部竖框线"],
+    // 最后这一档与段落那一层是**同一条命令**：`CT_Home.kuip:286` 把它挂在同一个下拉的最后一段，
+    // 落点由选区决定（见 `openBorderDialog`），不是段落专属。
+    ["more", "边框与底纹…"],
+  ],
+  cells: [
+    ["", "边框"],
+    ["bottom", "下框线"],
+    ["top", "上框线"],
+    ["left", "左框线"],
+    ["right", "右框线"],
+    ["none", "无框线"],
+    ["all", "所有框线"],
+    ["insideH", "内部横框线"],
+    ["insideV", "内部竖框线"],
+    ["more", "边框与底纹…"],
+  ],
+};
 
 function buildRibbon(kind: "xlsx" | "docx" | "pptx"): void {
   if (ribbon.dataset.built === kind) return;
@@ -417,6 +476,25 @@ function buildSheetRibbon(): void {
   button(data, "", "查找", "查找与替换 ⌘F", openFind);
 }
 
+/** 字体框的下拉数据源。`<datalist>` 挂在 body 上、不占版面；聚焦时才按当前文档刷一遍，因为「这份文件用过哪些脸」
+ *  要把正文几千个 run 数一遍，每敲一键都数不值。 */
+const FACES_ID = "doc-faces";
+function fillFaceList(): void {
+  let list = document.getElementById(FACES_ID);
+  if (!list) {
+    list = document.createElement("datalist");
+    list.id = FACES_ID;
+    document.body.append(list);
+  }
+  list.replaceChildren(
+    ...(editor?.faces() ?? []).map((name) => {
+      const o = document.createElement("option");
+      o.value = name;
+      return o;
+    }),
+  );
+}
+
 /** Word-style formatting: run styling over the selection, paragraph shape for the whole paragraph. */
 function buildDocRibbon(): void {
   const group = (): HTMLElement => {
@@ -473,6 +551,25 @@ function buildDocRibbon(): void {
   button(font, "italic", "斜", "斜体 ⌘I", () => style({ italic: !editor?.markState().italic }));
   button(font, "under", "线", "下划线 ⌘U", () => style({ underline: !editor?.markState().underline }));
   button(font, "strike", "删", "删除线", () => style({ strike: !editor?.markState().strike }));
+  // 字体框与字号框在 WPS 里是一对：`CT_Home.kuip` 把 `KxWpsFontComboBoxCommand idMso="Font" ksoCmd="FontName"` 与
+  // `FontSize` 同挂在 `RB_Font` 的 `font_info_pair` 里，字体在前、`layoutOnLeft="true"`、`minimumWidth="130"`。
+  // 它是可编辑的一格：打名字回车，或从下拉里挑。下拉列的是这份文件自己用过的脸——Electron 没有「本机装了哪些
+  // 字体」的接口可问，WPS 那份装机字体清单在此仍未取证，所以只把文档说过的名字递给用户，不替它编一张表。
+  const faceBox = document.createElement("input");
+  faceBox.type = "text";
+  faceBox.className = "facebox";
+  faceBox.title = "字体";
+  faceBox.placeholder = "字体";
+  faceBox.setAttribute("list", FACES_ID);
+  faceBox.onfocus = () => fillFaceList();
+  faceBox.onchange = () => {
+    const name = faceBox.value.trim();
+    // 清空那一格不当命令办：这一页说不出「这段取消脸」该往件里写哪一句（「没提过」只能靠原件那半边的字节带回，
+    // 而 ribbon 上没有「清除格式」这一条），真机 WPS 那一格被清空后写什么仍未取证。
+    if (name) style({ font: name });
+  };
+  ctl.font = faceBox;
+  font.append(faceBox);
   chooser(font, "size", "字号", DOC_SIZES.map((s): [string, string] => [String(s), String(s)]), (v) => style({ sizePt: Number(v) }));
   swatch(font, "color", "字体颜色", "#c00000", (v) => style({ color: v }));
   chooser(
@@ -516,6 +613,38 @@ function buildDocRibbon(): void {
       const mult = DOC_LINES.find((n) => String(n) === v);
       if (mult === undefined) return;
       editor?.setParagraphSpacing({ line: Math.round(mult * LINE_ONE), lineRule: "auto" });
+      syncDocRibbon();
+    },
+  );
+  // 边框那一格与行距同属 `CT_Home.RB_Paragraph`（`res/wpsentries.kuip:669` 把 `RbTableOutsideBorder` 挂在段落组），
+  // 下拉里腿的先后照 `res/commands/wps/ongmani/CT_Home.kuip:272-287` 的 `<separator/>` 分段摆。列子随选区换
+  // （`BORDER_LEGS`、`syncDocRibbon`），这一处只是建时的初始那张——光标落在正文上时问的就是段落那一圈。
+  chooser(
+    align,
+    "paraBorder",
+    "边框",
+    BORDER_LEGS.para,
+    (v) => {
+      // 这一格是**命令的菜单**，不是这一段的状态：落完放回「边框」那一档，下一次点同一条腿才还是发同一条命令
+      // （`syncDocRibbon` 不认领这一格，所以没人替它回显，也不需要——一层的框是逐边的，说不出「哪一档」）。
+      (ctl.paraBorder as HTMLSelectElement).value = "";
+      if (!v || !editor) return;
+      // 「边框与底纹…」这一腿自己按选区问层（#150）：段落、整张表、所选单元格三副样子，不在这里替它分。
+      if (v === "more") {
+        editor.openBorderDialog();
+        return;
+      }
+      const scope = editor.borderScope();
+      if (scope === "para") {
+        editor.setParagraphBox(legPatch(v as BorderLeg));
+        syncDocRibbon();
+        return;
+      }
+      // 表那一侧的每一腿都落 `w:tblBorders`；格那一侧只有内部横竖那两档例外——`CT_TcBorders` 说不出这一句，
+      // 照 WPS 一样由表来说（见 `borderScope`）。
+      if (scope === "table") editor.setTableBox(tableLegPatch(v as TableLeg));
+      else if (v === "insideH" || v === "insideV") editor.setTableBox(tableLegPatch(v));
+      else editor.setCellBox(cellLegPatch(v as CellLeg));
       syncDocRibbon();
     },
   );
@@ -609,6 +738,30 @@ function syncDocRibbon(): void {
   mark("both", state?.align === "both");
   mark("bullet", state?.list === "bullet");
   mark("number", state?.list === "number");
+  // 边框那一格的列子问的是「这一击落在哪一层」：光标在正文、在表上铺满整张、还是只圈了几格。所以它随选区
+  // 重建，而不是随选区**回显**——一层的框是逐边的，说不出「现在挂着哪一档」。重建只在换层时发生，同一层里
+  // 用户选到一半的那格不动。
+  const border = ctl.paraBorder as HTMLSelectElement | undefined;
+  if (border) {
+    const scope = editor?.borderScope() ?? "para";
+    if (border.dataset.scope !== scope) {
+      border.dataset.scope = scope;
+      border.replaceChildren(
+        ...BORDER_LEGS[scope].map(([value, label]) => {
+          const o = document.createElement("option");
+          o.value = value;
+          o.textContent = label;
+          return o;
+        }),
+      );
+      border.value = "";
+      border.title = scope === "table" ? "表格边框" : scope === "cells" ? "单元格边框" : "边框";
+    }
+  }
+  const face = ctl.font as HTMLInputElement | undefined;
+  // 正在打的那一格不回显：`syncDocRibbon` 随每次选区变化跑一遍，把用户打到一半的名字吃掉就不是他的名字了。
+  // 回显给的是选区起点那一段（`markState` 一路按起点算），两张脸并存时给这段字真正穿的那一张。
+  if (face && document.activeElement !== face) face.value = state?.font ?? "";
   const size = ctl.size as HTMLSelectElement | undefined;
   if (size) {
     const pt = state?.sizePt;

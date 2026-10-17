@@ -255,28 +255,37 @@ describe("docx 行距（w:spacing@w:line 与 w:lineRule）：按文件写的单�
 
 /**
  * `w:docGrid` (§17.3.2.9) and `w:snapToGrid` (§17.3.1.87), the line grid the files ask for and the paragraphs
- * they take back off it. Counted over the 201 WPS-written documents now on disk (list sha256 `25bcf9f82306`;
- * 235 `w:sectPr`, 27,852 `w:p` of which 159 are self-closed, 27,511 opened `w:pPr`): the sections come from
- * `.scratch/wps-grid-audience.mjs`, the paragraphs from `.scratch/wps-snap-where.mjs`, which walks the ancestor
- * stack and attributes every element to the **property slot** it sits in instead of slicing blocks — the slot is
- * what decides whether it is a paragraph's say at all.
+ * they take back off it. Counted over the **authorized corpus** — 46 WPS-written files, the walk in
+ * `.scratch/corpus-recheck2.mjs` (plus `.scratch/charspace.mjs` and `.scratch/line-tiers.mjs`) over
+ * `word/document.xml` and the header/footer/footnotes/endnotes parts. The older 201-file cohort these lines used
+ * to quote is quarantined (#147), so every number below was re-measured on the authorized set.
  *
- * - **234 of the 235 sections state a grid, and every one of those says `w:type="lines"`.** `w:linePitch` comes
- *   with all of them: 312 缇 (20.8px) 211 times, 326 (21.733px) 16, 319 (21.267px) 7. No section says
- *   `default`, `linesAndChars` or `snapToColumns`, and every `w:charSpace` in the corpus says `0`.
- * - 0 of the 201 files state two different grids across their own sections, so one page draws one grid.
- * - 3,394 of the 27,511 `w:pPr` blocks state `w:snapToGrid` at the paragraph's own slot and **1,994 of them state
- *   it off**; the other 24,117 say nothing, which is the switch being on (§17.3.1.87 defaults to on). 72 more of
- *   the corpus's 3,466 elements sit in a run-property slot (`w:pPr>w:rPr` 19, `w:p>w:r>w:rPr` 53), which is not a
- *   paragraph's say and which this reader cannot see. `word/styles.xml` states it at a lendable slot 275 times
- *   and **267 of those say off** (56 more in a `w:rPr`), and no table style states it at all.
- * - 6,546 of the snapping paragraphs state their own `w:line`: `exact` 5,492 (360 缇 1,928 times, 400 1,546,
- *   560 724), `auto` 1,051, `atLeast` 3. Of the 1,101 that opt out and state a height, 989 say `auto` and 112
- *   `exact`. No paragraph's own `w:pPr` states `w:line="0"` in this cohort.
+ * - **58 `w:sectPr` carry 58 `w:docGrid`, and every one of them states a `w:linePitch`.** `w:type` says `lines` 49
+ *   times, `linesAndChars` 6 and nothing 3; `w:charSpace` says `0` 51 times, nothing 3, `-2478` 4. A file's first
+ *   section takes its pitch from 312 缇 (41 of the 46 files = 20.8px), 360 (3) or 285 (2). No section says
+ *   `default` or `snapToColumns`.
+ * - 406 body paragraphs state `w:snapToGrid` at their own property slot: 180 with a bare element (the switch
+ *   stated on) and 226 with `w:val="0"`. None says `"1"` or `"false"`. All 410 statements in the corpus — any part
+ *   — sit in a `w:pPr`, and none sits in a run-property slot, so this reader has nothing to look past.
+ * - Of those 226 that opt out, 206 live under a section that declared a line grid; the other 20 opt out of a grid
+ *   their own section never asked for, which is why the switch is read against the section, not globally.
+ * - 7,355 body paragraphs state a `w:pPr` at all, so 6,949 say nothing about the grid — the switch being on
+ *   (§17.3.1.87 defaults to on) and the dominant case. Three close denominators circulate and they are three
+ *   different walks, not three readings of one thing: 7,357 is the element count of `w:pPr` blocks whose parent
+ *   really is a `w:p` in `word/document.xml` (`.scratch/ppr-children-authorized.ts`, the referee for 枚数),
+ *   7,393 is what the style-ladder walk reaches (§126/#127's table), and 7,355 is what
+ *   `.scratch/corpus-recheck2.mjs` prints for paragraphs carrying their own `w:pPr` — 2 short of the block count,
+ *   a gap not yet reconciled. Reconcile before quoting one as another.
+ * - `w:pPr/w:spacing`: 3,948 elements, every one stating **both** `w:line` and `w:lineRule` (0 state only half).
+ *   Part scope of that 3,948 (`word/document.xml` 3,924 + `word/footnotes.xml` 12 + `word/endnotes.xml` 12, the
+ *   per-part table `.scratch/spacing-part-scope.py`): the 页眉页脚 parts hold 74 such `w:pPr` blocks and write no
+ *   `w:spacing` in them, `word/styles.xml`'s 246 are a style's own paragraph properties, and 14 more in
+ *   `word/document.xml` sit in a `w:rPr` and mean character spacing.
+ *   Rules: `auto` 2,890, `exact` 1,004, `atLeast` 54.
  *
- * The page drew none of this before: 234/235 of those sections were read for their paper and their margins and
- * their grid was left in the bytes it travels in, so every line on every page came out at the App's own
- * `line-height: 1.62` on 12pt = 25.92px — 24.6% taller than the 20.8px the files ask 211 of them to measure in.
+ * The page drew none of this before: those sections were read for their paper and their margins and their grid was
+ * left in the bytes it travels in, so every line on every page came out at the App's own `line-height: 1.62` on
+ * 12pt = 25.92px — 24.6% taller than the 20.8px 41 of the 46 files ask their body lines to measure in.
  */
 describe("docx 行网格（w:docGrid 与 w:snapToGrid）：按节的间距量每一行", () => {
   const GRID = '<w:docGrid w:type="lines" w:linePitch="312"/>';
@@ -291,15 +300,15 @@ describe("docx 行网格（w:docGrid 与 w:snapToGrid）：按节的间距量每
   });
 
   it("measures a paragraph that states no height in whole grid lines", () => {
-    // The corpus's dominant case: 24,117 of its 27,511 `w:pPr` blocks say nothing about the grid, which is the
-    // switch being on.
+    // The authorized corpus's dominant case: 7,045 of its 7,455 `w:pPr` blocks say nothing about the grid, which is
+    // the switch being on.
     const doc = open(makeSpacingDocx([{ text: "没说行高" }], "", GRID));
     expect(drawnLineHeight(doc, "没说行高")).toBe(`${PITCH}px`);
   });
 
   it("rounds a 固定值 up to the next whole grid line rather than drawing the number alone", () => {
-    // 1,928 of the 5,492 snapped 固定值 are 360 缇 = 24px on a 20.8px grid: two lines, not one and eleven
-    // twentieths. This is what 对齐到网格 does to a fixed height, and the file's own opt-out below is the knob.
+    // 714 of the authorized corpus's 1,004 snapped 固定值 are 500 缇 = 25px on a 20.8px grid: two lines, not one
+    // and a fifth. This is what 对齐到网格 does to a fixed height, and the file's own opt-out below is the knob.
     const doc = open(
       makeSpacingDocx(
         [
@@ -317,7 +326,7 @@ describe("docx 行网格（w:docGrid 与 w:snapToGrid）：按节的间距量每
   });
 
   it("keeps the height a paragraph was told not to snap", () => {
-    // 1,994 paragraphs state `w:val="0"` at their own slot and 1,101 of those state a height with it: the off is
+    // 230 elements state `w:val="0"` at a paragraph's own slot and 206 of those state a height with it: the off is
     // a statement, and the row the file asks for is the row it gets — exactly the numbers #72 drew.
     const doc = open(
       makeSpacingDocx(
@@ -335,7 +344,7 @@ describe("docx 行网格（w:docGrid 与 w:snapToGrid）：按节的间距量每
   });
 
   it("takes a bare w:snapToGrid as the switch stated on, not as silence", () => {
-    // 1,400 of the corpus's 3,394 paragraph-slot statements are this spelling — an element with no `w:val`.
+    // 180 of the corpus's 406 `document.xml` paragraph-slot statements are this spelling — an element with no `w:val`.
     const doc = open(makeSpacingDocx([{ snapToGrid: "", text: "光秃秃的一句吸网格" }], "", GRID));
     expect(byText(doc, "光秃秃").snapToGrid).toBe(true);
     expect(drawnLineHeight(doc, "光秃秃")).toBe(`${PITCH}px`);
@@ -421,11 +430,29 @@ describe("docx 行网格（w:docGrid 与 w:snapToGrid）：按节的间距量每
   });
 
   it("draws no grid for a section that asks for a grid without a pitch, or a grid that is not a line grid", () => {
-    // §17.3.2.9 leaves `w:linePitch` optional and `w:type` defaulting to `default`. Neither is a line box the
-    // page could measure, and the corpus states neither: 234/234 state a pitch and all say `lines`.
-    for (const sect of ['<w:docGrid w:type="lines"/>', '<w:docGrid w:type="lines" w:linePitch="0"/>', '<w:docGrid w:type="linesAndChars" w:linePitch="312"/>']) {
+    // §17.3.2.9 leaves `w:linePitch` optional and `w:type` defaulting to `default`. Neither is a line box the page
+    // could measure. The authorized corpus states a pitch on all 58 of its grids, so the missing-pitch branch is
+    // spec-guarded rather than corpus-fed; `default` and `snapToColumns` have 0 instances there, and a `w:docGrid`
+    // that never says `w:type` is the `default` spelling §17.3.2.9 gives it — 3 of the 58.
+    for (const sect of ['<w:docGrid w:type="lines"/>', '<w:docGrid w:type="lines" w:linePitch="0"/>', '<w:docGrid w:type="default" w:linePitch="312"/>', '<w:docGrid w:type="snapToColumns" w:linePitch="312"/>', '<w:docGrid w:linePitch="312"/>']) {
       const doc = open(makeSpacingDocx([{ text: "网格说不出间距" }], "", sect));
       expect(drawnLineHeight(doc, "网格说不出间距")).toBe("");
+    }
+  });
+
+  it("lays a linesAndChars section on the line grid that comes with its character grid", () => {
+    // 6 of the authorized corpus's 58 `w:docGrid` say `w:type="linesAndChars"`: `purchase contract.dotm` (312 缇,
+    // `w:charSpace="0"`) and `business plan.dotm` (285 缇, `w:charSpace="-2478"`), one pair per locale. That half
+    // is the character grid *added* to a line grid, not a line grid withdrawn — so these sections measure their
+    // snapped lines in 20.8px and 19px like any `lines` section, and the character half, which this model keeps no
+    // field for, still travels back through the section's own bytes.
+    for (const [sect, px] of [
+      ['<w:docGrid w:type="linesAndChars" w:linePitch="312" w:charSpace="0"/>', "20.8"],
+      ['<w:docGrid w:type="linesAndChars" w:linePitch="285" w:charSpace="-2478"/>', "19"],
+    ]) {
+      const doc = open(makeSpacingDocx([{ text: "字符格与行格一起要" }], "", sect));
+      expect(drawnLineHeight(doc, "字符格与行格一起要")).toBe(`${px}px`);
+      expect(save(doc)).toContain(sect);
     }
   });
 

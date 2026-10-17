@@ -6,6 +6,7 @@ import { OpcPackage } from "../src/core/opc.js";
 import { renderWord } from "../src/core/render.js";
 import { makeBreakableDocx, makeRevisedDocx, makeNestedRevisionDocx, makeMovedDocx, makeParaMarkDocx, makeStraddleDocx, makeMoveMarkDocx, makeLowIdDocx, makeTableRowDocx, makeLastRowDeletedDocx } from "./helpers/make-revisions.js";
 import { makeCommentedDocx } from "./helpers/make-comments.js";
+import { unstamped } from "./helpers/unstamp.js";
 
 const open = (bytes: Uint8Array): WordDocument => Doc.openBytes(bytes);
 
@@ -85,7 +86,7 @@ describe("docx 修订：读取 w:ins / w:del", () => {
 describe("docx 修订：写回与往返", () => {
   it("saves a document nobody edited byte-for-byte", () => {
     const bytes = makeRevisedDocx();
-    expect(Buffer.from(writeDocx(open(bytes)))).toEqual(Buffer.from(bytes));
+    expect(unstamped(writeDocx(open(bytes)))).toEqual(unstamped(bytes));
   });
 
   it("keeps every mark when an unrelated paragraph is edited", () => {
@@ -255,7 +256,7 @@ describe("docx 修订：搬移（moveFrom / moveTo）", () => {
   it("saves an unedited move byte-for-byte and re-reads the same two changes", () => {
     const bytes = makeMovedDocx();
     const doc = open(bytes);
-    expect(Buffer.from(writeDocx(doc))).toEqual(Buffer.from(bytes));
+    expect(unstamped(writeDocx(doc))).toEqual(unstamped(bytes));
     const back = open(writeDocx(doc));
     expect(back.revisions().map((r) => `${r.kind}:${r.id}`).join()).toBe("del:21,ins:22");
   });
@@ -304,7 +305,7 @@ describe("docx 修订：搬移（moveFrom / moveTo）", () => {
 
   it("keeps a moved break's own tag through a save and through an edit elsewhere", () => {
     const bytes = makeMoveMarkDocx();
-    expect(Buffer.from(writeDocx(open(bytes)))).toEqual(Buffer.from(bytes));
+    expect(unstamped(writeDocx(open(bytes)))).toEqual(unstamped(bytes));
     const doc = open(bytes);
     paragraphs(doc)[1]!.inlines[0]!.text = "改过的段落";
     const back = open(writeDocx(doc));
@@ -418,7 +419,7 @@ describe("docx 修订：段落标记与段落格式（w:pPr/w:rPr、w:pPrChange�
 
   it("saves a document nobody edited byte-for-byte", () => {
     const bytes = makeParaMarkDocx();
-    expect(Buffer.from(writeDocx(open(bytes)))).toEqual(Buffer.from(bytes));
+    expect(unstamped(writeDocx(open(bytes)))).toEqual(unstamped(bytes));
   });
 
   it("writes the mark as a property of the paragraph, not as a run of text", () => {
@@ -761,7 +762,7 @@ describe("docx 修订：一条删除跨过段落边界（两个 w:del 共用一�
 
   it("saves a document nobody edited byte-for-byte", () => {
     const bytes = makeStraddleDocx();
-    expect(Buffer.from(writeDocx(open(bytes)))).toEqual(Buffer.from(bytes));
+    expect(unstamped(writeDocx(open(bytes)))).toEqual(unstamped(bytes));
   });
 
   it("writes the two elements back and reads them as the same one entry", () => {
@@ -818,7 +819,7 @@ describe("docx 修订：表格行自己的记录（w:trPr/w:ins、w:trPr/w:del�
 
   it("saves a table nobody edited byte-for-byte", () => {
     const bytes = makeTableRowDocx();
-    expect(Buffer.from(writeDocx(open(bytes)))).toEqual(Buffer.from(bytes));
+    expect(unstamped(writeDocx(open(bytes)))).toEqual(unstamped(bytes));
   });
 
   it("keeps each row's record through an edit made anywhere else in the document", () => {

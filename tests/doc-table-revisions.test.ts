@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { RevisionEntry, Table } from "../src/core/docx.js";
-import { WordDocument } from "../src/core/docx.js";
+import type { RevisionEntry, Table, TableCell } from "../src/core/docx.js";
+import { WordDocument, borderDelta, cellShapeOf, signCellRevision, signTableRevision, syncCellBox, syncTableBox, tableShapeOf } from "../src/core/docx.js";
 import { writeDocx } from "../src/core/write-docx.js";
 import { renderWord } from "../src/core/render.js";
 import { OpcPackage, text } from "../src/core/opc.js";
+import { TABLE_EDGE_SHAPE, applyBoxPatch } from "../src/ui/doc-para-border.js";
+import type { BoxPatch, CellBoxSide, TableBoxSide } from "../src/ui/doc-para-border.js";
+import { pack } from "./helpers/make-containers.js";
 import {
   makeCellRevisionDocx,
   makePartialCellInsDocx,
@@ -351,5 +354,272 @@ describe("docx 修订：窗格怎么找到表格上的改动", () => {
     // One row of the pane, one answer: the column is 顾峰's single change, the widening another.
     expect(doc.resolveRevisionsByAuthor("accept", "顾峰")).toBe(2);
     expect(listed(doc)).toBe("1.cell-merge:71:林晓:甲一,2.cell-delete:73:林晓:乙一乙二");
+  });
+});
+
+/**
+ * 上面那几族读的是别人写好的件；这一族写的是我们自己的编辑动作（#149）。开着修订时 ribbon 的「边框与底纹」
+ * 落在表那一圈（`w:tblBorders`、`w:tblPr/w:shd`）或某几格那一圈（`w:tcBorders`、`w:tcPr/w:shd`），
+ * `signTableRevision`/`signCellRevision` 签出一枚 §17.13.5 的记录，两份都得留：
+ * **文字**挂进带着的 `w:tblPr`/`w:tcPr`（`decideSetXml` 与写出读的都是这一枚孩子，模型没有字段的 `w:tblLook`、
+ * `w:tcMar` 连自己的字一起回去），**字段**是给「拒绝」把属性捡回模型用的。只留一份就是那条静默交回原字节的坑。
+ *
+ * 落笔形状照 ECMA-376 §17.13.5 与本仓库段落那两条（`w:pPrChange`）的同一口径：记录只说部件**自己说过**的属性，
+ * 从 `w:tblStyle` 借来的不进快照，本来什么也没说时记的是一枚空套。**WPS 开着修订改表格线写出的件仍未取证**
+ * （`.scratch/wps-corpus` 里 0 枚表格修订），所以既不替没动过的边补属性，也不编 WPS 的拼法。
+ */
+describe("docx 修订：表与格那一圈的改动由我们签出（w:tblPrChange / w:tcPrChange）", () => {
+  const STAMP = "2026-10-16T00:00:00Z";
+
+  /** 表与格各把自己说过的一套写全，孩子之间留着换行与空格；没有一枚待裁决的记录。 */
+  const SAID = pack(
+    `<w:tbl><w:tblPr>
+  <w:tblStyle w:val="a3"/>
+  <w:tblW w:w="0" w:type="auto"/>
+  <w:tblBorders><w:top w:val="single" w:sz="4" w:space="0" w:color="auto"/></w:tblBorders>
+  <w:tblCellMar><w:left w:w="108" w:type="dxa"/></w:tblCellMar>
+  <w:tblLook w:val="04A0" w:firstRow="1"/>
+</w:tblPr><w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid>
+<w:tr><w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/><w:tcMar><w:top w:w="60" w:type="dxa"/></w:tcMar><w:vAlign w:val="bottom"/></w:tcPr><w:p><w:r><w:t>甲</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>乙</w:t></w:r></w:p></w:tc></w:tr>
+</w:tbl>`,
+  );
+
+  /** 一张没写过 `w:tblPr`、一格没写过 `w:tcPr` 的表——与编辑器自己造的部件同一条件：没有原件文字可挂。 */
+  const BARE = pack(
+    `<w:tbl><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid>` +
+      `<w:tr><w:tc><w:p><w:r><w:t>独</w:t></w:r></w:p></w:tc></w:tr></w:tbl>`,
+  );
+
+  /** 件里某一枚孩子的整枚原文（连它自己的孩子）：第几枚按文档顺序数。 */
+  const setOf = (xml: string, tag: string, nth = 0): string =>
+    [...xml.matchAll(new RegExp(`<w:${tag}\\b[^>]*>[\\s\\S]*?</w:${tag}>|<w:${tag}\\b[^>]*/>`, "g"))][nth]?.[0] ?? "";
+
+  /** 与 `setTableBox` 同几步：先比、落模型、只把动过的边写回件里那一枚孩子，最后按 `revSeq` 那本账签一枚。 */
+  const clickTable = (doc: WordDocument, rev: { n: number }, author: string, patch: BoxPatch<TableBoxSide>, ground?: string): Table => {
+    const t = tableOf(doc);
+    const after = applyBoxPatch(t.borders, patch, TABLE_EDGE_SHAPE);
+    const changes = borderDelta(t.borders, after);
+    const wasShape = tableShapeOf(t);
+    const wasXml = t.tblPrXml;
+    t.borders = after;
+    if (ground !== undefined) t.shading = ground;
+    syncTableBox(t, changes, ground);
+    if (t.revFormat?.author !== author) {
+      rev.n += 1;
+      signTableRevision(t, { id: rev.n, author, date: STAMP }, wasShape, wasXml);
+    }
+    return t;
+  };
+
+  /** 格那一腿：与 `setCellBox` 同几步，逐格比、逐格写、逐格签。 */
+  const clickCell = (doc: WordDocument, rev: { n: number }, author: string, patch: BoxPatch<CellBoxSide>, r = 0, c = 0, ground?: string): TableCell => {
+    const cell = tableOf(doc).rows[r][c]!;
+    const after = applyBoxPatch(cell.borders, patch, TABLE_EDGE_SHAPE);
+    const changes = borderDelta(cell.borders, after);
+    const wasShape = cellShapeOf(cell);
+    const wasXml = cell.tcPrXml;
+    cell.borders = after;
+    if (ground !== undefined) cell.shading = ground;
+    syncCellBox(cell, changes, ground);
+    if (!(cell.revs ?? []).some((x) => x.tag === "tcPrChange" && x.author === author)) {
+      rev.n += 1;
+      signCellRevision(cell, { id: rev.n, author, date: STAMP }, wasShape, wasXml);
+    }
+    return cell;
+  };
+
+  it("签出的一枚表级记录：文字挂进件里那一枚孩子，记的是改之前自己说过的全部", () => {
+    const doc = open(SAID);
+    const t = clickTable(doc, { n: 80 }, "顾峰", { sides: { bottom: { val: "single" } } });
+    expect(t.revFormat).toMatchObject({ kind: "format", tag: "tblPrChange", id: 81, author: "顾峰", date: STAMP });
+    const rec = setOf(saved(doc), "tblPrChange");
+    expect(rec.startsWith(`<w:tblPrChange w:id="81" w:author="顾峰" w:date="${STAMP}"><w:tblPr>`)).toBe(true);
+    // 「改之前」是那一整套，不是这一击动过的那一条边：模型没有字段的 `w:tblLook`、`w:tblCellMar` 也在里面。
+    expect(rec).toContain('<w:tblStyle w:val="a3"/>');
+    expect(rec).toContain('<w:tblW w:w="0" w:type="auto"/>');
+    expect(rec).toContain('<w:top w:val="single" w:sz="4" w:space="0" w:color="auto"/>');
+    expect(rec).toContain('<w:tblCellMar><w:left w:w="108" w:type="dxa"/></w:tblCellMar>');
+    expect(rec).toContain('<w:tblLook w:val="04A0" w:firstRow="1"/>');
+    // 这一击新说的那一条只活在现在那一套里，不在记录里。
+    expect(rec).not.toContain("<w:bottom");
+    const out = saved(doc);
+    // 记录摆 `CT_TblPr`（§17.4.60）给它的位子：孩子的末尾，不是随手挤到 `w:tblStyle` 前面。
+    expect(out.indexOf("<w:tblLook")).toBeLessThan(out.indexOf("<w:tblPrChange"));
+    expect(setOf(out, "tblBorders")).toContain('<w:bottom w:val="single" w:sz="4" w:space="0" w:color="auto"/>');
+    expect(setOf(out, "tblBorders")).toContain('<w:top w:val="single"');
+  });
+
+  it("存下去再读开，别人读到的还是同一枚待裁决：号、人、那一套都在", () => {
+    const doc = open(SAID);
+    clickTable(doc, { n: 80 }, "顾峰", { sides: { bottom: { val: "single" } } });
+    const again = open(writeDocx(doc));
+    expect(again.revisionEntries().map((e) => `${e.type}:${e.id}:${e.author}`)).toEqual(["table-format:81:顾峰"]);
+    const t = tableOf(again);
+    expect(t.revFormat!.prev).toEqual({ styleId: "a3", widthTwips: 0, widthType: "auto", borders: { top: { val: "single", size: 4, space: 0, color: "auto" } }, cellMargin: { left: 108 } });
+    expect(t.revFormat!.prevSlots.map((s) => s.tag)).toEqual(["tblStyle", "tblW", "tblBorders", "tblCellMar", "tblLook"]);
+    expect(t).toMatchObject({ widthType: "auto", shading: undefined });
+  });
+
+  it("拒绝把「改之前」那一整套放回去，含模型没有字段的 `w:tblLook`", () => {
+    const doc = open(SAID);
+    clickTable(doc, { n: 80 }, "顾峰", { sides: { bottom: { val: "single" } } });
+    expect(doc.resolveRevisions("reject", 81)).toBe(1);
+    const t = tableOf(doc);
+    expect(t.borders).toEqual({ top: { val: "single", size: 4, space: 0, color: "auto" } });
+    const out = saved(doc);
+    expect(out).not.toContain("<w:tblPrChange");
+    expect(setOf(out, "tblBorders")).not.toContain("<w:bottom");
+    expect(out).toContain('<w:tblLook w:val="04A0" w:firstRow="1"/>');
+    expect(out).toContain('<w:tblCellMar><w:left w:w="108" w:type="dxa"/></w:tblCellMar>');
+    expect(doc.revisionEntries()).toEqual([]);
+    expect(open(writeDocx(doc)).revisionEntries()).toEqual([]);
+  });
+
+  it("接受留下现在这一套，摘掉的只有记录", () => {
+    const doc = open(SAID);
+    clickTable(doc, { n: 80 }, "顾峰", { sides: { bottom: { val: "single" } } });
+    expect(doc.resolveRevisions("accept", 81)).toBe(1);
+    const out = saved(doc);
+    expect(out).not.toContain("<w:tblPrChange");
+    expect(setOf(out, "tblBorders")).toContain('<w:bottom w:val="single" w:sz="4" w:space="0" w:color="auto"/>');
+    expect(out).toContain('<w:tblLook w:val="04A0" w:firstRow="1"/>');
+    expect(tableOf(doc).borders!.bottom).toMatchObject({ val: "single" });
+  });
+
+  it("同一个人第二击不再另发一个号，一次拒绝退掉两击", () => {
+    const rev = { n: 80 };
+    const doc = open(SAID);
+    clickTable(doc, rev, "顾峰", { sides: { bottom: { val: "single" } } });
+    clickTable(doc, rev, "顾峰", { sides: { right: { val: "single" } } });
+    expect(rev.n).toBe(81);
+    const out = saved(doc);
+    expect(hits(out, "<w:tblPrChange")).toBe(1);
+    expect(out).not.toContain('w:id="82"');
+    // 记录说的是**第一击之前**那一句，所以拒绝之后两条新边一起没了。
+    doc.resolveRevisions("reject", 81);
+    const back = saved(doc);
+    expect(setOf(back, "tblBorders")).not.toContain("<w:bottom");
+    expect(setOf(back, "tblBorders")).not.toContain("<w:right");
+    expect(setOf(back, "tblBorders")).toContain("<w:top");
+  });
+
+  it("另一个人记过的这一枚给新的一枚让位：`CT_TblPr` 只容一枚记录", () => {
+    const rev = { n: 80 };
+    const doc = open(makeTablePropertyRevisionDocx());
+    clickTable(doc, rev, "顾峰", { sides: { bottom: { val: "single" } } });
+    const out = saved(doc);
+    expect(hits(out, "<w:tblPrChange")).toBe(1);
+    expect(out).toContain('w:id="81" w:author="顾峰"');
+    expect(out).not.toContain('w:id="61"');
+    expect(doc.revisionEntries().filter((e) => e.type === "table-format").map((e) => `${e.id}:${e.author}`)).toEqual(["81:顾峰"]);
+    // 快照问的是这一击之前表说什么，与林晓那一句无关：她的记录不会变成「改之前」的一部分——
+    // 套里再套一枚记录的话，上面那句「整篇只有一枚 `w:tblPrChange`」就先数不过来了。
+  });
+
+  it("没有 `w:tblPr` 的表：字段那一份照样写出记录，记的是一枚空套", () => {
+    const doc = open(BARE);
+    const t = clickTable(doc, { n: 80 }, "顾峰", { sides: { bottom: { val: "single" } } });
+    expect(t.tblPrXml).toBeUndefined();
+    const rec = setOf(saved(doc), "tblPrChange");
+    expect(rec).toContain('w:id="81"');
+    expect(rec).toContain("<w:tblPr/>");
+    expect(saved(doc)).toContain("<w:tblBorders>");
+    // 这张表改之前什么也没说，所以拒绝之后什么也不说：回到向样式借那一边。
+    doc.resolveRevisions("reject", 81);
+    const out = saved(doc);
+    expect(out).not.toContain("<w:tblPrChange");
+    expect(out).not.toContain("<w:tblBorders");
+    expect(tableOf(doc).borders).toBeUndefined();
+  });
+
+  it("填了一地的表：拒绝把地撤掉，其余孩子一个字节不动", () => {
+    const doc = open(SAID);
+    const t = clickTable(doc, { n: 80 }, "顾峰", {}, "#DEEBF7");
+    expect(t.shading).toBe("#DEEBF7");
+    expect(t.revFormat!.prev.shading).toBeUndefined();
+    expect(doc.resolveRevisions("reject", 81)).toBe(1);
+    const after = tableOf(doc);
+    expect(after.shading).toBeUndefined();
+    const out = saved(doc);
+    expect(out).not.toContain("<w:shd");
+    expect(out).toContain('<w:tblLook w:val="04A0" w:firstRow="1"/>');
+    expect(renderWord(doc)).toContain("padding-left:7.2px;");
+  });
+
+  it("格那一腿同两分：记录挂进这一格的 `w:tcPr`，`w:tcMar` 连自己的字一起回去", () => {
+    const doc = open(SAID);
+    const cell = clickCell(doc, { n: 90 }, "顾峰", { sides: { bottom: { val: "single" } } });
+    expect(cell.revs).toMatchObject([{ tag: "tcPrChange", id: 91, author: "顾峰" }]);
+    const rec = setOf(saved(doc), "tcPrChange");
+    expect(rec.startsWith('<w:tcPrChange w:id="91" w:author="顾峰" w:date="2026-10-16T00:00:00Z"><w:tcPr>')).toBe(true);
+    expect(rec).toContain('<w:tcW w:w="2000" w:type="dxa"/>');
+    expect(rec).toContain('<w:tcMar><w:top w:w="60" w:type="dxa"/></w:tcMar>');
+    expect(rec).toContain('<w:vAlign w:val="bottom"/>');
+    expect(rec).not.toContain("<w:bottom");
+    const out = saved(doc);
+    expect(out.indexOf("<w:vAlign")).toBeLessThan(out.indexOf("<w:tcPrChange"));
+    expect(setOf(out, "tcBorders")).toContain('<w:bottom w:val="single" w:sz="4" w:space="0" w:color="auto"/>');
+    // 邻格一条也没点，就不该被牵连：它没有记录，也没有新说的边。
+    expect(tableOf(doc).rows[0][1]!.revs ?? []).toEqual([]);
+  });
+
+  it("拒绝一格记录的把整套捡回来，接受则只留现在这一套", () => {
+    const back = open(SAID);
+    clickCell(back, { n: 90 }, "顾峰", { sides: { bottom: { val: "single" } } });
+    expect(back.resolveRevisions("reject", 91)).toBe(1);
+    const cell = tableOf(back).rows[0][0]!;
+    expect(cell).toMatchObject({ widthTwips: 2000, valign: "bottom", margin: { top: 60 } });
+    expect(cell.borders).toBeUndefined();
+    const out = saved(back);
+    expect(out).not.toContain("<w:tcPrChange");
+    expect(out).toContain('<w:tcMar><w:top w:w="60" w:type="dxa"/></w:tcMar>');
+    expect(out).toContain('<w:vAlign w:val="bottom"/>');
+
+    const stay = open(SAID);
+    clickCell(stay, { n: 90 }, "顾峰", { sides: { bottom: { val: "single" } } });
+    expect(stay.resolveRevisions("accept", 91)).toBe(1);
+    const kept = saved(stay);
+    expect(kept).not.toContain("<w:tcPrChange");
+    expect(setOf(kept, "tcBorders")).toContain('<w:bottom w:val="single" w:sz="4" w:space="0" w:color="auto"/>');
+    expect(kept).toContain('<w:vAlign w:val="bottom"/>');
+  });
+
+  it("同一个人连着点两击只留一条记录，别人记过的那一枚随新的让位", () => {
+    const rev = { n: 90 };
+    const doc = open(SAID);
+    clickCell(doc, rev, "顾峰", { sides: { bottom: { val: "single" } } });
+    clickCell(doc, rev, "顾峰", { sides: { top: { val: "dashed" } } });
+    expect(rev.n).toBe(91);
+    const out = saved(doc);
+    expect(hits(out, "<w:tcPrChange")).toBe(1);
+    doc.resolveRevisions("reject", 91);
+    expect(setOf(saved(doc), "tcBorders")).toBe("");
+    expect(tableOf(doc).rows[0][0]!.borders).toBeUndefined();
+  });
+
+  it("没有 `w:tcPr` 的格：记录写得出，拒绝之后这一格什么也不说", () => {
+    const doc = open(BARE);
+    const cell = clickCell(doc, { n: 90 }, "顾峰", { sides: { bottom: { val: "single" } } });
+    expect(cell.tcPrXml).toBeUndefined();
+    const rec = setOf(saved(doc), "tcPrChange");
+    expect(rec).toContain('w:id="91"');
+    expect(rec).toContain("<w:tcPr/>");
+    expect(doc.resolveRevisions("reject", 91)).toBe(1);
+    const out = saved(doc);
+    expect(out).not.toContain("<w:tcPrChange");
+    expect(out).not.toContain("<w:tcBorders");
+    expect(tableOf(doc).rows[0][0]!.borders).toBeUndefined();
+  });
+
+  it("存下去再读开：这一格的记录还是同一枚，窗格数得出、判得掉", () => {
+    const doc = open(SAID);
+    clickCell(doc, { n: 90 }, "顾峰", { sides: { bottom: { val: "single" } } });
+    const again = open(writeDocx(doc));
+    expect(again.revisionEntries().map((e) => `${e.type}:${e.id}:${e.author}:${e.text}`)).toEqual(["cell-format:91:顾峰:甲"]);
+    const cell = tableOf(again).rows[0][0]!;
+    expect(cell.revs![0]!.prevSlots.map((s) => s.tag)).toEqual(["tcW", "tcMar", "vAlign"]);
+    expect(cell.revs![0]!.prev).toMatchObject({ widthTwips: 2000, valign: "bottom", margin: { top: 60 } });
+    expect(again.resolveRevisions("reject", 91)).toBe(1);
+    expect(again.revisionEntries()).toEqual([]);
   });
 });

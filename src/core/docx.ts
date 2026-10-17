@@ -2,7 +2,7 @@ import { OpcPackage, asArray, childSpans, children, decodeEntities, elementConte
 import { ThemeFonts, themeFontScript } from "./theme-fonts.js";
 import { isMark } from "./run-identity.js";
 import { dataUrl } from "./media.js";
-import { coversWholeSet, decideSetXml, decideSlots, recordedSlots, setChildren } from "./doc-table-revisions.js";
+import { TABLE_RECORD_TAGS, changeRecordXml, coversWholeSet, decideSetXml, decideSlots, recordedSlots, setChildren } from "./doc-table-revisions.js";
 import { cellCovering, columnStarts, deleteColumn, gridColumns, removeCell, repairMerges } from "./doc-table-ops.js";
 import {
   allocIds,
@@ -36,8 +36,11 @@ export interface RunStyle {
   /**
    * §17.17.64's `ST_HighlightColor` name, held as the three states the element has: absent is "this run said
    * nothing", `"none"` is "this run said no highlight", and any other member is the colour it chose. `none` is a
-   * value rather than an absence because the file wrote it as one — the 86 WPS documents state
-   * `<w:highlight w:val="none"/>` 4,135 times (`.scratch/highlight-counted.ts`) — and §17.7.2 stops a property at
+   * value rather than an absence because the file wrote it as one. 授权 46 份重数之后的结论是：**`w:highlight` 在任何
+   * xml 部件里 0 枚**（同一趟扫描在同批件上找到 1,615 枚 `w:u`，所以这个 0 是「真没有」而不是「没找到」）。也就是说
+   * 这一族在授权口径上**没有受众**，三态建模靠的是 §17.17.64 的枚举与「往返不得改写」这条要求，不是靠语料喂出来的。
+   * 作废语料上那句「`<w:highlight w:val="none"/>` 4,135 枚」（`.scratch/highlight-counted.ts`）不再是可引的读数。
+   * §17.7.2 stops a property at
    * the first rung that stated one, so keeping it as "nothing said" would let a colour lower down win.
    */
   highlight?: string;
@@ -48,8 +51,9 @@ export interface RunStyle {
   font?: string;
   /**
    * `w:rFonts@w:eastAsia` — the face this document chose for its Chinese. It is a second face on the same
-   * element, not a fallback for the first: 45,054 of the corpus's 61,702 modelled runs write both attributes
-   * with the same name, and 1,250 write two different ones (`.scratch/run-font-eastasia.ts`). A run whose
+   * element, not a fallback for the first: on the authorized 46 份's body parts 4,475 `w:rFonts` elements write
+   * both `w:ascii` and `w:eastAsia`, and 161 of them name two different literal faces
+   * (`.scratch/corpus-recheck2.mjs`). A run whose
    * Chinese draws in the Latin face is a run the file never described that way.
    */
   fontEastAsia?: string;
@@ -107,6 +111,13 @@ export interface Inline extends RunStyle {
    */
   rPrSlots?: PropSlot[];
   /**
+   * 同一枚 `w:r` 说过的全部文字，只有它装了不止一个内容孩子（`w:tab`+`w:t`、`w:br`+`w:t`）时才写。§17.3 让一枚
+   * run 并排装几个孩子，读出来是几枚 inline，共用的却是同一个 `rPrSlots` 引用；「这段文字说没说的是中文」因此
+   * 是整枚 run 的话，不是哪个孩子自己的话——按孩子问，挑脸只给带字的那半补 `w:eastAsia`，tab/br 那半不补，
+   * 两串性质不同就并不回一枚 run（#142），多出来的那份 `w:cs`/`w:hint` 是这么被复制的。
+   */
+  runText?: string;
+  /**
    * The style fields as they were read. A property that has not moved off this snapshot keeps the source text
    * it came in with; one that has is re-spelled, which is what lets the toolbar work on a run it did not write.
    */
@@ -131,6 +142,13 @@ export interface CarriedInline {
    */
   name?: string;
   show: string;
+  /**
+   * Which page-number field these bytes hold, for the one thing `show` can't say: a page field displayed on
+   * a sheet has to show the number **that** sheet computes, not the words 「页码」. Decided here, where the
+   * `w:instrText` is parsed, so nothing downstream re-reads the instruction to learn it. Display only; the
+   * write side still puts `xml` back as it came.
+   */
+  field?: "PAGE" | "NUMPAGES";
 }
 
 /**
@@ -189,16 +207,16 @@ export interface ParaStyle {
   align?: string;
   indentLeft?: number;
   /**
-   * The same left indent in hundredths of a character (`w:leftChars`) — how WPS spells a Chinese indent. Over the
-   * 39 distinct WPS-written bodies in the bundle (`.scratch/indent-step.ts`, deduped by content hash) a positive
-   * `w:leftChars` arrives alongside its twips value every single time: `200` with `420` 3 times, `400` with `840`
-   * 23 times, `303` with `1207` 16 times. The 缇-per-character those pairs work out to (210, 402, 399) are the
-   * paragraph's own font sizes, so the two spellings say the same indent twice — and 420 缇 is also the
-   * `w:defaultTabStop` 36 of those 39 files state, which is what makes one step of 增加缩进量 2 字符 = 420 缇 at 10.5pt.
+   * The same left indent in hundredths of a character (`w:leftChars`) — how WPS spells a Chinese indent. 授权口径
+   * 46 份的 `word/document.xml` 写 2,278 枚 `w:ind`，其中 `w:left` 412 枚、`w:leftChars` 432 枚；那 432 枚里 382 枚
+   * 与缇值同写，剩下 50 枚没有缇同伴——48 枚写的是 `0`、2 枚写负数，**正数的 0 枚**，所以「字符数单独说一个正缩进」
+   * 这一支在授权语料上没有实例。同写的对子算下来每字符 210 缇（`w:left="840" w:leftChars="400"`，10.5pt）与 398 缇
+   * （`1207/303`，≈20pt）这一档，就是段落自己的磅数——两枚说的是同一个缩进，各说一遍。而 `w:defaultTabStop`
+   * 46 份全写了（43 份 420、3 份 720），所以 增加缩进量 走一步 = 2 字符 = 420 缇（`.scratch/摆位-authorized.py`、
+   * `.scratch/chars-zero-audience.ts`，均经产品代码与逐枚切片两趟口径）。
    *
-   * The page draws the twips value (no paragraph states a positive `w:leftChars` without it), but the button has
-   * to move both: leave the character count behind and the file contradicts itself, and Word lays the paragraph
-   * out from the count while our page shows the twips.
+   * The page draws the twips value, but the button has to move both: leave the character count behind and the file
+   * contradicts itself, and Word lays the paragraph out from the count while our page shows the twips.
    */
   indentLeftChars?: number;
   /**
@@ -206,14 +224,16 @@ export interface ParaStyle {
    * `indentHanging` are twips like `indentLeft` (`w:right`, `w:hanging`); `indentFirstLineChars` is hundredths
    * of a character, which is how WPS writes 首行缩进 2 字符 (`w:firstLineChars="200"`).
    *
-   * The first line has two spellings, and a file that states both is not contradicting itself: over the 86
-   * WPS-written documents the 1,147 `w:ind` elements carrying a positive pair work out to a per-character
-   * width of 180/210/240/264/300/320/440 twips, which are font sizes (9pt, 五号 10.5pt, 12pt, 16pt, 22pt).
-   * So they say the same indent twice — except in 88 elements that state a positive `w:firstLine` next to
-   * `w:firstLineChars="0"` (83 of them inside a `word/document.xml`, and 70 of those read `w:firstLine="642"`),
-   * which is WPS spelling an absolute 磅 value it was given in the dialog. A rule that let the character form
-   * win — which is what §17.3.1.14 says — would remove 88 indents WPS itself drew to fix 4 in the opposite
-   * shape, so the resolved value is the twips one when it is stated non-zero and the character count otherwise.
+   * The first line has two spellings, and a file that states both is not contradicting itself. 授权口径 46 份的
+   * `word/document.xml` 那 2,278 枚 `w:ind` 里 `w:firstLine` 写了 2,010 枚、`w:firstLineChars` 1,210 枚，逐枚看
+   * （`.scratch/chars-zero-audience.ts`）：两枚同写的 1,116 枚中 **608** 枚两枚都是正数，商落在每字符 240 缇
+   * （`w:firstLine="480" w:firstLineChars="200"` 348 枚）与 300/301/269 这些档上——都是段落自己的磅数，同一件事
+   * 说两遍；**94** 枚写正缇而字符那枚写 `0`；414 枚两枚都写 `0`，那是「说不缩进」的写法。此外 894 枚只写缇，
+   * **94** 枚只写字符而写的无一是正数（全是 `0`，且这 94 枚每枚都同时写着自己的 `w:hanging`）。
+   *
+   * 于是有两支取舍。段自己两枚都写时，上身的仍是缇那一枚——让字符那枚赢（§17.3.1.14 就是这么排的）会把那 94 枚
+   * WPS 自己在对话框里给的绝对值抹掉；这一支的取舍按文件留下的数读，WPS 究竟画哪一枚 未取证（本机没有录屏授权）。
+   * 段只用字符或只用 `w:hanging` 答过首行时，样式链上那枚缇不再叠上来，见 `indResolve`。
    */
   indentRight?: number;
   indentFirstLine?: number;
@@ -228,10 +248,18 @@ export interface ParaStyle {
    * how often that mattered in the files WPS itself wrote.
    */
   lineSpacingRule?: LineSpacingRule;
+  /**
+   * `w:pageBreakBefore` (§17.3.1.65) as this `w:pPr` states it: `undefined` for nothing said, `true` for a bare
+   * or `w:val="1"` element, and `false` for the `w:val="0"` one — which is the only spelling the authorized 46 份
+   * has: 200 of its body paragraphs write `<w:pageBreakBefore w:val="0"/>` and none writes it on
+   * (`.scratch/toggle-lent-chain.ts`, `.scratch/pbb-spellings.ts`). So presence is not what this field means.
+   * `ownParaStyle` drops `false` the way it drops an indent the paragraph only borrowed, so a statement of
+   * 「不断页」 travels as the paragraph's own slot bytes and never as a bare element the writer invents.
+   */
   pageBreakBefore?: boolean;
   /**
-   * The three page-keeping rules (§17.3.1.14 `w:keepNext`, §17.3.1.13 `w:keepLines`, §17.3.2.90 `w:widowControl`)
-   * as this `w:pPr` states them: `undefined` for nothing said, `true`/`false` for the written switch. A style's
+   * The three page-keeping rules (§17.3.1.14 `w:keepNext`, §17.3.1.13 `w:keepLines`, §17.3.2.90
+   * `w:widowControl`) as this `w:pPr` states them: `undefined` for nothing said, `true`/`false` for the written switch. A style's
    * statement is what `paraLent` lends, so these live in the same set as the indent a style lends; the paragraph
    * field docs say which of the three defaults to on when nobody says.
    */
@@ -242,37 +270,82 @@ export interface ParaStyle {
    * `w:snapToGrid` (§17.3.1.87): whether this paragraph's lines are measured in the section's line grid. The
    * switch defaults to **on**, so `undefined` (nothing in the paragraph's own `w:pPr` or its style chain) and
    * `true` (a bare `<w:snapToGrid/>`) both mean it snaps, and only a written `w:val="0"`/`"false"`/`"none"` takes
-   * it off — the same reading `w:widowControl` above gets, for the same reason: the corpus writes the off.
-   * Over the 201 WPS-written documents, 3,394 of the 27,511 `w:pPr` blocks state the element **in the paragraph's
-   * own property slot** and 1,994 of those state it off; `word/styles.xml` states it 275 times at a slot that can
-   * lend and 267 of those say off — so a paragraph whose own `w:pPr` says nothing can still be told not to snap,
-   * and the ladder has to be walked for those 267 to reach the paragraphs under it.
+   * it off — the same reading `w:widowControl` above gets, for the same reason: the authorized 46 份 write the off.
+   * 授权口径的逐槽读数（ElementTree 父链与正则切片两条口径同为 528 枚，`.scratch/authorized-families3.mjs` 同族）：
+   * **正文与页眉页脚部件 410 枚**（`word/document.xml` 406 + 页脚 4），其中 **230 枚说关（`w:val="0"`）、180 枚裸写**；
+   * 段自己的 `w:pPr` 里那 406 枚的落点是 顶层 `w:body` 段 222、表格内段 132、文本框内段 32、`w:sdtContent` 内段 20。
+   * `word/styles.xml` 借出的那 **118 枚 = 110 枚写在 `w:style/w:pPr`（其中 108 枚说关）+ 8 枚写在 `w:style/w:rPr`**——
+   * 前者就是本字段要走样式梯子的受众（一段自己不写、被上面的样式告知不贴格）；后者落在**字符样式**的 run 槽上，
+   * 本模型只在段落层判定这条开关，那 8 枚画出来会怎样属 **未取证**（要 WPS 真机观察，本机没有录屏授权）。
+   * 作废语料上那句「3,394 / 27,511 块、1,994 关、样式 275 枚中 267 关」已被上面这组数换掉。
    *
-   * The slot is what counts. Of the corpus's 3,466 `<w:snapToGrid>` elements, 72 sit in a run-properties slot
-   * instead (`w:pPr>w:rPr` 19, `w:p>w:r>w:rPr` 53, and 56 more among styles' 331), where §17.3.1.87 does not put
-   * the switch and this reader does not look — `pPr.snapToGrid` cannot see a child of a child. Slicing
-   * `<w:pPr>…</w:pPr>` with a non-greedy regex claims them: the first pass over this corpus counted 3,396 in the
-   * slices against 3,466 in the files, two of them paragraph-mark statements read as paragraph properties and 70
-   * never attributed. `.scratch/wps-snap-where.mjs` walks the ancestor stack so every element reaches a slot.
+   * The slot is what counts: 授权 46 份里这 528 枚的父链只有 `w:pPr` 与 `w:style/w:rPr` 两种，**正文与页眉页脚部件里
+   * `w:rPr` 落点 0 枚**（410 枚全在 `w:pPr`）。§17.3.1.87 does not put the switch in a body-run slot and
+   * this reader does not look — `pPr.snapToGrid` cannot see a child of a child. Slicing `<w:pPr>…</w:pPr>` with a
+   * non-greedy regex claims them anyway: the old pass counted 3,396 in the slices against 3,466 in the files, two
+   * of them paragraph-mark statements read as paragraph properties and 70 never attributed
+   * (`.scratch/wps-snap-where.mjs`) — that split is the quarantined 86 份's arithmetic and 待重证; on the authorized
+   * set the same mis-attribution risk is bounded by counting parents with a real parser, which is how the numbers
+   * above were taken. The walk itself stays: it is
+   * what keeps every element reaching a slot instead of being silently unattributed.
    *
    * Like the three keep flags, this is not in `PARA_STYLE_KEYS`: the element travels in `pPrSlots`, and a
    * `w:pPrChange` record's own `w:snapToGrid` comes back as the record's bytes rather than as a field re-spelled.
-   * It is written, though — `syncParaSlots` re-spells the element in the two spellings the corpus uses (bare for
-   * on, `w:val="0"` for off) once the field moves, and `write-docx.ts` spells it for the paragraphs that have no
+   * It is written, though — `syncParaSlots` re-spells the element in the two spellings the authorized 46 份 use (bare
+   * for on, `w:val="0"` for off) once the field moves, and `write-docx.ts` spells it for the paragraphs that have no
    * slots at all. Both compare against this snapshot, so a switch the paragraph only borrowed stays the style's.
    */
   snapToGrid?: boolean;
+  /**
+   * `w:pBdr` (§17.3.2.36): the box drawn around this paragraph, one entry per side the element named. A side
+   * whose `w:val` is `none`/`hidden`/`nil` is a side the file **said no line for**, which is a different sentence
+   * from not naming the side at all — the same lesson `w:u w:val="none"` taught in §85, and the shape the authorized
+   * 46 份 mostly write: of the 26 `w:pBdr` elements in the 46 authorized docx-family files
+   * (`.scratch/pbdr-audience.ts`, 7,430 body paragraphs), 16 name all four sides as `none` and 2 name a `none`
+   * bottom, while only 8 state a real line (`w:bottom w:val="single" w:sz="6" w:space="1" w:color="auto"`). All
+   * 26 sit outside the body — 24 in `word/styles.xml` (the 16 and the 8) and the other 2 in a header part — and 0
+   * in the 7,430 body paragraphs, so a reader that drew a line for `none` would rule across the 16 chains that
+   * refused one, and one that dropped `none` while lending would let an ancestor's line through a cancellation.
+   * `w:between` and `w:bar` are read here and not drawn — 0 of the 26 state either, and `w:shadow`
+   * is stated by none of them.
+   */
+  borders?: ParaBorderSet;
+  /**
+   * `w:pPr/w:shd@w:fill` (§17.3.2.33): the ground behind this paragraph's lines, as the file signed it — either
+   * a colour (`#RRGGBB`) or, when the fill says no colour, the token it used instead of one, in practice `auto`.
+   * Only the fill is a field; a `w:val` other than `clear` would put a pattern in front of it, and 30/30 of the
+   * paragraph-shading elements in the authorized corpus say `w:val="clear" w:color="auto" w:fill="FFFFFF"`
+   * (`word/document.xml`'s `w:pPr` only — the same walk finds no `w:shd` under any other parent or in any other
+   * part, so `styles.xml` and the header parts have 0 of them). 件数有两说、枚数只有一说：那 30 枚落在 4 个文件路径上
+   * （`office rental contract.dotm` 1 枚 + `share transfer agreement.dotm` 14 枚，各在 zh_CN 与 zh_HK 两套模板里有一份），
+   * 所以 `.scratch/pbdr-audience.ts` 按路径报 4 份、按文件名去重是 2 份。
+   * `w:fill="auto"` has 0 paragraph instances there, but it is not a made-up shape: the same corpus writes it on
+   * 1,600 of its 1,646 `w:tcPr/w:shd` (the other 46 say `FFFFFF`), which is the file's own idiom for 「这一格要页面自己的地」. So a stated
+   * `auto` is kept as a token rather than collapsed into `undefined`, the same way `w:u w:val="none"` (§85) and
+   * `w:color="auto"` (§ `TableBorder.color`) are kept: **said no ground** and **said nothing** are two sentences,
+   * and folding the first into the second would let an ancestor style's fill show through a refusal. `undefined`
+   * is the second one — no `w:shd`, or one that states no fill.
+   */
+  shading?: string;
+  /**
+   * `w:pPr/w:tabs` (§17.4.19) as this one rung states it, `w:val="clear"` included. Unlike every other key in
+   * this interface, the chain does not stop at the rung that first states it: `paraLent` folds each rung's list
+   * into the one below it per position (`mergeTabStops`), because a style that adds one stop does not cancel
+   * the stops the style under it wrote.
+   */
+  tabStops?: TabStop[];
   numPr?: { numId: number; ilvl: number };
   /**
    * `w:outlineLvl` (§17.3.2.26) as the file signed it: 0 is the first heading level through 8 the ninth, and
-   * **9 is body text**, which is why the raw number is kept rather than folded into "a level or none" —
-   * 56 of the corpus's 264 self-stating paragraphs write that 9 (`.scratch/outline-census.ts`), and a 9 on the
+   * **9 is body text**, which is why the raw number is kept rather than folded into "a level or none" — the
+   * authorized 46 份 do write that 9: of the 7,430 paragraph blocks the census walks, 202 state a level
+   * themselves and the 408 resolved levels include 26 at level 9 (`.scratch/outline-census.ts`), and a 9 on the
    * paragraph is a level its style would otherwise lend being taken back.
    */
   outlineLevel?: number;
 }
 
-/** `w:spacing@w:lineRule` (§17.3.1.27) — and the only three literals the 86 WPS-written documents ever state. */
+/** `w:spacing@w:lineRule` (§17.3.1.27) — and the only three literals the authorized 46 份 ever state (auto 2,890 / exact 1,004 / atLeast 54, `.scratch/corpus-recheck2.mjs`). */
 export type LineSpacingRule = "auto" | "exact" | "atLeast";
 
 /** `w:pPrChange`: the paragraph properties from before someone revised this paragraph. */
@@ -306,6 +379,14 @@ export interface TableStyle {
   borders?: BorderSet;
   /** `w:tblCellMar`: the padding every cell of this table gets unless it or its row says otherwise. */
   cellMargin?: MarginTwips;
+  /**
+   * `w:tblPr/w:shd@w:fill`: the ground under the whole table, same two spellings as `ParaStyle.shading`
+   * (a colour, or the token a file put where a colour would go). 授权口径实测 0 枚（`.scratch/shd-audience.ts`：
+   * 46 份件里 `w:tblPr` 那一层一枚也没有，只有 `w:tcPr` 1,646 与 `w:pPr` 30），所以**这一层的形状是 未取证**：
+   * 摆的是 schema（§17.4.60）给的位置与另一家实现（ONLYOFFICE 的 `CT_TblPr` 读端确有 `case "shd"`）认的这一枚孩子，
+   * 不是 WPS 自己怎么写。读通是为了「件里要出现时不静默丢」，写回才有对话框那一条腿。
+   */
+  shading?: string;
 }
 
 /** What a `w:trPr` says about its row, minus the row's own record and the children it only carries. */
@@ -461,6 +542,18 @@ export interface Paragraph {
   lineSpacing?: number;
   /** `w:spacing@w:lineRule`: which unit `lineSpacing` is written in. See `ParaStyle`. */
   lineSpacingRule?: LineSpacingRule;
+  /**
+   * `w:pageBreakBefore` (§17.3.1.65): a page break is forced before this paragraph, and the renderer's
+   * `page-break-before:always` is the layout's only page break this field owns. Read as the switch, not as the
+   * element's presence: every one of the authorized 46 份 that writes the element writes `w:val="0"` — 200 body
+   * paragraphs, and 180 of them reachable as model paragraphs, the other 20 travelling verbatim inside a `w:sdt`
+   * container — and before that reading the renderer forced a break on all 180 (`.scratch/pbb-before-after.ts`,
+   * counted per file, so its printed column is files and not breaks). No style lends it: `word/styles.xml`
+   * in the 46 writes `w:pageBreakBefore` 0 times and 0 paragraphs ask the chain (`.scratch/toggle-lent-chain.ts`),
+   * so the paragraph's own statement is the whole story and `false` and silence draw the same page.
+   * The installed app is measured on this: `office rental contract.dotm` states the switch 21 times and draws 0
+   * breaks now against 21 on the previous build (`.scratch/pbb-dom-count.js`, both readings via `.scratch/cdp-eval.mjs`).
+   */
   pageBreakBefore?: boolean;
   /**
    * `w:keepNext` (§17.3.1.14): this paragraph's last line stays on the page where the next block starts.
@@ -474,17 +567,55 @@ export interface Paragraph {
    * `w:widowControl` (§17.3.2.90): a page break inside this paragraph leaves at least two lines on each side of
    * the seam. The reading is inverted against the two keep flags: `ST_OnOff` here defaults to **on**, so
    * `undefined` (nobody in the paragraph's own `w:pPr` or its style chain said) means the rule applies and only
-   * `false` — a written `w:val="0"`/`"false"`/`"none"` — turns it off. That is why the chain has to be read:
-   * 160 of the styles in the corpus write the `w:val="0"` and 10,200 paragraphs inherit it (see `LENT_PARA_KEYS`).
+   * `false` — a written `w:val="0"`/`"false"`/`"none"` — turns it off. That is why the chain has to be read, and
+   * the chain is where nearly all of this corpus's answer lives. Over the 7,393 `w:p` of the authorized 46 份 —
+   * body, table cells and text boxes alike, since the file writes the element in all three — asked one rung of
+   * §17.7.2's ladder at a time (`.scratch/toggle-lent-chain.ts`): 246 paragraphs state it themselves (160 off,
+   * 86 on), 58 borrow it from the named style one hop up (30 off, 28 on), 1,370 borrow **off** from two hops up,
+   * 5,601 borrow **off** from the default paragraph style, and 118 have nobody above them to ask. So 7,001
+   * paragraphs are told not to widow-protect without writing a word about it: a reader that only looked at the
+   * paragraph's own `w:pPr` widow-protected every one of them, which is what #126 did. `w:docDefaults` states none
+   * of it — all 46 份 carry `w:docDefaults/w:pPrDefault/w:pPr` and all 46 leave it empty (`.scratch/dd-control.ts`),
+   * so the default paragraph style is the last rung with anything to lend. The model side agrees: 2,937 of the
+   * 3,120 paragraphs reachable through `doc.blocks` resolve to `false`, and none resolves to `undefined` while its
+   * own `w:pPr` stated the switch (`.scratch/widow-model.ts`; that walk stops at `carried` containers, so it counts
+   * a smaller denominator than the file's own). See `LENT_PARA_KEYS` for the same split across the family.
    */
   widowControl?: boolean;
   /**
    * `w:snapToGrid`: whether this paragraph's lines are measured in the section's line grid. Same three-state
    * reading as `widowControl` (defaults to on, and only a written off takes it off), and read through the style
-   * chain for the same reason — 267 of the 275 statements the corpus's `word/styles.xml` makes at a lendable slot
-   * are the off. See `ParaStyle` for the counts and `render.ts`'s `lineHeight` for what the page does with it.
+   * chain for the same reason — the authorized 46 份 lend it: 404 paragraphs state it (224 off, 180 on), 52 take
+   * it off from a style (40 one hop up, 12 two), 154 from the default paragraph style, 16 from a style that says
+   * on, and 6,783 get nothing from anyone (`.scratch/toggle-lent-chain.ts`). See `ParaStyle` for the per-slot
+   * counts and `render.ts`'s `lineHeight` for what the page does with it.
    */
   snapToGrid?: boolean;
+  /**
+   * `w:pBdr`, this paragraph's own sides merged over the ones its style chain names — the merge is per side,
+   * because §17.7.2 resolves a property at a time and a paragraph that cancels only its bottom line is not
+   * cancelling the box its style drew. See `ParaStyle` for what the authorized 46 份 write there and why
+   * `w:val="none"` is a statement rather than a silence. Nothing writes it
+   * unless the field moved: read paragraphs carry the element's own bytes in `pPrSlots`.
+   */
+  borders?: ParaBorderSet;
+  /**
+   * `w:pPr/w:shd@w:fill`, this paragraph's own or the one its style chain states; see `ParaStyle` for why a
+   * stated `auto` is kept as a token instead of read as a silence, and for the 30 枚 / 4 个路径 / 2 份名 that
+   * audience actually is. It exists because the page has to draw a ground the file named, and every one of those
+   * 30 says `w:val="clear"` with a fill.
+   * The pattern forms have no field and are not
+   * drawn — 0 of the authorized 46 份 asks for one, since all 1,676 `w:shd` those files write say `w:val="clear"`
+   * (`.scratch/shd-audience.ts`) — and their bytes still travel in `pPrSlots`.
+   */
+  shading?: string;
+  /**
+   * `w:pPr/w:tabs` resolved for this paragraph: its own stops over the ones its style chain wrote, per position
+   * (`mergeTabStops`), with every `w:val="clear"` already spent. So this list only ever names a stop that paints.
+   * Not in `PARA_STYLE_KEYS`: no command moves it yet, and the element's bytes travel in `pPrSlots` like the box
+   * and the ground beside it.
+   */
+  tabStops?: TabStop[];
   /**
    * `w:outlineLvl`, this paragraph's own or the one its style chain states; see `ParaStyle` for what the number
    * means and `headingLevel` for the heading the page draws from it.
@@ -495,8 +626,10 @@ export interface Paragraph {
    * states none, what the paragraph's style chain and `w:rPrDefault` lend it — the same ladder a body run of this
    * paragraph reads. It exists for one thing the page draws: a numbered paragraph's symbol is a character run of
    * its own (§17.3.1.12), and where the *level* states no size this is the number the file left standing. Without
-   * it the mark falls through to the page stylesheet's 12pt, a size no document asked for — 331 of the corpus's
-   * 396 such paragraphs resolve elsewhere than 12pt (`NumberLevel.sizePt` covers the other 70, `.scratch/mark-size.ts`).
+   * it the mark falls through to the page stylesheet's 12pt, a size no document asked for. The audience that
+   * justified it — 331 of the corpus's 396 such paragraphs resolving elsewhere than 12pt, with
+   * `NumberLevel.sizePt` covering the other 70 (`.scratch/mark-size.ts`) — was measured on the quarantined 86 份
+   * cohort, and the paragraph-mark-size audience has not been re-counted on the authorized 46: 待重证.
    * Nothing writes it: the mark's own properties travel as `pPrSlots` text, so a save spells the file's bytes.
    */
   markSizePt?: number;
@@ -505,9 +638,10 @@ export interface Paragraph {
    * (§17.3.1.4), each falling back on its own to what the style chain and `w:rPrDefault` lend, the way
    * `readRunStyle` reads one attribute at a time (§17.7.2 stops per property). They exist for the same thing
    * `markSizePt` does: the numbering symbol is a character run of its own (§17.3.1.12), and where the *level*
-   * names no font this is what the file left standing. Over the 86 WPS-written documents, 424 listed paragraphs sit
-   * on a level that names none: 172 get the face for their own script from this mark, 234 more from the chain, 18
-   * from nothing at all (`.scratch/mark-font.ts`). The two faces are a stack, not a choice — the browser dispatches
+   * names no font this is what the file left standing. The audience that justified it (424 listed paragraphs on a
+   * level that names none: 172 getting the face for their own script from this mark, 234 more from the chain, 18
+   * from nothing at all, `.scratch/mark-font.ts`) was measured on the quarantined 86 份 cohort and has not been
+   * re-counted on the authorized 46: 待重证. The two faces are a stack, not a choice — the browser dispatches
    * by script, so `三、` takes the East Asian one and `1.` the Latin one, exactly as the paragraph's body text does.
    * Nothing writes them: the mark's properties travel as `pPrSlots` text, so a save spells the file's bytes.
    */
@@ -520,15 +654,16 @@ export interface Paragraph {
    * `w:val="auto"` counts as no statement, and a shape that is not a colour counts as one neither. It exists for
    * the same reason the two faces do: the numbering symbol is a character run of its own (§17.3.1.12).
    *
-   * The level has no say here, because the corpus never tests one: 8 of its 617 levels do write
-   * `w:lvl/w:rPr/w:color`, and **8/8 of those have no listed paragraph sitting on them** (`.scratch/mark-color.ts`),
-   * so no file in hand says which of the two should win. Of the 473 listed paragraphs in the 86 WPS-written
-   * documents, **82** resolve a colour at this rung — 74 from the mark itself, 8 from the chain — and all 82 differ
-   * from the ink the App's own stylesheet gives a page, which is the number that changes on screen. In 74/74 of the
-   * mark-named ones it is the same colour the paragraph's own text resolves to
-   * (`.scratch/make-markcolor-fixture.ts`), so what this field fixes is not a difference from the body but the
-   * symbol having been left out of the ink the file chose for its paragraph. 391 resolve nothing and stay as they
-   * are drawn. Nothing writes it: the mark's properties travel as `pPrSlots` text, so a save spells the file's bytes.
+   * The level has no say here, because no file in hand tests one. The measurements that said so — 8 of 617 levels
+   * writing `w:lvl/w:rPr/w:color` with **8/8 of those having no listed paragraph sitting on them**
+   * (`.scratch/mark-color.ts`), and 82 of the 473 listed paragraphs resolving a colour at this rung (74 from the
+   * mark itself, 8 from the chain), all 82 differing from the ink the App's own stylesheet gives a page, 74/74 of
+   * the mark-named ones agreeing with the paragraph's own text (`.scratch/make-markcolor-fixture.ts`), 391
+   * resolving nothing) — all came from the quarantined 86 份 cohort, and neither the level side nor the paragraph
+   * side has been re-counted on the authorized 46: 待重证, so this is the reading the files left standing, not a
+   * measured precedence. What this field fixes is not a difference from the body but the symbol having been left
+   * out of the ink the file chose for its paragraph. Nothing writes it: the mark's properties travel as `pPrSlots`
+   * text, so a save spells the file's bytes.
    */
   markColor?: string;
   /**
@@ -619,6 +754,15 @@ export type BorderSet = Partial<
   Record<"top" | "left" | "bottom" | "right" | "start" | "end" | "insideH" | "insideV" | "tl2br" | "tr2bl", TableBorder>
 >;
 
+/**
+ * The sides `CT_PBdr` (§17.3.2.36) lets a paragraph state, in the order it gives them. It is not `CT_Borders`:
+ * a paragraph names `w:between` (the rule between this paragraph and the next one that shares it) and `w:bar`
+ * where a table names `w:insideH`/`w:insideV`. An edge carries the same four attributes in both, so a side is
+ * still a `TableBorder`.
+ */
+export const PBDR_ORDER = ["top", "left", "bottom", "between", "right", "bar"] as const;
+export type ParaBorderSet = Partial<Record<(typeof PBDR_ORDER)[number], TableBorder>>;
+
 /** The four sides a cell-margin set names, in the order `CT_TblCellMar` gives them. */
 export const MARGIN_SIDES = ["top", "left", "bottom", "right"] as const;
 
@@ -626,8 +770,10 @@ export const MARGIN_SIDES = ["top", "left", "bottom", "right"] as const;
  * Cell padding, twips per side: `w:tblCellMar` (§17.3.2.82) says it for a whole table and `w:tcMar`
  * (§17.3.2.69) for a single cell. A side is present only when the file said it — `w:w="0"` means flush,
  * which is a different fact from saying nothing, and a page that cannot tell them apart puts its own
- * spacing back on a table that asked for none. Across the 115 WPS-written table-bearing files in the
- * corpus every file says at least one side, and every side that comes with a `w:type` spells it `dxa`.
+ * spacing back on a table that asked for none. The audience reading behind that — every one of the 115
+ * WPS-written table-bearing files in the corpus saying at least one side, and every side that comes with a
+ * `w:type` spelling it `dxa` — came from the quarantined cohort; `w:tblCellMar`/`w:tcMar` have not been re-counted
+ * on the authorized 46 份, so it is 待重证.
  */
 export type MarginTwips = Partial<Record<(typeof MARGIN_SIDES)[number], number>>;
 
@@ -661,19 +807,22 @@ export interface RowInfo {
   /**
    * The row's `w:tblPrEx` band, read down to the one property the page draws: cell padding as this row is
    * to lay itself out, overriding the table's. The band is a child of `w:tr` rather than of `w:trPr` — the
-   * corpus spells it that way in all 1,660 rows that carry margins in it, WPS writing it ahead of the
-   * row's properties — so it is read from the parsed row and carried back as the source text it came in
+   * spelling the files show (all 1,660 rows that carry margins in it, WPS writing it ahead of the row's
+   * properties) came from the quarantined cohort, and `w:tblPrEx` has not been re-counted on the authorized
+   * 46 份: 待重证 — so it is read from the parsed row and carried back as the source text it came in
    * with (`extras`), never re-spelled from this field.
    */
   cellMargin?: MarginTwips;
   slots?: PropSlot[];
   /**
    * The row's own children that are neither `w:trPr` nor `w:tc` — the `w:tblPrEx` band, which says this row
-   * draws with table borders and shading of its own rather than the table's. Across the 86 real WPS tables
-   * it is always the row's FIRST child (6257 rows put it before `w:trPr`, 123 before the first cell when the
-   * row has no properties at all), so where it sits is carried too: a save that returns it after the cells
-   * rewrites 6380 rows in the wrong order. `afterCells` counts the cells it followed and `beforeProps` says
-   * whether it preceded `w:trPr`.
+   * draws with table borders and shading of its own rather than the table's. It is the row's FIRST child there,
+   * and where it sits is carried too: a save that returns it
+   * after the cells rewrites the rows in the wrong order. The counts that measured how many rows that was (6257
+   * putting it before `w:trPr`, 123 before the first cell when the row has no properties at all, 6380 in all,
+   * across the 86 real WPS table-bearing files) came from the quarantined cohort and are 待重证 on the authorized
+   * 46 — including whether every row really puts it first, which the old "always" asserted. `afterCells` counts
+   * the cells it followed and `beforeProps` says whether it preceded `w:trPr`.
    */
   extras?: RowExtra[];
   /** The attributes on this row's own `w:tr` opening tag, exactly as written — see `Paragraph.attrsXml`. */
@@ -716,6 +865,8 @@ export interface Table {
   borders?: BorderSet;
   /** `w:tblCellMar`: the padding this table gives every cell that does not say its own. */
   cellMargin?: MarginTwips;
+  /** `w:tblPr/w:shd@w:fill`: the ground under the whole table; see `TableStyle.shading` for the audience. */
+  shading?: string;
   /** `w:tblGrid/@w:w` of each column, in order — what a fixed layout sizes its columns from. */
   columnWidths?: number[];
   /** The source text of `w:tblGrid` whole, so every `w:gridCol` and its attributes come back. */
@@ -739,8 +890,10 @@ export interface Table {
    * row, which is where the schema puts them once the grid is closed). The OOXML table allows range markup and
    * containers between its rows, and WPS does use it: a `w:bookmarkEnd` written between two rows is how a
    * bookmark that started in the paragraph above the table gets closed. Ten of the 86 table-bearing files in
-   * the corpus carry one, and without this slot the start survives a save while the end goes, leaving a
-   * bookmark no reader can pair.
+   * the quarantined cohort carried one, so the slot is real; on the authorized 46 份 the same walk finds 0
+   * `w:bookmarkStart` and 0 `w:bookmarkEnd` between table rows (the 383 paired bookmarks those files do write
+   * sit 0-strong inside any `w:pPr` too), so the audience there is 未取证. Without this slot the start survives a
+   * save while the end goes, leaving a bookmark no reader can pair.
    */
   betweenRows?: { afterRow: number; tag: string; xml: string }[];
 }
@@ -750,8 +903,8 @@ export interface Table {
  * `w:customXml` island, anything a producer wrote between the paragraphs. The page shows the text inside it
  * and edits none of it, and a save writes back the source text it came in with, in the place it held.
  * Without this kind, a document with a table of contents in it loses the control and everything anchored
- * in it on the first keystroke — and the shapes are the ECMA-376 ones, since no file in the WPS corpus
- * here has ever contained one.
+ * in it on the first keystroke — and the shapes are the ECMA-376 ones, since no file here has ever contained
+ * one; whether the authorized 46 份 holds such a container has not been re-counted, so that absence is 待重证.
  */
 export interface Carried {
   kind: "carried";
@@ -809,20 +962,20 @@ export interface PageBorder {
 /**
  * `w:docGrid` (§17.3.2.9), the line grid the section lays its text on.
  *
- * The corpus states this on nearly every section, and the two attributes it states are always the same two.
- * Over the 201 WPS-written documents now on disk (`.scratch/wps-grid-audience.mjs`, list sha256 `25bcf9f82306`;
- * 235 `w:sectPr` in all): **234 of the 235 say `w:docGrid`, and every one of those says `w:type="lines"`** —
- * no section anywhere says `default`, `linesAndChars` or `snapToColumns`. `w:linePitch` comes with all 234 and
- * takes three values, 312 缇 in 211 of them, 326 in 16 and 319 in 7 — which is 20.8px, 21.73px and 21.27px, and
- * 20.8px is what 211 of the 201 files draw their body lines on. `w:charSpace` accompanies them and says `0`
- * every single time (`.scratch/wps-layout-gap.mjs` counted the attribute's values across all 234 and got one
- * entry, `0`), which is the horizontal grid switched off; no file ever asks for a character grid. So this model
- * holds the two numbers that can move a line box (`type` and `linePitch`) and keeps no field for the one that
- * is only ever spelled off — and the bytes of all three travel back unchanged through `sectionPropertiesXml`.
+ * Measured over the authorized corpus (46 WPS-written files, `.scratch/corpus-recheck2.mjs` and
+ * `.scratch/charspace.mjs`): **58 `w:sectPr` carry 58 `w:docGrid`, and every one of those states a
+ * `w:linePitch`** — `w:type="lines"` 49 times, `w:type="linesAndChars"` 6, and 3 state no `w:type` at all, which
+ * §17.3.2.9 defaults to `default`. The first section of 46 files takes its pitch from 312 缇 (41 files), 360 (3)
+ * or 285 (2). `w:charSpace` says `0` 51 times, says nothing 3 times, and says `-2478` 4 times — the last four are
+ * `plans and reports/business plan.dotm`, one pair per locale, and they are this corpus asking for a *character*
+ * grid. So this model holds the two numbers that can move a line box (`type` and `linePitch`) and keeps no field
+ * for the horizontal half, while the bytes of all three travel back unchanged through `sectionPropertiesXml`.
  *
- * Absent means the section asks for no grid at all. One section in the 235 says nothing, and every fixture this
- * repository wrote before this round says nothing either: the page then draws the line heights the file itself
- * states, or the ones nobody states, exactly as it did before this field existed.
+ * A `linesAndChars` section still puts its text on a line grid — the character grid is the extra, not the whole
+ * of what §17.3.2.9 spells — so `lineGridPitchTwips` counts it. `default` and `snapToColumns` (0 instances here)
+ * and a stated `lines` that cannot state a pitch are no line grid; and a section that wrote no `w:docGrid` at all
+ * asks for none, which is what every fixture this repository wrote before this round states: the page then draws
+ * the line heights the file itself states, or the ones nobody states, exactly as it did before this field existed.
  */
 export interface DocGrid {
   type: string;
@@ -837,23 +990,24 @@ export interface Section {
    * are a different measurement: ECMA-376 §17.3.2.13 counts them from the **edge of the paper**, not from the
    * body, so a band's distance is only meaningful against the page margin it lives inside. `gutter` is extra
    * width on the binding side, added to the margin it belongs to. All three stay optional: WPS states all
-   * seven attributes on all 115 `w:pgMar` in the 86 real files, but a file that says nothing is not owed a
+   * seven attributes on all 58 `w:pgMar` in the authorized 46 份（`.scratch/pgmar.mjs`）, but a file that says nothing is not owed a
    * number this model invented.
    */
   margins: { top: number; right: number; bottom: number; left: number; header?: number; footer?: number; gutter?: number };
   /**
-   * `w:pgBorders`, the line drawn around the page. Absent means the section states no page border at all — the
-   * common case, and one this model must not fill in: 24 of the 115 sections in the 86 files this machine's WPS
-   * wrote carry the element, the other 91 carry nothing. `offsetFrom` says what the gap is measured against, and
-   * none of those 24 spelled it, so they all land on the default §17.3.2.10 gives it — the page edge. (How WPS
-   * itself reads an omitted `w:offsetFrom` is 未取证; this is the spec's word, not an observation.) A side that
-   * states no `w:val` is left out rather than drawn as a line of unknown shape.
+   * `w:pgBorders`, the line drawn around the page. Absent means the section states no page border at all, and that
+   * is exactly what the authorized corpus says: **0 `w:pgBorders` elements among its 58 `w:sectPr`, 46 份**
+   * (`.scratch/pgmar.mjs`). The model still reads and writes the element — §17.3.2.10 gives it its shape and
+   * 「页面设置」 can be asked for a frame — but it has never had a real file to check that shape against.
+   * `offsetFrom` says what the gap is measured against; a file that omits it lands on the default §17.3.2.10 gives
+   * it — the page edge. (How WPS itself reads an omitted `w:offsetFrom` is 未取证; this is the spec's word, not an
+   * observation.) A side that states no `w:val` is left out rather than drawn as a line of unknown shape.
    *
-   * What those 24 actually look like is worth stating, because it is the opposite of what a reader of this field
-   * would expect: every one writes all four sides, each with `w:val`, `w:sz` and `w:space` and no `w:color`, and
-   * **all 96 of those sides say `none`**. Real WPS files carry a page border that was turned off, not one drawn —
-   * so a document with a visible frame around the page is, in this corpus, a shape that has never been observed.
-   * The reading and drawing of one is spec-derived; its fidelity to WPS is 未取证.
+   * The reading this field used to cite — 24 of 115 sections carrying the element, all four sides each, and
+   * **all 96 of those sides `w:val="none"`**, i.e. real WPS files that carry a border switched off rather than
+   * drawn — came from the quarantined cohort and is **not** evidence on the authorized set. So a document with a
+   * visible frame around the page is, here too, a shape that has never been observed: the reading and the drawing
+   * of one are spec-derived, and their fidelity to WPS is 未取证.
    */
   pageBorders?: { offsetFrom: "page" | "text"; sides: Partial<Record<PageBorderSide, PageBorder>> };
   /** `w:docGrid`: the line grid every snapping paragraph in this section is measured in. See `DocGrid`. */
@@ -869,16 +1023,18 @@ export interface Section {
 export const DEFAULT_SECTION: Section = { pageWidthTwips: 11906, pageHeightTwips: 16838, margins: { top: 1440, right: 1440, bottom: 1440, left: 1440 } };
 
 /**
- * 「这一节到底有没有一行网格、一格多高（缇）」唯一的一处判定。§17.3.2.9 给 `w:docGrid@w:type` 四种拼法，语料只用
- * 一种：**234 枚 `w:sectPr` 里的 234 枚写了 `w:docGrid` 且每一枚都说 `lines`**（`render.ts` 的 `gridPitchPx`
- * 头记的是同一批数），所以 `default`/`linesAndChars`/`snapToColumns` 与整句没写一样，都算「没有行网格」。
- * 说了 `lines` 却说不出的间距（`w:linePitch` 缺失或非正）也不算网格——那要模型替文件编一个数。
+ * 「这一节到底有没有一行网格、一格多高（缇）」唯一的一处判定。§17.3.2.9 给 `w:docGrid@w:type` 四种拼法，授权语料
+ * 用其中三种：**58 枚 `w:sectPr` 里的 58 枚写了 `w:docGrid`，49 枚说 `lines`、6 枚说 `linesAndChars`、3 枚没说
+ * `w:type`**（`DocGrid` 头记的是同一批数）。`linesAndChars` 算「有行网格」：那句字符格是**多**要的一格，不是行格的
+ * 替代——把它当没有网格，就是让 `business plan.dotm` 与 `purchase contract.dotm` 这两份模板的行落在自己的间距上，
+ * 而 WPS 的铺排照 312 缇（或 285）那一档走。`default`/`snapToColumns`（本批 0 枚）与整句没写一样，都算「没有行网格」。
+ * 说了有网格却说不出的间距（`w:linePitch` 缺失或非正）也不算——那要模型替文件编一个数（本批 58 枚人人都说了）。
  *
  * 渲染（px）与「段落」对话框里那句小字（缇）都问这一个问题，所以判定只有这一份，两处各自只换算单位。
  */
 export function lineGridPitchTwips(sec: Section): number | undefined {
   const g = sec.docGrid;
-  if (!g || g.type !== "lines") return undefined;
+  if (!g || (g.type !== "lines" && g.type !== "linesAndChars")) return undefined;
   const pitch = g.linePitch;
   return pitch !== undefined && pitch > 0 ? pitch : undefined;
 }
@@ -900,10 +1056,11 @@ const copySection = (s: Section): Section => ({
  * it, because the number this model would write is a guess at the producer's default, not the user's intent.
  *
  * `landscape` is the direction the page is wanted in, and it is what decides which edge is which: the two
- * dimensions already on the section are re-assigned rather than replaced, so A4 stays A4 when it turns. Measured
- * on the 86 files this machine's WPS wrote: all 22 landscape sections spell `w:orient="landscape"` **and** put
- * the long edge in `w:w`, and none of the 93 portrait sections spells `w:orient` at all. So turning back to
- * portrait removes the attribute; writing `w:orient="portrait"` would be a spelling no file here uses.
+ * dimensions already on the section are re-assigned rather than replaced, so A4 stays A4 when it turns. 授权口径
+ * 46 份把这一支的受众数成了 **0**：58 枚 `w:sectPr` 全带 `w:pgSz`，58 枚都把长边写在 `w:h`（11906×16838 的 56 枚、
+ * 11907×16840 的 2 枚），**58 枚全不写 `w:orient`**——所以件里没有任何一枚横放的样本可参照（`.scratch/pagesz-theme-numfonts-authorized.py`）。
+ * 「横放时两枚怎么写」因此 未取证，这一支只能按 §17.3.2.13 的「orient 说方向、w/h 说尺寸」来摆：turning back to
+ * portrait removes the attribute, because writing `w:orient="portrait"` is a spelling no file here uses.
  */
 export interface PageSetup {
   topTwips: number;
@@ -916,9 +1073,10 @@ export interface PageSetup {
   /**
    * The sheet of paper in twips, as the dialog's 宽/高 boxes state it, and always as a pair — one edge from
    * the new paper and the other from the old one would be a sheet no standard defines. Left out, the section
-   * keeps the sheet it had and only its direction changes. `w:pgSz` has no presets: every one of the 115
-   * sections in the 86 files this machine's WPS wrote spells its own two numbers (89 and 22 of them A4's
-   * 11906×16838 and 16838×11906, 4 a near-A4 11900×16840), so a name like 「A4」 belongs to the dialog, not here.
+   * keeps the sheet it had and only its direction changes. `w:pgSz` has no presets in this model: 授权口径 46 份的
+   * 58 枚 `w:sectPr` 各写一枚 `w:pgSz`，字面只有两种——`w:w="11906" w:h="16838"` 56 枚、`w:w="11907" w:h="16840"`
+   * 2 枚（同一张 A4 差 1 缇的两种写法），属性顺序 58 枚全是 `w:w` 在前 `w:h` 在后。所以这里只收两个数、不给预设名：
+   * 「A4」那一格属于对话框，不属于模型（`.scratch/pagesz-theme-numfonts-authorized.py`）。
    */
   paperTwips?: { width: number; height: number };
   landscape: boolean;
@@ -1000,36 +1158,35 @@ export interface NumberLevel {
   ilvl?: number;
   indent?: number;
   /**
-   * The font this level names for its own mark (`w:lvl/w:rPr/w:rFonts`). It is part of the glyph, not decoration:
-   * over the 86 WPS-written documents the 170 `bullet` levels put the mark in `w:lvlText` as a literal
-   * private-use codepoint (F06E 44, F0A7 42, F075 38, F06C 30, F0B7 6, F0D8 4, and 6 plain `o`), and say which
-   * font it belongs to in the level's own `w:rPr` (Wingdings 158, Symbol 6, other 6) — drawn in the paragraph's
-   * font those codepoints are tofu (`.scratch/sym-count.ts`). `w:sym` appears 0 times in that corpus: the
-   * element this model already reads for body runs is not how WPS spells a list mark, so the level's font is
-   * where the shape comes from here.
+   * The font this level names for its own mark (`w:lvl/w:rPr/w:rFonts`). It is part of the glyph, not decoration.
+   * 授权口径数到的是：**110 枚 `w:lvl` 里 84 枚自己写 `w:rFonts`**（`.scratch/authorized-families3.mjs` 同一条腿），
+   * 所以「级自带的那张脸要跟着那颗符号走」这条规则有受众。作废语料上更细的那一层——170 枚 `bullet` 级把符号写成
+   * 私有码位（F06E 44、F0A7 42…）、Wingdings 158 / Symbol 6、`w:sym` 0 次（`.scratch/sym-count.ts`）——在授权 46 份里
+   * 被重新数过，结论换了：**`w:numFmt="bullet"` 级 0 枚**（值域只有 decimal 88、chineseCounting 14、lowerLetter 4、
+   * lowerRoman 2、decimalEnclosedCircleChinese 2），**`w:sym` 在任何 xml 部件里都 0 枚**（同一趟扫描的对照 `w:u` 找到
+   * 1,615 枚，所以这个 0 是「真没有」而不是「没找到」）。也就是：PUA 码位那套读法在授权语料上没有实例，`w:sym` 那条
+   * 腿依旧只能按 §17.3.1.12 的规范形状读，不作「实测过」。
    */
   font?: string;
   /**
    * The size this level names for its own mark, in points (`w:lvl/w:rPr/w:sz` ÷ 2 — the file counts half-points,
    * the same unit `readRunStyle` converts for body runs). §17.3.1.12 gives the symbol a character run of its own,
-   * so this is the mark's size and not the paragraph's: across the 86 WPS-written documents **70 paragraphs** sit on
-   * a level that states one — 42 of them `bullet` levels whose mark is smaller than that paragraph's own text
-   * (42/42), 28 `decimal` ones whose stated size equals the text already resolved to (28/28, so the page looks the
-   * same either way). 5 distinct values over the 68 levels that write it; the split is `.scratch/mark-size.ts`,
-   * which also cross-checks every one of those 70 against the raw `w:lvl` with no disagreement. The other children
-   * of that `w:rPr` were counted in the same pass and left un-modelled on purpose: `w:b`/`w:bCs` appear on 8 used
-   * levels and all 8 agree with the paragraph's own boldness, so drawing them changes no page, while `w:i`, `w:u`,
-   * `w:color`, `w:caps`, `w:strike` and the rest appear on 4–28 levels that **no** paragraph in the corpus lists
-   * with them.
+   * so this is the mark's size and not the paragraph's. 授权 46 份的受众是 **110 枚级里 2 枚自己写 `w:sz`**——比作废
+   * 语料上那个「70 段坐在写了字号的级上、其中 42 枚 `bullet` 比正文小（42/42）」的读数小一个数量级，那套分法（含
+   * 5 个不同值、28 枚 `decimal` 与正文解析出的磅数相等）没在授权口径上重做，属 **待重证**。规则本身不靠那个分母：
+   * 级写了就按级的画。同一条 `w:rPr` 的其余孩子仍按授权口径留着不建模——`w:b`/`w:i`/`w:u`/`w:color`/`w:caps`/`w:strike`
+   * 在 110 枚级上的分布没有重新数过（作废语料上「8 枚加粗级与段落自身一致」那一句是 待重证）。
    */
   sizePt?: number;
 }
 
 /**
  * The definition `ensureListNumbering` writes when a file names neither shape. Both marks are ordinary characters,
- * not private-use codepoints: the corpus's own bullets are PUA glyphs whose font the level states (Wingdings 158,
- * Symbol 6 of the 170 bullet levels, `.scratch/sym-count.ts`), and an invented definition carries no such font, so
- * a codepoint would draw tofu. `%1.` is the ten-digit shape the same probe saw on 24 of the decimal levels.
+ * not private-use codepoints: the bullets the quarantined cohort wrote are PUA glyphs whose font the level states,
+ * and an invented definition carries no such font, so a codepoint would draw tofu. On the authorized 46 份 that
+ * shape has no instance at all — 110 枚级里 `w:numFmt="bullet"` 0 枚——所以这条选择不靠那批作废件说话，只按「补出来的
+ * 定义没有自带脸」这条理由立着。`%1.` 是授权口径上的多数写法：88 枚 `decimal` 级里 66 枚在 `%N` 之后跟一个 `.`
+ * （另有 `、` 10、`）` 6、`．` 2、`)` 2、什么都不跟 2，`.scratch/authorized-families3.mjs`）。
  */
 const LIST_SHAPE: Record<"bullet" | "number", { numFmt: string; lvlText: string }> = {
   bullet: { numFmt: "bullet", lvlText: "•" },
@@ -1063,9 +1220,10 @@ const XML_ESC = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&
 
 /**
  * `xml:space="preserve"` goes on a text node only where the text would otherwise lose something at its
- * edges, which is the rule the files follow: of the 5,382 `w:t` in the local body corpus it puts the
- * attribute on 960, and of the 70 in its header/footer parts on exactly the 17 that open or close with
- * whitespace — never on the other 53. Spelling it on every one is not a wrong document, it is a
+ * edges, which is the rule the files follow. The counts that showed WPS following it — the attribute on 960 of
+ * the 5,382 `w:t` in the local body corpus, and on exactly the 17 of its 70 header/footer `w:t` that open or close
+ * with whitespace, never on the other 53 — came from a pass whose denominator the authorized 46 份 re-measure
+ * never covered: 待重证. Spelling it on every one is not a wrong document, it is a
  * different one, and "same bytes when nothing moved" is what a save is measured against here.
  */
 export const preserve = (text: string): string => (/^\s|\s$/.test(text) ? ' xml:space="preserve"' : "");
@@ -1088,9 +1246,11 @@ function hfParagraphText(span: { xml: string }): string {
 
 /**
  * The page fields this model is willing to keep: `PAGE` and `NUMPAGES`, with or without the formatting
- * switch. Measured on the local corpus, where of the 21 fields that sit at run level in a header or footer
- * part 16 spell ` PAGE  \* MERGEFORMAT `, 2 spell `PAGE` bare and 2 count pages; the 1 that is none of these
- * stays a reason to hold the part as its own bytes.
+ * switch. The shape is the one the authorized 46 份 actually wrote: its 38 band fields spell `PAGE` 36 times and
+ * `NUMPAGES` twice, 28 of the 38 with the ` \* MERGEFORMAT ` switch and 10 without, 34 with the instruction
+ * padded by spaces and 4 bare (`.scratch/band-shape-authorized.py`). Nothing else appears at run level in a
+ * band, so this regular expression covers all 38 — but the guard is not free: a field this reader does not
+ * recognize holds the whole part as its own bytes, and the 46 份 simply never test that branch.
  */
 const PAGE_FIELD = /^\s*(PAGE|NUMPAGES)(\s+\\\*\s+MERGEFORMAT)?\s*$/;
 
@@ -1111,8 +1271,9 @@ const HF_RUN_KIDS = new Set(["rPr", "t", "tab", "fldChar", "instrText"]);
 /**
  * A run that holds one of these instead of text is not a paragraph this model has to refuse. Either it is a
  * picture, and it travels whole as one atom; or it is a floating text box, and its inner paragraph's pieces
- * join the band's. Measured on the local corpus, every one of the 16 runs of this shape is a `w:rPr` plus an
- * `mc:AlternateContent` wrapping an anchored box, and every one sits alone in its paragraph.
+ * join the band's. The pass that measured it — every one of the 16 runs of this shape being a `w:rPr` plus an
+ * `mc:AlternateContent` wrapping an anchored box, every one sitting alone in its paragraph — was made on the local
+ * corpus, and this shape has not been re-counted on the authorized 46 份: 待重证.
  */
 const HF_RUN_CARRIED = new Set(["AlternateContent", "drawing", "pict", "object"]);
 
@@ -1125,8 +1286,9 @@ const HF_RUN_DENY = /<(?:[\w.-]+:)?(ins|del|hyperlink|sdt|fldSimple|br|sym)[ />]
 
 /**
  * Every element named `tag` at any depth under `xml`, in source order. A floating box hides its words twice:
- * the measured 16 all carry a `w:txbxContent` inside the Choice's drawing *and* another inside the Fallback's
- * VML shape, both holding the same one paragraph. Reading a box means finding both copies; writing one means
+ * the 16 boxes the quarantined cohort measured each carry a `w:txbxContent` inside the Choice's drawing *and*
+ * another inside the Fallback's VML shape, both holding the same one paragraph — the pass never counted that
+ * shape on the authorized 46 份, so it is 待重证 there. Reading a box means finding both copies; writing one means
  * updating both, or the page tells two different stories depending on which branch a reader takes.
  */
 function spansDeep(xml: string, tag: string, found: { xml: string }[] = []): { xml: string }[] {
@@ -1164,10 +1326,13 @@ const HF_SDT_PR = new Set(["id", "alias", "tag", "docPartObj"]);
  * A header/footer part's children, walked in the order the page shows them, with `put` asked for every
  * paragraph it holds — whether that paragraph sits at the root or inside a content control.
  *
- * WPS wraps a footer's page number in `w:sdt`: measured on the local corpus, 3 of the bands still held
- * read-only are one or two content controls deep around a paragraph carrying `PAGE`, and in two of them
- * `NUMPAGES` and typed characters as well. The control itself is the file's business, so it travels as its
- * own bytes and only the paragraph inside it is re-spelled.
+ * WPS wraps a footer's page number in `w:sdt`: the authorized 46 份 put 4 of them in a band part, arranged as two
+ * pairs nested two deep, each pair holding two fields — one counting the page, one counting pages — and typed
+ * characters beside them (`.scratch/band-detail-authorized.py`, `.scratch/field-stage-shapes.ts`). The control is
+ * the file's business, so it travels as its own bytes and only the paragraph inside it is re-spelled. Reading
+ * through `sectionBand` over that cohort, all 32 bands it answers for come back editable and none is held, so the
+ * nesting is walked, not dodged. Two pairs is as deep as that cohort goes, so the third level named below is
+ * past anything measured and nothing exercises it.
  *
  * `null` means this band is not a band this model may claim: a table or a revision at the root, a control
  * that declares no properties or properties beyond a name, one nested past the third level, or bytes between
@@ -1269,8 +1434,11 @@ function hfParagraphSegments(
       // rides along with it and is not text. But first: is this picture a box with words in it?
       const boxes = spansDeep(kid.xml, "txbxContent");
       if (boxes.length) {
-        // The 16 bands this corpus holds are an anchored text box whose single inner paragraph carries the
-        // page number and the two characters the page shows around it. The box is not a label over the
+        // The band's page number sits in an anchored text box in 12 of the authorized 46 份: 24 `w:txbxContent`
+        // blocks, exactly two in each of those 12 parts, and each of those parts holds exactly one
+        // `mc:AlternateContent` with one `mc:Choice` and one `mc:Fallback` — so the two blocks are the two copies of
+        // one box, counted rather than assumed (`.scratch/band-detail-authorized.py`). All 24 carry the field's
+        // instruction, and `sectionBand` answers 12 editable bands of this shape. The box is not a label over the
         // user's words — it *is* the paragraph, so its pieces join this paragraph's pieces, and the frame
         // stays where the file put it. Bounded on purpose: one box-shaped run, the box the only run of its
         // paragraph, one paragraph inside, nothing but the box's own copy holding text, and every copy of
@@ -1333,7 +1501,13 @@ function hfParagraphSegments(
     if (text !== "") segs.push({ text });
     text = "";
     segs.push({
-      carry: { key: newKey(), tag: "fldChar", xml: kids.slice(i, end + 1).map((k) => k.xml).join(""), show: instr.includes("NUMPAGES") ? "总页数" : "页码" },
+      carry: {
+        key: newKey(),
+        tag: "fldChar",
+        xml: kids.slice(i, end + 1).map((k) => k.xml).join(""),
+        show: instr.includes("NUMPAGES") ? "总页数" : "页码",
+        field: instr.includes("NUMPAGES") ? "NUMPAGES" : "PAGE",
+      },
     });
     i = end + 1;
   }
@@ -1374,12 +1548,14 @@ const hfSegmentsAt = (hf: HeaderFooter, i: number): HfSegment[] | undefined =>
 
 /**
  * A header/footer part after an edit, spliced into the bytes it came in with rather than rebuilt from
- * the texts: the root tag keeps every declaration the file wrote (the local corpus averages 17 prefixes
- * per part, every one of them carrying `mc:Ignorable`), a paragraph whose text did not change travels
+ * the texts: the root tag keeps every declaration the file wrote — the authorized 46 份 put 646 `xmlns`
+ * declarations on their 38 band roots, exactly 17 each, and every one of the 38 also carries `mc:Ignorable`
+ * (`.scratch/band-shape-authorized.py`) — a paragraph whose text did not change travels
  * byte for byte, and a paragraph that did keeps its own `w:pPr` and its first run's `w:rPr`. Rebuilding
  * the part from `paragraphs` instead — which is what this did — takes the style, the alignment, the font
- * size and the namespace declarations off every page the user typed in: of the 86 parts in that corpus
- * a text edit could reach, 85 carry a `w:pStyle` and 18 a `w:jc`.
+ * size and the namespace declarations off every page the user typed in. The audience for that is the same
+ * cohort's bands: 74 of the 76 paragraphs in those 38 parts write a `w:pPr`, 62 of them naming a style and 12
+ * stating an alignment — slots a rebuilt part would have to re-invent.
  */
 function headerFooterXml(hf: HeaderFooter): string {
   const root = hf.source ? childSpans(hf.source).find((s) => s.tag === "hdr" || s.tag === "ftr") : undefined;
@@ -1496,8 +1672,9 @@ function spelledHeaderFooter(hf: HeaderFooter): string {
 /**
  * A page-number field the way the files this machine was measured against write one: the instruction inside
  * `w:instrText` with its edges kept by `xml:space="preserve"`, `begin` and `end` marking the field off, a
- * `separate` before the number it last showed. 16 of the 21 run-level fields in that corpus's header and
- * footer parts spell the instruction exactly this way, and all 21 cache a number — which is why this one
+ * `separate` before the number it last showed. The parts that spelled it this way — 16 of the 21 run-level fields
+ * in the quarantined cohort's header and footer parts, all 21 caching a number — have not been re-counted on the
+ * authorized 46 份: 待重证, so the caching below is the shape §17.6.4 allows rather than a measured idiom — which is why this one
  * caches `1` too: a reader that lays out pages recomputes it, and one that does not still has a digit to
  * put where the page number belongs. Our own page shows neither digit, but the field's label, because this
  * product has no pagination to compute a page from yet.
@@ -1552,11 +1729,25 @@ export interface StyleDef {
   pPr?: Partial<ParaStyle>;
 }
 
+/**
+ * What one section's own `w:sectPr` cites for the two bands — nothing inherited from anybody. Reading it
+ * per section is what lets a page in a later section show *that* section's header; which band a section's
+ * page shows is `WordDocument.sectionBand`, and a save writes every part some section shows (`headerFooterParts`).
+ */
+export interface SectionBands {
+  header?: HeaderFooter;
+  footer?: HeaderFooter;
+}
+
 export class WordDocument {
   blocks: Block[] = [];
   sections: Section[] = [];
   header?: HeaderFooter;
   footer?: HeaderFooter;
+  /** 每一节自己 cite 的那两份带子，与 `sections` 同序同长；只有读端填，画端只读。 */
+  sectionRefs: SectionBands[] = [];
+  /** Bands read so far, by package path: one part cited by several sections stays one object. */
+  private bandByPart = new Map<string, HeaderFooter>();
   comments: DocComment[] = [];
   private styles = new Map<string, StyleDef>();
   /** The `w:default="1"` paragraph style: what a paragraph that names no style falls back on (§17.7.2). */
@@ -1568,8 +1759,11 @@ export class WordDocument {
   private docDefaultRun: RunStyle = {};
   /**
    * The package's theme fonts, read once at the top of `read` because §17.3.2's four `w:rFonts` theme attributes are
-   * how a `w:rPr` can name a face without naming one — 58 of the 201 WPS-written documents put their whole document
-   * floor there (`.scratch/theme-font-audience.ts`). See `ThemeFonts` for what resolves and what deliberately does not.
+   * how a `w:rPr` can name a face without naming one. The audience that first made that worth reading — 58 of the
+   * 201 WPS-written documents putting their whole document floor there (`.scratch/theme-font-audience.ts`) — is
+   * 待重证 on the authorized 46 份, whose theme-slot census (`.scratch/theme-slot-pair-authorized.mjs`) counts the
+   * themed `w:rFonts` themselves but never this styles-floor split. See `ThemeFonts` for what resolves and what
+   * deliberately does not.
    */
   private theme: ThemeFonts = ThemeFonts.none;
   /** Resolved style chains, keyed by the style id the paragraph names. See `paraLent`. */
@@ -1661,7 +1855,6 @@ export class WordDocument {
   get edited(): boolean {
     return this.pkg !== undefined && this.fingerprint() !== this.readFingerprint;
   }
-
   /**
    * Image bytes are counted by length rather than hashed: a data URL would dwarf the document. A picture
    * replaced in place still has to read as an edit, though, because a regenerated save writes its media part
@@ -1670,7 +1863,7 @@ export class WordDocument {
   private fingerprint(): string {
     return (
       JSON.stringify(this.blocks, (key, value) => (key === "src" && typeof value === "string" ? value.length : value)) +
-      JSON.stringify([hfSavedState(this.header), hfSavedState(this.footer)]) +
+      JSON.stringify(this.bands().map(hfSavedState)) +
       JSON.stringify(this.comments.map(commentState)) +
       // Page geometry lives outside `blocks`: the body's `w:sectPr` travels as bytes the model does not own,
       // and the section list is what the page is drawn from. Left out of the hash, a margin change would read
@@ -1761,17 +1954,20 @@ export class WordDocument {
    * style in that chain that states it, so no chain has to merge a whole `w:pPr`, and an attribute nobody
    * states stays absent rather than being filled in from the specification's own default.
    *
-   * The depth is not a hypothetical. Over the 86 WPS-written documents (`.scratch/basedon-chain.ts`), 1,182 of
-   * its 1,337 paragraph styles carry `w:basedOn`, the chains run one to four styles deep with no cycles and no
-   * dangling reference, and 879 paragraphs ask for a property only an ancestor states: 501 line heights — every
-   * one of them 固定值, so they go from the browser's default line height to a `px` height the moment they are
-   * read — plus 327 alignments, 220 indents (122 left, 65 right, 33 first-line) and 115 段前段后 gaps. A further
-   * 38,475 paragraphs name no style at all, and 3,147 of those take a property from the default paragraph style
-   * (1,956 alignments and 613 固定值 line heights among them), including 32 paragraphs whose named chain states
-   * nothing while the default style states a first-line indent. Below the default style the ladder has one more
-   * rung, §17.7.2's `w:docDefaults/w:pPrDefault`, which states no paragraph property in any of the 86 and so is
-   * not read here; `w:basedOn` is walked with a seen-set because a chain that circled would otherwise hang the
-   * read.
+   * The depth is not a hypothetical. On the authorized 46 份 every file ships a `word/styles.xml` with 406
+   * paragraph styles in it, 298 of them carrying `w:basedOn`, and all 298 naming a style the part declares — chains
+   * one to three styles deep, no cycles, no dangling reference (`.scratch/basedon-chain.ts`). Counted over the
+   * 7,357 paragraphs of `word/document.xml` that write a `w:pPr` (the body holds 7,430 paragraphs; the other 73
+   * state no properties at all, 32 of them as a bare `<w:p/>`): 1,518 name a style and 5,839 name none, and none
+   * names one the part does not declare. 808 paragraphs ask for a property only an ancestor states — 790 alignments, 44 first-line
+   * indents, and 18 line heights, every one of them a multiple: no 固定值 reaches a paragraph through the chain in
+   * this cohort, so the exact-height path #131 opened has no audience this far up the ladder. A further 3,829 name
+   * no style while the document's default paragraph style states the property (3,731 alignments, 772 line heights —
+   * again all multiples — 320 first-line indents, 78 段后), and 70 name a style whose whole chain states nothing
+   * while the default style states a property; all 70 are alignments, none a line height. Below the default style
+   * the ladder has one more rung, §17.7.2's `w:docDefaults/w:pPrDefault`, which states no paragraph property in any
+   * of the 46 份 and so is not read here; `w:basedOn` is walked with a seen-set because a chain that circled would
+   * otherwise hang the read, and no chain in this cohort circles.
    */
   private paraLent(styleId: string | undefined): Partial<ParaStyle> | undefined {
     if (this.lentMemo.has(styleId)) return this.lentMemo.get(styleId);
@@ -1782,11 +1978,15 @@ export class WordDocument {
       seen.add(cur);
       const stated = this.styles.get(cur)?.pPr as Record<string, unknown> | undefined;
       // §17.7.2 puts the default paragraph style beneath the *whole* chain rather than only beneath a paragraph
-      // that names no style, so a chain that never reaches it still ends there: 32 paragraphs in 16 of the 86
-      // name a style whose ancestors state no first-line indent while the default style does.
+      // that names no style, so a chain that never reaches it still ends there. The case that showed it — 32
+      // paragraphs in 16 of the 86 naming a style whose ancestors state no first-line indent while the default
+      // style does — is the quarantined cohort's count, 待重证 on the authorized 46 份.
       const based = this.styles.get(cur)?.basedOn;
       cur = based ?? (this.defaultParaStyleId === undefined || seen.has(this.defaultParaStyleId) ? undefined : this.defaultParaStyleId);
       if (!stated) continue;
+      // `w:tabs` 是唯一一枚**不按「哪一级先说就整批算它的」**走的：链上每一级的清单逐位置合进下面那一级，
+      // 刚走到的这一级比已经攒下的那些都低（梯子从段落点名的样式往上爬），所以它是被盖的那一方。
+      if (stated.tabStops !== undefined) out.tabStops = mergeTabStops(stated.tabStops as TabStop[], out.tabStops as TabStop[] | undefined);
       for (const key of LENT_PARA_KEYS) {
         if (out[key] !== undefined) continue;
         if (stated[key] !== undefined) out[key] = stated[key];
@@ -1807,7 +2007,9 @@ export class WordDocument {
    * character style that states no size would carry the default's size up over the paragraph chain's own, and the
    * run would draw at the bottom rung while a style above the bottom stated the real one.
    *
-   * The depth is measured, not assumed (`.scratch/run-lent-depth.ts`): 1,961 of the corpus's 2,378 styles state a
+   * The depth is measured, not assumed — but on the cohort that is no longer evidence, and the styles audience has
+   * not been re-counted on the authorized 46 份, so every number in this paragraph is 待重证
+   * (`.scratch/run-lent-depth.ts`): 1,961 of 2,378 styles state a
    * `w:rPr` (1,186 paragraph styles, 738 character ones, 37 table ones), and 1,892 styles name a `w:basedOn`.
    * Against that chain, 551 property statements belong to an ancestor rather than to the style itself — 442 sizes,
    * 72 bolds, 37 colours — of which 536 sit one hop up, 13 two and 2 three. Every one of the 551 is missed by a
@@ -1859,9 +2061,11 @@ export class WordDocument {
               rFonts?.["@_hAnsi"] ??
               // A level may hand its bullet font to the theme instead of naming a face. That is the same glyph the two
               // rounds above chase (a PUA character from a particular face), so leaving the reference unread draws a
-              // box where the file said Wingdings-like art. None of the 201 files does it yet — their numbering.xml
-              // holds 421 `w:rFonts` and no theme attribute among them (`.scratch/theme-font-audience.ts`) — so this
-              // is the same `w:rFonts` read the same way everywhere else, not a shape measured to be needed.
+              // box where the file said Wingdings-like art. None of the 201 files did it yet — their numbering.xml
+              // holding 421 `w:rFonts` and no theme attribute among them (`.scratch/theme-font-audience.ts`) is the
+              // quarantined cohort's count, and `word/numbering.xml` has not been re-counted on the authorized
+              // 46 份: 待重证 — so this is the same `w:rFonts` read the same way everywhere else, not a shape
+              // measured to be needed.
               this.theme.face(rFonts?.["@_asciiTheme"] ?? rFonts?.["@_hAnsiTheme"], themeFontScript(asArray(l.rPr?.lang)[0]?.["@_eastAsia"])),
             sizePt: szHalf === undefined ? undefined : szHalf / 2,
           };
@@ -1895,10 +2099,12 @@ export class WordDocument {
     // §17.3.1.4: `w:pPr/w:rPr` is the paragraph's own mark — the paragraph break, and in WPS' lists the
     // numbering symbol too (§17.3.1.12 gives that symbol a character run, whose properties the level states and
     // this mark inherits when the level says nothing). Half-points here, the same unit `readRunStyle` converts.
-    // Across the 86 WPS-written documents 455 of 466 listed paragraphs state a mark run, 326 of them a size
-    // (`.scratch/mark-size.ts`); of the 396 whose *level* states no size, **every one** resolves to a number —
-    // 298 from this mark, 98 from the paragraph's style chain, 0 from nothing at all. 331 of the 396 differ from
-    // the page stylesheet's 12pt, so a mark that ignores this chain draws at a size no file asked for.
+    // The audience that sizes this rung is 待重证: the counts below came from the 86 WPS-written documents
+    // (`.scratch/mark-size.ts`) and the paragraph-mark-size audience has not been re-counted on the authorized
+    // 46 份 — 455 of 466 listed paragraphs state a mark run, 326 of them a size; of the 396 whose *level* states
+    // no size, **every one** resolves to a number — 298 from this mark, 98 from the paragraph's style chain, 0
+    // from nothing at all; 331 of the 396 differ from the page stylesheet's 12pt, so a mark that ignores this
+    // chain would draw at a size no file asked for.
     const markSz = num(pPr.rPr?.sz?.["@_val"]);
     // Faces the same way, one attribute at a time: a mark that names only `w:eastAsia` must not hand back an
     // undefined Latin face that erases the chain's, and an empty `w:ascii=""` states nothing (§17.7.2).
@@ -1916,21 +2122,23 @@ export class WordDocument {
       styleId,
       styleName: styleId ? this.styles.get(styleId)?.name : undefined,
       align: pPr.jc?.["@_val"] ?? lent?.align,
-      indentLeft: ind.indentLeft ?? lent?.indentLeft,
-      indentLeftChars: ind.indentLeftChars ?? lent?.indentLeftChars,
-      indentRight: ind.indentRight ?? lent?.indentRight,
-      indentFirstLine: ind.indentFirstLine ?? lent?.indentFirstLine,
-      indentFirstLineChars: ind.indentFirstLineChars ?? lent?.indentFirstLineChars,
-      indentHanging: ind.indentHanging ?? lent?.indentHanging,
+      ...indResolve(ind, lent),
       spacingBefore: sp.spacingBefore ?? lent?.spacingBefore,
       spacingAfter: sp.spacingAfter ?? lent?.spacingAfter,
       lineSpacing: sp.lineSpacing ?? lent?.lineSpacing,
       lineSpacingRule: sp.lineSpacingRule ?? lent?.lineSpacingRule,
-      pageBreakBefore: pPr.pageBreakBefore !== undefined,
+      pageBreakBefore: onOff(pPr.pageBreakBefore) ?? false,
       keepNext: onOff(pPr.keepNext) ?? lent?.keepNext,
       keepLines: onOff(pPr.keepLines) ?? lent?.keepLines,
       widowControl: onOff(pPr.widowControl) ?? lent?.widowControl,
       snapToGrid: onOff(pPr.snapToGrid) ?? lent?.snapToGrid,
+      // The box, per side: the paragraph's own statement first, the chain's sides it does not name behind. A
+      // paragraph that names no side at all takes the chain's object by reference (see `mergeParaBorders`), so
+      // the write side still sees it as the style's.
+      borders: mergeParaBorders(paraBordersOf(asArray(pPr.pBdr)[0]), lent?.borders),
+      shading: shadingOf(asArray(pPr.shd)[0]) ?? lent?.shading,
+      // 制表位逐位置合：段落自己那一枚顶掉链上同位置的，链上其余的留着（见 `mergeTabStops`）。
+      tabStops: mergeTabStops(lent?.tabStops, tabStopsOf(asArray(pPr.tabs)[0])),
       numPr: numPrOf(pPr.numPr) ?? lent?.numPr,
       outlineLevel: outlineOf(pPr.outlineLvl) ?? lent?.outlineLevel,
       markSizePt: markSz === undefined ? lentRuns.sizePt : markSz / 2,
@@ -2217,6 +2425,12 @@ export class WordDocument {
     // The bytes go back where they came from instead of the drawing going down with the reader's blind spot.
     if (!out.length && span && unmodelled)
       return [{ ...base, text: "", carry: { key: this.carryKey++, tag: "r", xml: span, show: carriedText(span) } }];
+    // 一枚 run 装了并排的孩子时，这串文字属于整枚 run，孩子各拿一份引用：孩子自己没有 `w:rPr`，共用的是上面
+    // 那一套槽，所以「件里这段话说的是中文」只能这样问回去。一个孩子时不必写——问题本来就只有一句文字。
+    if (out.length > 1) {
+      const runText = out.map((inline) => inline.text).join("");
+      for (const inline of out) inline.runText = runText;
+    }
     return out;
   }
 
@@ -2348,16 +2562,19 @@ export class WordDocument {
    * The numbering a 「项目符号」/「1. 编号」 click needs: the file's own definition when it names *that* shape,
    * one written here when it does not.
    *
-   * Reusing the document's definitions was the whole strategy before, and the numbers say what that bought
-   * (`.scratch/list-availability-audience.ts`, 86 WPS-written documents): 项目符号 had nothing to point at in
-   * **80 of 86** files and 编号 in **48 of 86** — 47 carry no `word/numbering.xml` at all, which is also the shape
-   * of 文件 → 新建. In the 38 files where 编号 did answer, the id picked was the first one whose level 0 was not a
-   * bullet, and in **29 of those 38** that level says `w:numFmt val="chineseCounting"` — the button labelled 1.
-   * drew 一、. So the pick is now exact (`decimal` for 编号), and a file that names neither shape gets a definition
+   * Reusing the document's definitions was the whole strategy before, and the numbers that said what that bought
+   * (`.scratch/list-availability-audience.ts`: 项目符号 having nothing to point at in **80 of 86** files and 编号 in
+   * **48 of 86**, 47 carrying no `word/numbering.xml` at all, and in the 38 files where 编号 did answer the id
+   * picked being the first one whose level 0 was not a bullet with **29 of those 38** saying
+   * `w:numFmt val="chineseCounting"` — the button labelled 1. drew 一、) came from the quarantined 86 份 cohort;
+   * the numbering audience has not been re-counted on the authorized 46 份, so every one of those counts is
+   * 待重证. The 文件 → 新建 shape behind 「47 carry none」 is the shape a blank document has whatever the count. So
+   * the pick is now exact (`decimal` for 编号), and a file that names neither shape gets a definition
    * instead of a grey button, the way WPS writes one when you click on a blank page.
    *
-   * What gets invented is the core the corpus really does state for a level: `w:start`, `w:numFmt`, `w:lvlText`,
-   * `w:lvlJc` — all five shapes counted in column D of that probe carry those four, in §17.4's order. What is
+   * What gets invented is the core a level really does state: `w:start`, `w:numFmt`, `w:lvlText`,
+   * `w:lvlJc` — all five shapes that probe counted in column D carry those four, in §17.4's order (same 待重证).
+   * What is
    * deliberately *not* invented is `w:ind` and `w:suff`: those are a layout claim, and what WPS puts in a new
    * document's own definition is **未取证**.
    */
@@ -2425,9 +2642,10 @@ export class WordDocument {
    * gets no character count invented for it. Stepping only one of the two is what would make the file disagree
    * with itself, and the page would show the twips while Word showed the characters.
    *
-   * It stops at 0 rather than going negative: WPS writes `w:left="0"` out loud 187 times in these same bodies,
-   * which is its way of saying 回到边内. Whether the button keeps going past the left margin onto negative
-   * values (the corpus holds `w:left="-1"`, `-41`, `-178`) is 未取证 — no file here was made by clicking it.
+   * It stops at 0 rather than going negative: WPS writes `w:left="0"` out loud 187 times in the bodies of the
+   * cohort that was quarantined — indent values are 待重证 on the authorized 46 份 — and that is its way of
+   * saying 回到边内. Whether the button keeps going past the left margin onto negative
+   * values (that cohort also held `w:left="-1"`, `-41`, `-178`) is 未取证 — no file here was made by clicking it.
    */
   nextIndent(p: Paragraph, dir: 1 | -1): { indentLeft: number; indentLeftChars?: number } | undefined {
     const stepChars = 200;
@@ -2499,14 +2717,14 @@ export class WordDocument {
    * new paragraph reads as a paragraph whose `w:pPr` says only `w:pStyle`.
    *
    * Only a style the paragraph *names* answers the question — a paragraph that names none falls back on the
-   * default paragraph style for formatting (§17.7.2) but not for a next style. The 86 WPS-written documents say
-   * why (`.scratch/next-resolve.ts`): 668 of their 2,378 styles state `w:next`, a further 358 inherit it from a
-   * `w:basedOn` ancestor, and every one of the 668 targets is a declared paragraph style that is not the style
-   * stating it. Left alone, that reaches body text: 63 of the 86 have a `w:next` on their default paragraph
-   * style, 16,783 of their 30,322 paragraphs name no style, and 924 of those would land on a heading style —
-   * every second Enter turning ordinary prose into a heading. Nothing in the corpus behaves that way: of its
-   * 230 adjacent paragraph style changes, 0 match the preceding style's `w:next`, and of its 934 paragraphs that
-   * name a style, 0 name a default style's next. A heading's next, which is the case the feature is for, always
+   * default paragraph style for formatting (§17.7.2) but not for a next style. 授权 46 份的这条腿数清楚了：
+   * `word/styles.xml`（连 glossary 那份）共 **623 枚样式、406 枚段落样式，其中 188 枚写 `w:next`，188 枚全是段落样式写的**；
+   * 而 **46 份的默认段落样式（46 枚）没有一枚写 `w:next`**——这一句是关键，因为它就是「回车该落回哪里」的那条兜底：
+   * 正文段若不点名样式（授权口径下 `word/document.xml` 的 7,430 段里有 **5,912 段不点名**）就走默认样式，而默认样式
+   * 既然不指 next，第二段不会莫名其妙变成标题。作废语料上那组「668 of 2,378 写 next / 358 靠 basedOn 继承 / 63 of 86
+   * 的默认段落样式写了 next / 16,783 of 30,322 段不点名 / 924 落进标题」属旧读数，其中默认样式那一句已被上面这组换掉，
+   * basedOn 继承那 358 枚与「相邻两段样式改动 230 次里 0 次等于前一枚的 next」在授权口径上 **待重证**。
+   * A heading's next, which is the case the feature is for, always
    * travels as an explicit `w:pStyle`.
    *
    * A `w:next` that names a style the part does not declare, or the style itself, says nothing a split could
@@ -2552,13 +2770,22 @@ export class WordDocument {
     const own = ownParaStyle(before, paraStyleOf(previous));
     delete own.styleId;
     const fields: ParaStyle = { ...lent, ...own };
-    // 那四项不在 `PARA_STYLE_KEYS` 里（写出靠 `w:pPr` 的槽位带回），`ownParaStyle` 认不到它们，所以「上一段自己
+    // 这七项不在 `PARA_STYLE_KEYS` 里（写出靠 `w:pPr` 的槽位带回），`ownParaStyle` 认不到它们，所以「上一段自己
     // 写的那一份」得按同一条判据再认一次：与旧链说的不一样，就是这一段自己写的，跟着走——回车不该把上一段自己写的
-    // 保持规则或它自己那句「不吸网格」忘掉（语料里 1,994 枚 `w:snapToGrid w:val="0"` 是段落自己写的，
-    // `.scratch/snap-grid-audience.ts`）。`.scratch/next-dom.ts` 在真页面上量到的正是这一族丢掉的形状。
+    // 保持规则或它自己那句「不吸网格」忘掉（授权口径里 226 枚 `w:snapToGrid w:val="0"` 是段落自己写的，
+    // `.scratch/corpus-recheck2.mjs`）。`.scratch/next-dom.ts` 在真页面上量到的正是这一族丢掉的形状。
+    // 「不一样」在这里按**引用**认，不是 `samePropValue`：框是个物件，而 `mergeParaBorders` 恰好在这一段一个边
+    // 都没说的时候把链上那个物件原样交回来。于是引用相同＝「这个盒子是链的，新段该向自己的链要」，引用不同＝
+    // 「这一段自己说过」。按内容比会把「自己说过、说的又与链相同」那一击判成借来的（本编辑器给一段加了链上也
+    // 有的那条底线，回车后那一半就没了）；按引用比不会，且对四个布尔字段与 `shading` 那个字符串与原判据等价。
+    // 件里 26 枚 `w:pBdr` 有 24 枚在 `word/styles.xml`、2 枚在页眉部件的段落，正文段落自己写的 0 枚
+    // （`.scratch/pbdr-audience.ts`），所以这条判据量到的是**这一击**的形状，不是件里已有的形状。
     for (const key of MODEL_ONLY_PARA_KEYS) {
       const stated = previous[key];
-      if (stated !== undefined && stated !== before?.[key]) fields[key] = stated;
+      if (stated === undefined || stated === before?.[key]) continue;
+      // 一次写六个字段中的一个，键是联合的，TS 只认三者交集那一格（`undefined`），所以按名写进去。判据还是上面
+      // 那一条引用比较，与 `fields[key] = stated` 同义。
+      Object.assign(fields, { [key]: stated });
     }
     // 「拆段不改直接格式」在这一条上有例外：`w:pageBreakBefore` 说的不是这一段的排版，是「这一段之前必须断一页」，
     // 跟着走就是每按一次回车多一页。新段落按它自己的样式画。
@@ -2580,9 +2807,7 @@ export class WordDocument {
     const xml = this.bodySectPr;
     if (!xml) return "";
     const tags = this.sectReferenceTags();
-    if (!tags) return xml;
-    const open = new RegExp(`(<${this.sectPrefix}:sectPr[^>]*>)`);
-    return open.test(xml) ? xml.replace(open, `$1${tags}`) : xml;
+    return tags ? this.insertBandRefs(xml, tags) : xml;
   }
 
   /**
@@ -2691,31 +2916,57 @@ export class WordDocument {
    */
   sectReferenceTags(): string {
     if (!this.bandSectIsBody) return "";
-    const p = this.sectPrefix;
-    const tag = (kind: "header" | "footer", hf?: HeaderFooter): string =>
-      hf && !this.sectHas[kind] ? `<${p}:${kind}Reference ${p}:type="default" r:id="${hf.id}"/>` : "";
+    const tag = (kind: "header" | "footer", hf?: HeaderFooter): string => (hf && !this.sectHas[kind] ? this.bandRefTag(kind, hf.id) : "");
     return tag("header", this.header) + tag("footer", this.footer);
+  }
+
+  /** One band reference this session owes, spelled the way the files spell it (see {@link insertBandRefs}). */
+  private bandRefTag(kind: "header" | "footer", id: string): string {
+    const p = this.sectPrefix;
+    return `<${p}:${kind}Reference r:id="${id}" ${p}:type="default"/>`;
+  }
+
+  /**
+   * Splices band references into a section's `w:sectPr`. Element order means nothing to a reader — this model
+   * matches a band on its `w:type`, never on its position (§17.10.3) — so the only question is what shape a save
+   * hands back. 授权 46 份里 cite 多枚的 **6 节按 `w:type` 分档写（`first` 在前、`default` 其次、`even` 最后），
+   * 同一档里页眉在页脚前**：形状是 `footer:default > footer:even`（2 节）、`header:default > footer:even`（2 节）、
+   * `footer:first > header:default > footer:default`（2 节）（`.scratch/sect-ref-order.ts`）。这一条只量到 6 节，
+   * 而且 6 节里没有任何一枚 `w:type="first"` 的页眉，所以「first 档里页眉页脚谁前谁后」是 **未取证**。
+   *
+   * The tags a save owes are always `default`, so they go after the `first` ones and after the `default`
+   * 页眉 — which is also where a newly invented 页眉 lands relative to a 页脚 the section already cited
+   * (`header:default > footer:default`). Both splices used to put the new tag straight after the opening tag,
+   * which is the right place only for a section that cited nothing.
+   */
+  private insertBandRefs(sectXml: string, tags: string): string {
+    const p = this.sectPrefix;
+    const gt = sectXml.indexOf(">", sectXml.indexOf("<" + p + ":sectPr"));
+    if (gt < 0) return sectXml;
+    if (sectXml[gt - 1] === "/") return `${sectXml.slice(0, gt)}>${tags}</${p}:sectPr>`;
+    const sortsBefore = new RegExp(`^\\s*<${p}:(?:(?:header|footer)Reference\\b[^>]*\\b${p}:type="first"|headerReference\\b[^>]*\\b${p}:type="default")[^>]*/>`);
+    let at = gt + 1;
+    for (;;) {
+      const m = sortsBefore.exec(sectXml.slice(at));
+      if (!m) break;
+      at += m[0].length;
+    }
+    return `${sectXml.slice(0, at)}${tags}${sectXml.slice(at)}`;
   }
 
   /**
    * Cites a header/footer this session created from the `sectPr` that owns the band, when that is a
-   * paragraph's section break rather than the body's. The reference goes after the opening tag of the
-   * first top-level paragraph carrying one, which is the section the document starts with.
+   * paragraph's section break rather than the body's. The reference goes into the first top-level paragraph
+   * carrying one, which is the section the document starts with.
    */
   private citeBandReference(kind: "header" | "footer", id: string): void {
-    const p = this.sectPrefix;
-    const tag = `<${p}:${kind}Reference ${p}:type="default" r:id="${id}"/>`;
+    const tag = this.bandRefTag(kind, id);
     for (const b of this.blocks) {
       if (b.kind !== "paragraph" || !b.pPrSlots?.length) continue;
       const at = b.pPrSlots.findIndex((s) => s.tag === "sectPr");
       if (at < 0) continue;
       const slot = b.pPrSlots[at]!;
-      b.pPrSlots[at] = {
-        tag: "sectPr",
-        xml: /\/>$/.test(slot.xml)
-          ? slot.xml.replace(/(\s*)\/>$/, `>${tag}</${p}:sectPr>`)
-          : slot.xml.replace(new RegExp(`(<${p}:sectPr[^>]*>)`), `$1${tag}`),
-      };
+      b.pPrSlots[at] = { tag: "sectPr", xml: this.insertBandRefs(slot.xml, tag) };
       this.sectHas = { ...this.sectHas, [kind]: true };
       return;
     }
@@ -2735,6 +2986,26 @@ export class WordDocument {
   /** Rewrites an editable header/footer paragraph by paragraph, pieces and all; rich parts refuse. */
   setHeaderSegments(which: "header" | "footer", segments: HfSegment[][]): boolean {
     const hf = which === "header" ? this.header : this.footer;
+    if (!hf) return false;
+    return this.setBandSegments(which, hf.part, segments);
+  }
+
+  /**
+   * The band one package path is. One part cited by several sections is one object (`bandByPart`), so the page
+   * that shows it, the click that edits it, and the save that writes it all answer to the same holder — which is
+   * what lets a change to a later section's 页眉 reach the bytes instead of only the model. A part
+   * `ensureHeaderFooter` made this session is not in that map, so the document-level band answers for it.
+   */
+  bandOf(which: "header" | "footer", part: string): HeaderFooter | undefined {
+    const held = this.bandByPart.get(part);
+    if (held) return held;
+    const own = which === "header" ? this.header : this.footer;
+    return own?.part === part ? own : undefined;
+  }
+
+  /** Rewrites the band one part holds by its package path — not only the document-level pair. */
+  setBandSegments(which: "header" | "footer", part: string, segments: HfSegment[][]): boolean {
+    const hf = this.bandOf(which, part);
     if (!hf?.editable) return false;
     hf.segments = segments.map(coalesceHfSegments);
     hf.paragraphs = hf.segments.map(hfSegmentsText);
@@ -2744,18 +3015,21 @@ export class WordDocument {
   /**
    * Puts a `PAGE` field in an editable header or footer, spelled as the files write it and carried as one
    * atom, so the text around it stays editable and a save gives the field back unchanged. `paragraph` counts
-   * from the top, or from the end when negative; `offset` counts the characters of text before it goes in.
+   * from the top, or from the end when negative; `offset` counts the characters of text before it goes in;
+   * `part` names the band the page shows, and leaving it out means the document-level one.
    */
-  insertPageNumber(which: "header" | "footer", paragraph = -1, offset?: number): boolean {
-    const hf = which === "header" ? this.header : this.footer;
+  insertPageNumber(which: "header" | "footer", paragraph = -1, offset?: number, part?: string): boolean {
+    const key = part ?? (which === "header" ? this.header?.part : this.footer?.part);
+    if (!key) return false;
+    const hf = this.bandOf(which, key);
     if (!hf?.editable) return false;
     const segs = (hf.segments ?? hf.paragraphs.map((t) => [{ text: t }])).map(copyHfSegments);
     const at = paragraph < 0 ? segs.length + paragraph : paragraph;
     const target = segs[at];
     if (!target) return false;
     const prefix = /^<([\w.-]+):(?:hdr|ftr)/.exec(hf.source)?.[1] ?? "w";
-    target.splice(0, target.length, ...putHfCarry(target, offset, { key: this.carryKey++, tag: "fldChar", xml: pageFieldXml("PAGE", prefix), show: "页码" }));
-    return this.setHeaderSegments(which, segs);
+    target.splice(0, target.length, ...putHfCarry(target, offset, { key: this.carryKey++, tag: "fldChar", xml: pageFieldXml("PAGE", prefix), show: "页码", field: "PAGE" }));
+    return this.setBandSegments(which, key, segs);
   }
 
   /** Adds an empty header/footer to a document that had none, wiring rels and sectPr. */
@@ -2778,14 +3052,34 @@ export class WordDocument {
     return hf;
   }
 
-  /** Header/footer parts with their regenerated XML; `dirty` ones a save must write. */
-  headerFooterParts(): { part: string; xml: string; dirty: boolean }[] {
-    const out: { part: string; xml: string; dirty: boolean }[] = [];
-    for (const hf of [this.header, this.footer]) {
-      if (!hf) continue;
-      out.push({ part: hf.part, xml: headerFooterXml(hf), dirty: hf.segments ? !sameHfSegments(hf.segments, hf.baselineSegments ?? []) : JSON.stringify(hf.paragraphs) !== JSON.stringify(hf.baseline) });
+  /**
+   * Every band some page shows, once per part: the document-level pair first, then the parts the sections
+   * cite. Two things are decided from this list and they must agree — what counts as an edit (`fingerprint`)
+   * and what a save may rewrite (`headerFooterParts`). A later section's 页脚 left out of either one is an
+   * edit that never happened: the model holds the new words, `edited` says nothing changed, and the save hands
+   * back the file as it came.
+   */
+  private bands(): HeaderFooter[] {
+    const out: HeaderFooter[] = [];
+    const seen = new Set<string>();
+    for (const hf of [this.header, this.footer, ...this.bandByPart.values()]) {
+      if (!hf || seen.has(hf.part)) continue;
+      seen.add(hf.part);
+      out.push(hf);
     }
     return out;
+  }
+
+  /**
+   * Header/footer parts with their regenerated XML; `dirty` ones a save must write.
+   *
+   * Every band a section shows is in here, not only the document-level pair (#157): a page whose 页脚 belongs
+   * to a later section edits that section's part, and a save that could not see the part would drop the edit on
+   * the floor. A part nobody touched reports `dirty: false`, so `writeDocx` leaves its bytes alone — the
+   * unchanged-file-stays-unchanged rule is per part, not per document.
+   */
+  headerFooterParts(): { part: string; xml: string; dirty: boolean }[] {
+    return this.bands().map((hf) => ({ part: hf.part, xml: headerFooterXml(hf), dirty: hf.segments ? !sameHfSegments(hf.segments, hf.baselineSegments ?? []) : JSON.stringify(hf.paragraphs) !== JSON.stringify(hf.baseline) }));
   }
 
   // -------------------------------------------------------------- revisions
@@ -3334,8 +3628,8 @@ export class WordDocument {
   /**
    * Putting a paragraph back the properties its `w:pPrChange` recorded. The record holds the whole
    * previous set, so a property it does not mention was not set — and alignment, indent, the three page-keeping
-   * rules and the grid switch come from the paragraph's style when the record leaves them out, which is where
-   * they belonged before.
+   * rules, the grid switch, the box and the shading come from the paragraph's style when the record leaves them
+   * out, which is where they belonged before.
    */
   private restoreParaStyle(p: Paragraph, fmt: ParagraphFormatRevision): void {
     const prev = fmt.prev;
@@ -3353,14 +3647,9 @@ export class WordDocument {
     }
     const inherited = this.paraLent(p.styleId);
     p.align = p.align ?? inherited?.align;
-    // Every `w:ind` attribute resolves on its own, the way the paragraph's first read did it: a record that
-    // left the indent out hands the style's indent back, and one that said `w:firstLine="0"` keeps that zero.
-    p.indentLeft = p.indentLeft ?? inherited?.indentLeft;
-    p.indentLeftChars = p.indentLeftChars ?? inherited?.indentLeftChars;
-    p.indentRight = p.indentRight ?? inherited?.indentRight;
-    p.indentFirstLine = p.indentFirstLine ?? inherited?.indentFirstLine;
-    p.indentFirstLineChars = p.indentFirstLineChars ?? inherited?.indentFirstLineChars;
-    p.indentHanging = p.indentHanging ?? inherited?.indentHanging;
+    // 缩进六枚按读的时候同一句话合起来：`prev` 带回来的是段落自己那一句（上面 `syncParaSlots` 那句说的就是它），
+    // 所以「段落只要用任一枚答过这一件事，链上的另一枚就不许叠上来」在这里同样成立（见 `indResolve`）。
+    Object.assign(p, indResolve(p, inherited));
     // The spacing goes back the same way it was read: a record that left `w:spacing` out returns the paragraph
     // to whatever its style lends, and one that stated a zero keeps that zero.
     p.spacingBefore = p.spacingBefore ?? inherited?.spacingBefore;
@@ -3374,13 +3663,17 @@ export class WordDocument {
     // style lends, and one that wrote `w:val="9"` keeps that — 9 is body text (§17.3.2.26), so the paragraph has
     // taken back a level the chain was lending it.
     p.outlineLevel = p.outlineLevel ?? inherited?.outlineLevel;
-    // 那四项模型有字段、但 `ownParaStyle` 认不到的（三条保持规则与「对齐到网格」）走同一条：记录说了就按记录的，
-    // 没说就把手里的清掉、把样式链借的那份还回来。留着不放的话，被否决的那一句还挂在字段上——画错，下一击
-    // `syncParaSlots` 还会把它替段落写进件里。
+    // 那六项模型有字段、但 `ownParaStyle` 认不到的（三条保持规则、「对齐到网格」、框与底纹）走同一条：记录说了
+    // 就按记录的，没说就把手里的清掉、把样式链借的那份还回来。留着不放的话，被否决的那一句还挂在字段上——画错，
+    // 下一击 `syncParaSlots` 还会把它替段落写进件里。
     p.keepNext = p.keepNext ?? inherited?.keepNext;
     p.keepLines = p.keepLines ?? inherited?.keepLines;
     p.widowControl = p.widowControl ?? inherited?.widowControl;
     p.snapToGrid = p.snapToGrid ?? inherited?.snapToGrid;
+    // 框是逐边的物件，链上那份按引用还回来，写侧才仍然认得出「这一段自己没说」；底纹那枚 token（`auto`）与颜色
+    // 一样是说过的一句话，不是 `undefined`，所以 `??` 就够。
+    p.borders = p.borders ?? inherited?.borders;
+    p.shading = p.shading ?? inherited?.shading;
     // 退回完之后，这一段重新有一份「它当时显示的是什么」的参照：写出侧对着它判哪一句是用户后来改的口。
     p.asRead = paraReadSnapshot(p);
   }
@@ -3734,8 +4027,10 @@ export class WordDocument {
   /**
    * The document's sections in the order they start. A section break hangs its `sectPr` off the `w:pPr` of
    * the paragraph that ends the section; the body's own direct `sectPr` child is the last section. Measured
-   * on the 86 files this machine's WPS wrote: 115 sections in 86 documents (68 one, 7 two, 11 three), and
-   * every body-level `sectPr` sits at the end of `w:body`.
+   * on the authorized 46 份: 58 `w:sectPr` in all, of which 12 are the paragraph-level kind stated in 8 files,
+   * and 8 of the 46 documents hold more than one section (`.scratch/pgmar.mjs`, `.scratch/corpus-recheck.mjs`);
+   * every body-level `sectPr` sits at the end of `w:body`. The old per-file split — 115 sections in 86
+   * documents, 68 with one, 7 with two, 11 with three — is the quarantined cohort's arithmetic, 待重证 here.
    */
   private sectionChain(source: string): { xml: string; fromBody: boolean }[] {
     const out: { xml: string; fromBody: boolean }[] = [];
@@ -3763,69 +4058,116 @@ export class WordDocument {
     if (!raw) return;
     const ns = /xmlns:([A-Za-z0-9_.-]+)="http:\/\/schemas\.openxmlformats\.org\/wordprocessingml\/2006\/main"/.exec(raw);
     this.sectPrefix = ns ? ns[1]! : "w";
-    // Read by name, not by position: WPS puts `r:id` before `w:type` on every one of the 59 header and 57
-    // footer references in the local corpus, where the order this used to look for is Word's, so a real
-    // WPS page reported no header at all — nothing to show, nothing to edit, nothing to splice back.
-    const bound = (kind: "header" | "footer") =>
-      childSpans(elementContent(raw))
+    const shown = (kind: "header" | "footer", xml: string) => {
+      const list = childSpans(elementContent(xml))
         .filter((s) => s.tag === `${kind}Reference`)
         .map((s) => attrsOf(s.xml));
-    // Which band the page shows is the section's own statement, not the order it wrote its references in
-    // (§17.10.3): the first-page band belongs to the opening page only when the section states `w:titlePg`, and
-    // an `even` band belongs to `w:evenAndOddHeaders` — which none of the 86 corpus files' `word/settings.xml`
-    // turns on, even though 29 of their 115 sections still cite an even reference. The templates show why the
-    // switch is the file's and not the renderer's: 14 sections cite default, even *and* first for both bands
-    // while stating no `w:titlePg`, which is a page where 首页不同 is available and off.
-    const firstPage = childSpans(elementContent(raw)).some((s) => s.tag === "titlePg");
-    const shown = (kind: "header" | "footer") => {
-      const list = bound(kind);
-      const defaultBand = list.find((a) => a["type"] === "default" && a["id"]);
+      // Which band the page shows is the section's own statement, not the order it wrote its references in
+      // (§17.10.3): the first-page band belongs to the opening page only when the section states `w:titlePg`, and
+      // an `even` band belongs to `w:evenAndOddHeaders` — which no `word/settings.xml` of the quarantined cohort
+      // turns on, and which the authorized 46 份 re-measure never read, so its state there is 待重证 — even though
+      // many sections still cite an even reference. The templates show why the
+      // switch is the file's and not the renderer's: some sections cite default, even *and* first for both bands
+      // while stating no `w:titlePg`, which is a page where 首页不同 is available and off.
+      const firstPage = childSpans(elementContent(xml)).some((s) => s.tag === "titlePg");
       // A section that asks for a different first page but cites no first-page band still has the part it holds:
       // blanking the page here would take away text the file wrote. What WPS shows for that shape is 未取证.
-      return (firstPage ? list.find((a) => a["type"] === "first" && a["id"]) : undefined) ?? defaultBand;
+      return (
+        (firstPage ? list.find((a) => a["type"] === "first" && a["id"]) : undefined) ??
+        list.find((a) => a["type"] === "default" && a["id"])
+      );
     };
-    const picks: Record<"header" | "footer", Record<string, string> | undefined> = { header: shown("header"), footer: shown("footer") };
+    const picks: Record<"header" | "footer", Record<string, string> | undefined> = { header: shown("header", raw), footer: shown("footer", raw) };
     // Whether the section already cites the band this page shows — the question a save asks before adding a
     // reference of its own. A band the section cites but the page does not show is not a band the model holds.
     this.sectHas = { header: !!picks.header?.["id"], footer: !!picks.footer?.["id"] };
     for (const kind of ["header", "footer"] as const) {
       const id = picks[kind]?.["id"];
       if (!id) continue;
-      const rel = rels.get(id);
-      if (!rel) continue;
-      const part = pkg.resolve("word/document.xml", rel);
-      if (!pkg.parts.has(part)) continue;
-      const partRaw = pkg.text(part) ?? "";
-      // The texts come off the same span scan a save splices into, so paragraph i of the model is
-      // paragraph i of the bytes. Pairing a parsed tree against spans would let the two count paragraphs
-      // differently, and the save would then rewrite the wrong one.
-      const rootSpan = childSpans(partRaw).find((s) => s.tag === (kind === "header" ? "hdr" : "ftr"));
-      const seen = rootSpan ? childSpans(elementContent(rootSpan.xml)) : [];
-      const found: { xml: string }[] = [];
-      const walked = bandParagraphs(seen, (s) => (found.push(s), ""));
-      // A band the walk refuses keeps the flat read it always had: its paragraphs as text, whole part held as
-      // its own bytes. Refusing is not the same as dropping what the page was showing, so the text view
-      // reaches into the controls the walk would not edit.
-      const paraSpans = walked === null ? bandTextSpans(seen) : found;
-      const parsed = paraSpans.map((s) => hfParagraphSegments(s, () => this.carryKey++));
-      // Anything the paragraphs do not account for — a table or a container sitting beside them — is still a
-      // reason to hold the part as its own bytes; within them the piece-by-piece read is the stricter rule.
-      const editable = walked !== null && parsed.every((p) => p.ok);
-      const segments = editable ? parsed.map((p) => p.segs) : undefined;
-      const paragraphs = segments ? segments.map(hfSegmentsText) : paraSpans.map(hfParagraphText);
-      const hf: HeaderFooter = {
-        part,
-        id,
-        editable,
-        paragraphs,
-        baseline: [...paragraphs],
-        ...(segments ? { segments, baselineSegments: segments.map(copyHfSegments) } : {}),
-        ...(segments && parsed.some((p) => p.boxed) ? { boxedParagraphs: parsed.map((p) => p.boxed) } : {}),
-        source: partRaw,
-      };
+      const hf = this.bandPart(pkg, rels, id, kind);
+      if (!hf) continue;
       if (kind === "header") this.header = hf;
       else this.footer = hf;
     }
+    // Read in the order the sections start, so the page-number atoms get their keys in the order the document
+    // opens with — the same order as before this walked the whole chain. This holds only what each section
+    // *itself* cites; which band a section's page shows is `sectionBand` below, and what a save writes is the
+    // part a page shows (`headerFooterParts`).
+    const opening: SectionBands = {};
+    if (this.header) opening.header = this.header;
+    if (this.footer) opening.footer = this.footer;
+    this.sectionRefs = [opening];
+    for (let k = 1; k < chain.length; k++) {
+      const own: SectionBands = {};
+      for (const kind of ["header", "footer"] as const) {
+        const id = shown(kind, chain[k]!.xml)?.["id"];
+        const hf = id ? this.bandPart(pkg, rels, id, kind) : undefined;
+        if (hf) own[kind] = hf;
+      }
+      this.sectionRefs.push(own);
+    }
+  }
+
+  /**
+   * 第 `section` 节的纸显示的那一份带子（#157）：本节自己 cite 的用本节的，什么都没说的一节接着**它前面**
+   * 最近的那一节——只向前，不向后（§17.10.3 的 `linkToPrevious`；「向后不继承」这一条在 WPS 真机上仍未取证，
+   * #58）。整条链都没 cite 时回落到文档级那一份：那正是这一趟用户在页眉里新建的部件，它属于开篇那一节，
+   * 往后每一节都接着它。
+   */
+  sectionBand(kind: "header" | "footer", section: number): HeaderFooter | undefined {
+    for (let k = Math.max(0, Math.min(section, this.sectionRefs.length - 1)); k >= 0; k--) {
+      const own = this.sectionRefs[k]?.[kind];
+      if (own) return own;
+    }
+    return kind === "header" ? this.header : this.footer;
+  }
+
+  /**
+   * The part one `w:headerReference` / `w:footerReference` cites, read as a band. Cached by package path,
+   * because a chain of sections routinely cites one part from several of them and the page must not hold two
+   * copies of it: identity is what lets an edit of the band the user types into show up on every sheet that
+   * section's page paints (`doc-edit.ts` 的 `paintBandCopies`).
+   */
+  private bandPart(pkg: OpcPackage, rels: Map<string, Rel2>, id: string, kind: "header" | "footer"): HeaderFooter | undefined {
+    const rel = rels.get(id);
+    if (!rel) return undefined;
+    const part = pkg.resolve("word/document.xml", rel);
+    if (!pkg.parts.has(part)) return undefined;
+    const held = this.bandByPart.get(part);
+    if (held) return held;
+    const partRaw = pkg.text(part) ?? "";
+    // Read by name, not by position: WPS puts `r:id` before `w:type` on its header and footer references, where
+    // the order this used to look for is Word's, so a real WPS page reported no header at all — nothing to show,
+    // nothing to edit, nothing to splice back.
+    // The texts come off the same span scan a save splices into, so paragraph i of the model is
+    // paragraph i of the bytes. Pairing a parsed tree against spans would let the two count paragraphs
+    // differently, and the save would then rewrite the wrong one.
+    const rootSpan = childSpans(partRaw).find((s) => s.tag === (kind === "header" ? "hdr" : "ftr"));
+    const seen = rootSpan ? childSpans(elementContent(rootSpan.xml)) : [];
+    const found: { xml: string }[] = [];
+    const walked = bandParagraphs(seen, (s) => (found.push(s), ""));
+    // A band the walk refuses keeps the flat read it always had: its paragraphs as text, whole part held as
+    // its own bytes. Refusing is not the same as dropping what the page was showing, so the text view
+    // reaches into the controls the walk would not edit.
+    const paraSpans = walked === null ? bandTextSpans(seen) : found;
+    const parsed = paraSpans.map((s) => hfParagraphSegments(s, () => this.carryKey++));
+    // Anything the paragraphs do not account for — a table or a container sitting beside them — is still a
+    // reason to hold the part as its own bytes; within them the piece-by-piece read is the stricter rule.
+    const editable = walked !== null && parsed.every((p) => p.ok);
+    const segments = editable ? parsed.map((p) => p.segs) : undefined;
+    const paragraphs = segments ? segments.map(hfSegmentsText) : paraSpans.map(hfParagraphText);
+    const hf: HeaderFooter = {
+      part,
+      id,
+      editable,
+      paragraphs,
+      baseline: [...paragraphs],
+      ...(segments ? { segments, baselineSegments: segments.map(copyHfSegments) } : {}),
+      ...(segments && parsed.some((p) => p.boxed) ? { boxedParagraphs: parsed.map((p) => p.boxed) } : {}),
+      source: partRaw,
+    };
+    this.bandByPart.set(part, hf);
+    return hf;
   }
 
   /**
@@ -3834,8 +4176,9 @@ export class WordDocument {
    * Dropping the picture and hyperlink relationships here because "the writer re-derives those" was
    * half true: the writer re-derives the ones its own tags name, but a drawing, a `w:fallback` VML
    * `v:imagedata` or a hyperlink inside a structure that travels by the byte still cites the id the
-   * file wrote. Measured on 86 real WPS files: the originals hold zero dangling citations, and a save
-   * that renumbered image relationships left one carried `r:id` pointing at nothing — the shape lost.
+   * file wrote. Measured on 86 real WPS files of the quarantined cohort: the originals hold zero dangling
+   * citations, and a save that renumbered image relationships left one carried `r:id` pointing at nothing — the
+   * shape lost; relationship tables have not been re-audited on the authorized 46 份, so that zero is 待重证 there.
    * So the id is the file's to keep, and `path` is what lets a save recognise the relationship it is
    * about to invent as one that already exists.
    */
@@ -3945,12 +4288,15 @@ export const RUN_STYLE_KEYS: (keyof RunStyle)[] = ["bold", "italic", "underline"
 
 /**
  * The run properties a style may lend a run — all of them, both faces included. `font` was held back while the
- * model had only the one face from `w:rFonts@w:ascii`: 350 of the corpus's style-side `w:rFonts` elements name a
- * different face for `w:eastAsia` (`.scratch/run-font-shape.ts`), and handing a run the Latin one as its only
- * face would draw its Chinese in a face the file never chose for it. With `fontEastAsia` read as the second face,
- * the pair says what the element says: 2,928 of 61,702 modelled runs end up with two different faces from the
- * ladder, and the page dispatches them by script (`render.ts`). The 93 style-side elements that state only
- * `w:eastAsia` now reach their runs too.
+ * model had only the one face from `w:rFonts@w:ascii`: 350 of the quarantined cohort's style-side `w:rFonts`
+ * elements name a different face for `w:eastAsia` (`.scratch/run-font-shape.ts`), and handing a run the Latin one
+ * as its only face would draw its Chinese in a face the file never chose for it. That styles-layer split is
+ * 待重证 on the authorized 46 份, but the shape itself is not: of their body parts' `w:rFonts` elements 4,475
+ * write both `w:ascii` and `w:eastAsia` and 161 of those name two different literal faces
+ * (`.scratch/corpus-recheck2.mjs`). With `fontEastAsia` read as the second face, the pair says what the element
+ * says — on the old count 2,928 of 61,702 modelled runs end up with two different faces from the ladder, itself
+ * 待重证 — and the page dispatches them by script (`render.ts`). The 93 style-side elements that state only
+ * `w:eastAsia` belong to that same 待重证 count, and they reach their runs too.
  */
 export const LENT_RUN_KEYS: (keyof RunStyle)[] = RUN_STYLE_KEYS;
 
@@ -3980,16 +4326,23 @@ function restoreStyle(run: Inline, fmt: FormatRevision): Inline {
 }
 
 /**
- * Which unit a `w:spacing@w:line` is written in. Counted over the 25,801 `w:spacing` elements in the 86
- * WPS-written documents that state a height or a gap (their `word/document.xml`, `word/styles.xml` and
- * header/footer parts together): `w:auto` 13,396, `w:exact` 5,812, `w:atLeast` 991, and 5,602 elements that
- * state 段前段后 but no line at all. Two facts fall out of that. Every element that states a positive `w:line`
- * does state its rule — there is no "height with no unit" to resolve against §17.3.1.27's default — and 6,802
- * of the 20,198 positive heights (a third) are 固定值 or 最小值, counted in twips rather than in the 240ths of a
- * line the drawing used for all of them; on the rendered page that is 5,859 heights in `px` and 967 in `max()`
- * out of the 24,458 line heights the 86 files draw (`.scratch/spacing-draw-impact.ts`). Nothing outside the
- * three literals appears, so an unrecognised one stays unread rather than being guessed at; the element itself
- * still travels as the file's own text.
+ * Which unit a `w:spacing@w:line` is written in. The scope of the 3,948 figure, so it is not read as an all-parts
+ * total: `w:spacing` elements whose parent `w:pPr` is itself the child of a real `w:p`, summed over
+ * `word/document.xml` (3,924) + `word/footnotes.xml` (12) + `word/endnotes.xml` (12) of the authorized 46 份 —
+ * the per-part table is `.scratch/spacing-part-scope.py`, and `.scratch/corpus-recheck2.mjs` summed the same three.
+ * The other parts are separate populations: the 页眉页脚 parts hold 74 such `w:pPr` blocks and write **no** `w:spacing`
+ * in them, `word/styles.xml` writes 246 inside `w:style`'s `w:pPr` (a different lender, not a paragraph's own), and
+ * 32 of the corpus's 4,226 `w:spacing` elements sit in a `w:rPr` (character spacing, §17.3.2.25).
+ *
+ * Counted that way (`.scratch/corpus-recheck2.mjs`): all 3,948 state a line height, and every
+ * one states its rule beside it — the pair counts 3,948 and either attribute alone counts 0 — so there is no
+ * "height with no unit" to resolve against §17.3.1.27's default. The rules themselves are only ever `w:auto`
+ * 2,890, `w:exact` 1,004 and `w:atLeast` 54, so nothing outside the three literals appears and an unrecognised one
+ * stays unread rather than being guessed at; the element itself still travels as the file's own text.
+ *
+ * 同一趟扫描把「只说段前段后而不说行距」那一支也数了：正文部件里写段前或段后的 `w:pPr/w:spacing` 共 252 枚，
+ * **252 枚同枚都还说了行距**，一枚「只有间距没有行高」的都没有（`.scratch/摆位-authorized.py`）。作废口径 86 份那组
+ * 「25,801 枚说行距或说间距、5,602 枚只说间距」的算术是旧读数，不再引用。
  */
 function lineRuleOf(spacing: any): LineSpacingRule | undefined {
   const v = spacing?.["@_lineRule"];
@@ -4001,12 +4354,16 @@ function lineRuleOf(spacing: any): LineSpacingRule | undefined {
  * separately, so a paragraph may write its own height and take the rule from its style, and that is what the
  * file said rather than a mix to be corrected.
  *
- * Read through the style because 5,110 of the paragraphs in the 86 WPS-written documents ask for a line height
- * that way: they state no `w:line` themselves while the style named by their `w:pStyle` does (4,847 of them
- * `w:auto`, 247 `w:exact`, 16 `w:atLeast` — `.scratch/spacing-lent.ts`). The same elements lend 段前 to 64
- * paragraphs and 段后 to 57 more. A further 501 heights, 54 段前 and 61 段后 come only from higher up the
- * `w:basedOn` chain, and 613 heights with 478 of each gap from the default paragraph style, which is what
- * `paraLent` walks to; the counts are in `.scratch/basedon-chain.ts`.
+ * Read through the style because a paragraph can ask for a line height without writing one. 授权口径 46 份把这一档
+ * 的受众数过（`.scratch/basedon-chain.ts`，输出存 `.scratch/basedon-authorized.json`；正文 7,357 段写了 `w:pPr`）：
+ * 段自己说行距的 3,924 段之外，**264 段**由 `w:pStyle` 命名那一枚样式直接给（`w:auto` 226、`w:exact` 34、
+ * `w:atLeast` 4），同一枚样式还借出段前 198 段、段后 206 段；再往上的 `w:basedOn` 链只有 **18 段**的行距落在第 2 跳
+ * （全部 `w:auto`，今天这一档读不到，另有 jc 790 / firstLine 44 同形）；默认段落样式那一级给 **772 段**行距
+ * （也全部 `w:auto`，同样读不到，另有 jc 3,731 / firstLine 320 / 段后 78）。作废口径那组 5,110 / 64 / 57 / 501 /
+ * 613 的数是旧读数，不再引用。The walk stays on §17.7.2's ladder, and the direct half of the population is
+ * measured there: of the 7,381 `w:pPr` blocks those three parts hold under a real `w:p`
+ * (document 7,357 + footnotes 12 + endnotes 12), 3,948 carry a `w:spacing` that states a line height of their own —
+ * `word/document.xml` alone is 3,924 of 7,357, which is the pair the sentence above quotes.
  */
 function spacingOf(spacing: any): Partial<ParaStyle> {
   const out: Record<string, number | LineSpacingRule> = {};
@@ -4022,11 +4379,13 @@ function spacingOf(spacing: any): Partial<ParaStyle> {
 }
 
 /**
- * What a `w:ind` states, as fields. Only the spellings the files really use on their own are read: over the
- * 29,207 `w:ind` elements in the `word/document.xml` of the 86 WPS-written documents, a positive
- * `w:firstLineChars` appears with no `w:firstLine` beside it 232 times, while a positive `w:leftChars`,
- * `w:rightChars` or `w:hangingChars` never does — there the character form always arrives alongside its twips
- * value, so only the first line needs a field of its own counted in characters.
+ * What a `w:ind` states, as fields. Only the spellings the files really use on their own are read: 授权口径 46 份
+ * 的 `word/document.xml` 那 2,278 枚 `w:ind` 里，`w:firstLineChars` 有 1,210 枚，其中 94 枚不写 `w:firstLine`，
+ * 而这 94 枚写的都是 `0`（没有一枚用字符单独说一个正的缩进）；`w:leftChars` 432 枚里 50 枚不写 `w:left`，同样
+ * 是 48 枚 `0` 加 2 枚负数；`w:hangingChars` 62 枚、`w:rightChars` 8 枚全部带着自己的缇同伴
+ * （`.scratch/chars-zero-audience.ts`）。作废口径 86 份那组「29,207 枚里 232 枚只写正字符数」的数是旧读数，
+ * 不再引用。所以字符写法不需要自己的字段受众，需要的只是「段落自己答过这一件事」这个判断本身——它由
+ * `indResolve` 用来挡住样式链，见那里的两段受众。
  *
  * Attributes the element does not state stay out of the result rather than coming back as `undefined`: a
  * `w:pPrChange` has to record which properties it wrote, and a paragraph has to tell "the file said zero" from
@@ -4047,17 +4406,51 @@ function indOf(ind: any): Partial<ParaStyle> {
   return out as Partial<ParaStyle>;
 }
 
+/** 段落自己那句 `w:ind` 与链上那枚合出来的六枚缩进——同一件事的两枚写法在这里定谁答过。 */
+type IndentFields = Pick<ParaStyle, "indentLeft" | "indentLeftChars" | "indentRight" | "indentFirstLine" | "indentFirstLineChars" | "indentHanging">;
+
+/**
+ * 段落自己的一句 `w:ind` 加上样式链借来的那枚，合出页面要画的六属性。
+ *
+ * §17.3.1.14 让「字符」那一枚压过「缇」那一枚，§17.7.2 让段落自己压过样式。两句话合起来的意思是：段落只要用
+ * 任一枚答过这一件事，链上的另一枚就不许再叠上来——今天写的正是那件会叠错的事。授权口径 46 份的
+ * `word/document.xml` 里 `w:ind` 共 2,278 枚（`.scratch/chars-zero-audience.ts` 经产品代码数）：**94** 枚写
+ * `w:firstLineChars="0"` 而完全不写 `w:firstLine`，其中 **74** 枚的样式链写了 `w:firstLine="883"`；另有 **62**
+ * 枚只写自己的 `w:hanging`（既不写 `w:firstLine` 也不写 `w:firstLineChars`），其中 **34** 枚的链也写了 883。
+ * 那 108 段自己的 `w:ind` 长得是 `w:left="425" w:leftChars="0" w:hanging="425" w:firstLineChars="0"` 这一类——
+ * 段首缩进与左边界等长，正是「首行不缩进、其余行缩进」的悬挂形状，而 `firstLineChars="0"` 是把「首行不缩进」
+ * 用字符那一枚又说明白的一次。按下面这两条之前，页面画的是链上那 883 缇：段首被缩进去一格，把文件自己说的
+ * 「不缩进」盖掉了（`hanging` 也一并被 `firstLine ?? -hanging` 那一步跳过）。
+ *
+ * 反过来那两支没有实例：段自己写了 `w:firstLine`/`w:firstLineChars` 而页面仍带着链上 `hanging` 的 0 段，段只写
+ * `w:firstLine="0"` 而页面带着链上 `firstLine` 的也是 0 段（`.scratch/hanging-borrow-audience.ts`），所以这里
+ * 不开那一头的口。段自己两枚都写时仍照旧由缇那枚上身（见 `indentFirstLine` 的文档）。
+ */
+function indResolve(own: Partial<ParaStyle>, lent: Partial<ParaStyle> | undefined): IndentFields {
+  const saidLeft = own.indentLeft !== undefined || own.indentLeftChars !== undefined;
+  const saidFirstLine = own.indentFirstLine !== undefined || own.indentFirstLineChars !== undefined || own.indentHanging !== undefined;
+  return {
+    indentLeft: own.indentLeft ?? (saidLeft ? undefined : lent?.indentLeft),
+    indentLeftChars: own.indentLeftChars ?? lent?.indentLeftChars,
+    indentRight: own.indentRight ?? lent?.indentRight,
+    indentFirstLine: own.indentFirstLine ?? (saidFirstLine ? undefined : lent?.indentFirstLine),
+    indentFirstLineChars: own.indentFirstLineChars ?? lent?.indentFirstLineChars,
+    indentHanging: own.indentHanging ?? lent?.indentHanging,
+  };
+}
+
 /**
  * The numbering a `w:pPr` states, taken as one property: `w:numPr` is not a set of attributes a paragraph can
  * merge piece by piece the way it merges `w:ind`, so the first style in the chain that writes it settles the
  * paragraph's list, and the styles below it get no say.
  *
- * `w:numId` absent reads as 0, which is what the files here mean by it. Of the 981 paragraphs that write their
- * own `w:numPr`, 517 write `w:numId w:val="0"` — the value that cancels numbering (§17.3.4.25) — and not one of
- * them leaves `w:numId` out. On the style side, 11 of the 48 paragraphs that borrow the property borrow a `w:numPr`
- * that writes only `w:ilvl` (2 of the 58 style-side `w:numPr` elements, in 6 of the 86 files); read as 0 they
- * leave those paragraphs unnumbered, which is what the page showed before this was read at all
- * (`.scratch/num-lent-shapes.ts`, `.scratch/style-numpr-census.ts`).
+ * `w:numId` absent reads as 0, which is what the files here mean by it: the authorized 46 份 write 298 paragraphs
+ * carrying their own `w:numPr`, 52 of those are `w:numId w:val="0"` — the value that cancels numbering
+ * (§17.3.4.25) — and not one of the 298 leaves `w:numId` out (`.scratch/corpus-recheck2.mjs`, `.scratch/pgmar.mjs`).
+ * The style side is 待重证: the old reading (11 of the 48 borrowing paragraphs pointing at a `w:numPr` that writes
+ * only `w:ilvl`, `.scratch/num-lent-shapes.ts`, `.scratch/style-numpr-census.ts`) came from the quarantined cohort.
+ * Reading an absent `w:numId` as 0 is what §17.3.4.28 says either way, and it leaves such a paragraph unnumbered —
+ * which is what the page showed before this property was read at all.
  */
 function numPrOf(numPr: any): { numId: number; ilvl: number } | undefined {
   if (!numPr) return undefined;
@@ -4066,9 +4459,12 @@ function numPrOf(numPr: any): { numId: number; ilvl: number } | undefined {
 
 /**
  * The outline level a `w:outlineLvl` states (§17.3.2.26), as the file signed it: 0…8 are heading levels one to
- * nine and 9 is body text. Of the 86 WPS-written documents' 46,417 paragraphs, 264 state one themselves
- * (0 × 6, 1 × 160, 2 × 42, 9 × 56) and 582 more take it from their style chain, while 433 paragraph styles state
- * one (`.scratch/outline-census.ts`). A value outside 0…9 is read as no statement: the files here never write one.
+ * nine and 9 is body text. Of the authorized 46 份's 7,430 paragraph blocks, 202 state a level themselves and 206
+ * more take one from their style chain — the 408 levels that resolves to are 298 at 0, 60 at 1, 14 at 2, 8 at 3,
+ * 2 at 4 and **26 at 9** — and 172 paragraph styles state one (`.scratch/outline-census.ts`). The old census over
+ * the 86 documents (46,417 paragraphs, 264 stating a level as 0×6 / 1×160 / 2×42 / 9×56, 582 more lent, 433 styles
+ * stating one) is the quarantined cohort's arithmetic. A value outside 0…9 is read as no statement: the files here
+ * never write one.
  */
 function outlineOf(outlineLvl: any): number | undefined {
   if (outlineLvl === undefined) return undefined;
@@ -4097,7 +4493,8 @@ function paraStyle(pPr: any): ParaStyle {
   const align = pPr.jc?.["@_val"];
   if (align !== undefined) s.align = String(align);
   Object.assign(s, indOf(pPr.ind), spacingOf(pPr.spacing));
-  if (pPr.pageBreakBefore !== undefined) s.pageBreakBefore = true;
+  const pbb = onOff(pPr.pageBreakBefore);
+  if (pbb !== undefined) s.pageBreakBefore = pbb;
   const keepNext = onOff(pPr.keepNext);
   if (keepNext !== undefined) s.keepNext = keepNext;
   const keepLines = onOff(pPr.keepLines);
@@ -4110,6 +4507,16 @@ function paraStyle(pPr: any): ParaStyle {
   if (numPr) s.numPr = numPr;
   const outline = outlineOf(pPr.outlineLvl);
   if (outline !== undefined) s.outlineLevel = outline;
+  // The box. `w:pBdr` names one child per side it says anything about — including `w:val="none"`, which is a
+  // statement and not a silence — and `w:shd@w:fill` is the ground under the lines, kept as the file's own token
+  // when it names none. Both are read the same way from a `w:style`'s `w:pPr`, from a `w:pPrChange` record, and
+  // from a paragraph's own properties.
+  const borders = paraBordersOf(asArray(pPr.pBdr)[0]);
+  if (borders) s.borders = borders;
+  const shd = shadingOf(asArray(pPr.shd)[0]);
+  if (shd) s.shading = shd;
+  const stops = tabStopsOf(asArray(pPr.tabs)[0]);
+  if (stops) s.tabStops = stops;
   return s;
 }
 
@@ -4124,31 +4531,64 @@ export const PARA_STYLE_KEYS: (keyof ParaStyle)[] = [
  * The properties a paragraph may take from its styles, in the order `paraLent` fills them. The style's own
  * `w:pPr` slice states more than this (`paraStyle` reads it whole); what is not listed here is not lent.
  *
- * `w:pageBreakBefore` is deliberately out: no paragraph in the 86 WPS-written documents asks a style for a
- * page break it does not state itself (`.scratch/basedon-chain.ts` counts the `w:pPr` children the styles do
- * write, and `w:pageBreakBefore` is not among the ones a paragraph borrows).
+ * The five page-keeping switches are asked of the ladder one rung at a time over the 7,393 `w:p` that
+ * `word/document.xml` of the authorized 46 份 holds — body paragraphs, table cells and text boxes alike, since the
+ * file writes these elements in all three — and this is where each of them actually sits
+ * (`.scratch/toggle-lent-chain.ts`; `w:val="0"` counted as off, a bare element as on):
  *
- * The three page-keeping rules are in, and the audience for them is the largest this list has. Over the 115
- * WPS-written documents with a table that are on disk now (`.scratch/wps-keep-lent.mjs`; the 86-line list the
- * earlier rounds read is gone with `/tmp` and re-deriving it from the same filter gives 115, so every figure
- * here is against the new one): 113 of the 115 state `w:widowControl` in `word/styles.xml` — 220 of them, 160
- * saying **off** — and 10,205 paragraphs take that off from their chain while stating nothing of their own.
- * A reader that only looks at the paragraph's own `w:pPr` widow-protects all 10,205, which is what #126 did.
- * `w:keepNext` and `w:keepLines` each appear 58 times in the styles and lend 83 paragraphs apiece (5 files).
- * `w:docDefaults/w:pPrDefault` states none of the three in any of the 115, so the ladder below the default
- * paragraph style still has nothing to lend here.
+ * | | 段自己 | 样式第 1 跳 | 第 2 跳 | 默认段落样式 | docDefaults | 无人说 |
+ * |---|---|---|---|---|---|---|
+ * | `w:widowControl` | 160 off / 86 on | 30 off / 28 on | 1,370 off | 5,601 off | 0 | 118 |
+ * | `w:keepNext` | 200 off | 182 on | 0 | 0 | 0 | 7,011 |
+ * | `w:keepLines` | 200 off | 182 on | 0 | 0 | 0 | 7,011 |
+ * | `w:snapToGrid` | 224 off / 180 on | 24 off / 16 on | 12 off | 154 off | 0 | 6,783 |
+ * | `w:pageBreakBefore` | 200 off | 0 | 0 | 0 | 0 | 7,193 |
  *
- * `w:snapToGrid` joins the list on the same evidence, one rung up: over the 201 WPS-written documents,
- * `word/styles.xml` states it at a slot that can lend 275 times and 267 of those say **off**, while 1,994
- * paragraphs state the off on themselves (`.scratch/wps-snap-where.mjs`, which attributes every element to the
- * slot its ancestor stack puts it in — the other 56 of styles' 331 and 72 of the body's 3,466 sit in `w:rPr`). A
- * paragraph that says nothing about the grid and sits under one of those 267 styles is a paragraph the file told
- * not to snap. Table styles lend none of it (0 in the corpus, `.scratch/wps-grid-audience.mjs`).
+ * Every row sums to 7,393, and the same family comes back through `WordDocument.openBytes`: of the 3,120
+ * paragraphs that walk reaches, 2,937 resolve to widow-**off**, 182 to `keepNext` on, 232 to `snapToGrid` off, and
+ * none is left `undefined` while its own `w:pPr` stated the switch (`.scratch/widow-model.ts`; the walk stops at
+ * `carried` containers, so its denominator is smaller than the file's own by design).
+ *
+ * This table answers *which rung speaks*; it is not the element count, and the two differ in one cell. Counting
+ * the elements by offset instead (`PPR_ORDER`-free, `.scratch/ppr-ladder-referee.ts`) gives `word/document.xml`
+ * 246 `w:widowControl` (86 bare / 160 off), 200 `w:keepNext`, 200 `w:keepLines`, 406 `w:snapToGrid` (180 bare /
+ * 226 off) and 200 `w:pageBreakBefore`, plus 63 / 90 / 90 / 118 / **0** in `word/styles.xml` and 4 more
+ * `w:snapToGrid` in the bands — four of the five rows agree with the 段自己 column exactly, and `w:snapToGrid` is
+ * 2 short: the walk pairs `<w:p>` with `</w:p>` and does not reach those two paragraphs as themselves, while the
+ * two statements are ordinary live ones — not inside a `w:pPrChange` (the 46 write that record 0 times,
+ * `.scratch/snap-in-pprchange.ts`) and not a second copy in one `w:pPr` (`.scratch/snap-grid-where.ts` finds 406
+ * blocks holding one element each, and none outside a `w:pPr`). Cite the element counts for 枚数 and this table
+ * for the ladder.
+ *
+ * So the four that are in this list are in it because 7,001 paragraphs are told not to widow-protect without
+ * writing a word — 30 from their own named style, 1,370 from a style one further up, 5,601 from the default
+ * paragraph style — alongside 190 told not to snap and 182 told to keep with the next block. A chain-blind reader
+ * gets all three wrong, which is what #126 and #127 fixed; and the answers mostly come from below the paragraph's
+ * own style, since 6,971 of the 7,001 sit two rungs down or lower.
+ *
+ * `w:pageBreakBefore` stays out, now on a measured case rather than on §17.7.2's wording: `word/styles.xml` in the
+ * 46 writes the element 0 times (`.scratch/pbb-spellings.ts`), so there is nothing here for the chain to lend.
+ * What the body does write is 200 `<w:pageBreakBefore w:val="0"/>` and not one on — a statement the paragraph
+ * makes for itself, and one that `onOff` reads as *no break*. Reading the element's presence as "break" instead
+ * forced a page break on all 180 model paragraphs of those 200 (`.scratch/pbb-before-after.ts`, whose printed
+ * column is files × statements — read it per file, never as a total).
+ *
+ * `w:docDefaults/w:pPrDefault/w:pPr` is present in all 46 份 and empty in all 46 (`.scratch/dd-control.ts`), so
+ * the rung under the default paragraph style has nothing to lend — for this family and for the indent and
+ * spacing above it.
+ *
+ * `w:pBdr` and `w:shd` join on the box the files actually draw. Over the 46 authorized docx-family files
+ * (`.scratch/pbdr-audience.ts`), 24 of the 26 `w:pBdr` elements are in `word/styles.xml` — 16 of them naming all
+ * four sides `none`, 8 naming a real bottom line — and 30 paragraph `w:shd` fills sit in 4 files' bodies under
+ * styles that state none. Both are lent **whole**: `paraLent` stops at the first chain rung that states the key,
+ * so a style that names only its bottom is answered by an ancestor that names the other three only when the
+ * paragraph itself writes them (`mergeParaBorders` merges per side against the chain's set). No file in hand
+ * makes a two-rung border chain, so that half is the shape of this ladder, not a measured case.
  */
 const LENT_PARA_KEYS: (keyof ParaStyle)[] = [
   "align", "indentLeft", "indentLeftChars", "indentRight", "indentFirstLine", "indentFirstLineChars",
   "indentHanging", "spacingBefore", "spacingAfter", "lineSpacing", "lineSpacingRule", "numPr", "outlineLevel",
-  "keepNext", "keepLines", "widowControl", "snapToGrid",
+  "keepNext", "keepLines", "widowControl", "snapToGrid", "borders", "shading",
 ];
 
 /** Every paragraph property the model holds for it, from its own `w:pPr` and from its styles. */
@@ -4159,12 +4599,32 @@ export function paraStyleOf(p: Paragraph): ParaStyle {
 }
 
 /**
- * 模型有字段、但不在 `PARA_STYLE_KEYS` 里的那四项。它们不参与 `ownParaStyle` 的「这一段自己说了哪些」那本账
+ * 模型有字段、但不在 `PARA_STYLE_KEYS` 里的那七项。它们不参与 `ownParaStyle` 的「这一段自己说了哪些」那本账
  * （整枚靠 `w:pPr` 的槽位字节带回），可**退回一条格式改动**时它们与别项是同一件事：记录没说的就是当时没说，
  * 字段里留着的那些得清掉、再让样式链重新借给它——不清的话拒绝完这一段还顶着用户刚被否决的那一句，画错了，
  * 下一次存盘还会把被否决的话替它写回件里。
+ *
+ * `w:pBdr` 与 `w:shd` 在这一条上与那四项没有区别：`w:pPrChange` 记的是直接格式，一条「把边框去掉」的改动被
+ * 否决后，段落字段里留着的那一套框必须由样式链重新借给它，而不是继续画用户已经撤回（并被撤回）的那个盒子。
  */
-const MODEL_ONLY_PARA_KEYS = ["keepNext", "keepLines", "widowControl", "snapToGrid"] as const;
+const MODEL_ONLY_PARA_KEYS = ["keepNext", "keepLines", "widowControl", "snapToGrid", "borders", "shading", "tabStops"] as const;
+
+/**
+ * 拆段时新那一段从上一段带走的那一整套段落属性：字段那本账的**全部**，两件都算——`PARA_STYLE_KEYS` 写得出
+ * 句子的，与只靠 `w:pPr` 槽位带回的那六项。
+ *
+ * 这一个清单由模型自己拼，不再由调用手数：手数的那一份（`doc-edit.ts` 的 `fresh`）漏掉过槽位族的四项，
+ * 于是回车把上一段自己写的保持规则、那句「不吸网格」整个忘掉，而 `nextSplit` 只在样式写了 `w:next` 时才走，
+ * 授权件里那种换样式一次都没命中过（`nextStyleOf` 的说明），也就是说丢那四项的正是天天在走的那条路。
+ * 这一项加进来的是同一族：`w:pBdr` 与 `w:shd`。
+ *
+ * 值按引用带走（`numPr` 早就是这么办的），所以改这些字段是**换掉整个物件**，不是往共享的那个物件里改。
+ */
+export function carriedShape(p: Paragraph): ParaStyle {
+  const out: Record<string, unknown> = {};
+  for (const key of [...PARA_STYLE_KEYS, ...MODEL_ONLY_PARA_KEYS]) if (p[key] !== undefined) out[key] = p[key];
+  return out as ParaStyle;
+}
 
 /**
  * The snapshot the write side measures the user against: every property the paragraph **showed** when it came
@@ -4190,11 +4650,17 @@ function paraReadSnapshot(p: Paragraph): ParaStyle {
     spacingAfter: p.spacingAfter,
     lineSpacing: p.lineSpacing,
     lineSpacingRule: p.lineSpacingRule,
-    // 断点那一格只认「说了要」：`false` 与没说在这一项上不是两件事，件里也没有 `<w:pageBreakBefore w:val="0"/>`。
+    // 断点那一格只认「说了要」：件里确实有说不要的（授权 46 份正文 200 枚 `w:val="0"`），而那一枚的话由段落自己的
+    // 槽位字节带着走——`keep` 与 `owned` 都对 false 一言不发，所以这里把 false 记成没说过，写出侧才不会替文件补一枚
+    // 裸的 `<w:pageBreakBefore/>`，把「不断页」改成「断页」。
     pageBreakBefore: p.pageBreakBefore || undefined,
     numPr: p.numPr,
     outlineLevel: p.outlineLevel,
     snapToGrid: p.snapToGrid,
+    // 框与底纹进这本账与 `snapToGrid` 同一个理由：写出侧只把**这一击动过的**说出去，而「动过」是对着入件时
+    // 显示的那一份比的。样式链借来的那个盒子留在账上，段落自己没有 `w:pBdr` 的槽位时才不会替文件编一句。
+    borders: p.borders,
+    shading: p.shading,
   };
 }
 
@@ -4212,9 +4678,11 @@ export const samePropValue = (a: unknown, b: unknown): boolean =>
  *
  * A paragraph's fields are filled from its style chain as well as from its own `w:pPr` (§17.7.2), so a field
  * being set says nothing about who set it, and neither the writer nor a `w:pPrChange` record may claim a
- * borrowed property as the paragraph's own: §17.13.5.19 records the direct formatting, and 159 of the corpus's
- * paragraphs state no `w:pPr` at all while still showing a whole set of properties, because a style lends them
- * (`.scratch/para-no-pr.ts`). The read snapshot answers the question — a value still equal to the one the
+ * borrowed property as the paragraph's own: §17.13.5.19 records the direct formatting, and 159 of the
+ * quarantined cohort's paragraphs state no `w:pPr` at all while still showing a whole set of properties, because
+ * a style lends them (`.scratch/para-no-pr.ts`) — an audience not re-counted on the authorized 46 份, so the
+ * number is 待重证 while the shape it measured is what §17.13.5.19 requires anyway. The read snapshot answers the
+ * question — a value still equal to the one the
  * paragraph was read with came from the chain, and a paragraph this editor built has no snapshot, so every
  * field on it is its own.
  */
@@ -4330,7 +4798,9 @@ function attrsOf(xml: string): Record<string, string> {
  * The attributes of one element's own opening tag, with the named values moved. An attribute the file already
  * spelled keeps the position and the prefix it was read with and only changes its value, so a section written
  * with `w:top` before `w:left` still reads that way after a page-setup change; `null` drops one, which is how
- * turning back to portrait removes `w:orient` rather than spelling a value no file in the corpus uses. A name
+ * turning back to portrait removes `w:orient` rather than spelling a value no file measured here uses (the 86
+ * wrote `w:orient` only for landscape and `w:orient="portrait"` nowhere; neither is re-counted on the authorized
+ * 46 份, so it is 待重证). A name
  * the file never spelled is added at the place ECMA-376 gives it among its neighbours (`order`), with the
  * prefix borrowed from the element's own attributes rather than assumed.
  *
@@ -4378,10 +4848,12 @@ function patchElementAttrs(xml: string, fallbackPrefix: string, updates: Record<
 }
 
 /**
- * The order ECMA-376 §17.3 (CT_SectPr) allows a section's children in, which is the order the 115 sections in
- * the 86 files this machine's WPS wrote use: references, then `w:pgSz`, then `w:pgMar`, then the column and grid
- * settings. A geometry element a minimal file never spelled goes in at its place in this sequence rather than at
- * the end, because a `w:pgMar` written after `w:docGrid` is a file Word refuses to open.
+ * The order ECMA-376 §17.3 (CT_SectPr) allows a section's children in, which is also the order the 115 sections
+ * of the quarantined 86 use: references, then `w:pgSz`, then `w:pgMar`, then the column and grid settings. The
+ * authorized 46 份 have 58 `w:sectPr` and the re-measure did not walk their child order, so that half is 待重证 —
+ * the sequence below is the schema's either way. A geometry element a minimal file never spelled goes in at its
+ * place in this sequence rather than at the end, because a `w:pgMar` written after `w:docGrid` is a file Word
+ * refuses to open.
  */
 const SECT_CHILD_ORDER = [
   "headerReference",
@@ -4407,16 +4879,18 @@ const SECT_CHILD_ORDER = [
   "printerSettings",
 ];
 
-/** The attributes `w:pgSz` spells, in the order the corpus uses. */
+/** The attributes `w:pgSz` spells, in the order the quarantined 86 wrote them (待重证 on the authorized 46 份). */
 const PG_SZ_ATTRS = ["w", "h", "orient"];
-/** The attributes `w:pgMar` spells, in the order all 115 in the corpus use (§17.3.2.13). */
+/** The attributes `w:pgMar` spells, in §17.3.2.13's order — the authorized 46 份 state all seven in every one of
+ *  their 58 `w:pgMar`; the order they state them in is 待重证. */
 const PG_MAR_ATTRS = ["top", "right", "bottom", "left", "header", "footer", "gutter"];
 
 /** The page box 「页面设置」 asks for: the sheet wanted (or the one the section already had), turned as asked. */
 function pageBoxOf(set: PageSetup, widthTwips: number, heightTwips: number): { w: number; h: number } {
   // The two numbers say which sheet, `landscape` only says which way it lies — so the long edge lands in `w:w`
   // for landscape and in `w:h` for portrait. A dialog that sets Letter while the page lies sideways therefore
-  // writes 15840×12240, the same spelling the corpus's 22 landscape sections use.
+  // writes 15840×12240, the same spelling the quarantined 86's 22 landscape sections used — `w:pgSz` is
+  // 待重证 on the authorized 46 份, so this is the schema's reading of "which edge is which", not a count.
   const a = set.paperTwips?.width ?? widthTwips;
   const b = set.paperTwips?.height ?? heightTwips;
   const long = Math.max(a, b);
@@ -4441,8 +4915,9 @@ function marginAttrsOf(set: PageSetup): Record<string, string> {
 /**
  * A section's own bytes with the page geometry written into them. Only `w:pgSz` and `w:pgMar` change, and each
  * is edited where it stands; a section that never spelled one gets it at its place in §17.3's sequence. Every
- * other child keeps its bytes **and** the text written between the children — the 115 sections in the 86 files
- * this machine's WPS wrote have none, but a producer that indents its markup should not lose it here, because
+ * other child keeps its bytes **and** the text written between the children — the 115 sections this machine's WPS
+ * wrote in the quarantined 86 have none (待重证 on the authorized 46 份), but a producer that indents its markup
+ * should not lose it here, because
  * the change the user asked for was the page, not the file's layout.
  */
 function applyPageSetup(xml: string, set: PageSetup): string {
@@ -4542,17 +5017,26 @@ const pprRank = (tag: string): number => {
  * than the model has fields for. `w:ind` holds six of them (`left`, `leftChars`, `right`, `firstLine`,
  * `firstLineChars`, `hanging`) and leaves the character spellings it does not hold (`w:rightChars`,
  * `w:hangingChars`) in place with the file's own bytes. `w:spacing` holds four (`w:before`, `w:after`,
- * `w:line`, `w:lineRule`) and the child usually states more: over the 10,248 `w:spacing` elements in the 201
- * WPS-written documents (`.scratch/spacing-shape.ts`), 2,160 name `w:beforeLines` and 2,005 `w:afterLines` —
- * the same gap in 1/100 行 — and 987/967 name `w:*Autospacing`. Dropping those on a 段前 click is how a save
+ * `w:line`, `w:lineRule`) and the child usually states more. On the authorized set, 3,948 `w:spacing` elements sit in
+ * a `w:pPr` block — over `word/document.xml` + `word/footnotes.xml` + `word/endnotes.xml` of the 46 份, the split
+ * `.scratch/spacing-part-scope.py` prints (`word/styles.xml`'s 246 are a style's own paragraph properties, and the
+ * 页眉页脚 parts write none) (`.scratch/corpus-recheck2.mjs`): 18 of them name `w:beforeLines` and 64 `w:afterLines` —
+ * the same gap in 1/100 行 — and 50 name both `w:beforeAutospacing` and `w:afterAutospacing`. Dropping those on a
+ * 段前 click is how a save
  * quietly rewrites a paragraph the user only nudged.
  *
  * The two spellings of one gap must not be left to disagree: readers honour `w:beforeLines` over `w:before`,
  * so writing only the absolute would make the click invisible in WPS. Where the element states both, their
- * quotient is the document's own 行 pitch — 312 缇 in 2,007 of the 段前 and 1,850 of the 段后 pairs, and 前后同档
- * in all 1,865 elements that state both pairs (never a disagreement) — and that pitch re-spells the 行 count in
- * step. The 33 + 91 elements that state a 行 count and no absolute give no pitch, so the one the user just
- * replaced is the one that goes: a paragraph the page has to draw from a stated distance.
+ * quotient is the document's own 行 pitch — on the authorized set that is 312 缇 in 68 of the 80 elements that state
+ * a pair (段前 16 枚、段后 64 枚, `.scratch/corpus-recheck2.mjs`); whether the two gaps inside one element ever
+ * disagree is 待重证 (the old reading said 1,865 elements, never once) — and that pitch re-spells the 行 count in
+ * step. The 2 elements that state a 行 count and no absolute (`w:beforeLines` alone) give no pitch, so the one the
+ * user just replaced is the one that goes: a paragraph the page has to draw from a stated distance.
+ *
+ * `w:pBdr` 与 `w:shd` 在这一条上与 `w:spacing` 是同一族，只是**逐边**而非逐属性：一枚 `w:pBdr` 里几条边各说各的
+ * （§17.3.2.36 的孩子是 `CT_PBdr` 的六条边），所以只有这一击动过的那几边由字段重写，其余的边按件的字节带着走，
+ * 连它身上模型没有字段的那些属性（`w:themeColor`/`w:frame`）一起留着。#144 之前这里**不认领**这两枚孩子，
+ * 于是「画对了、存下去没了」——见 `paraBorderChanges`。
  */
 export function syncParaSlots(p: Paragraph): void {
   const slots = p.pPrSlots;
@@ -4617,12 +5101,15 @@ export function syncParaSlots(p: Paragraph): void {
       const value = p[key] as number | undefined;
       putAttr(written, name, value === undefined ? undefined : String(Math.round(value)), SPACING_ORDER, prefix);
       // 行单位那一笔跟得上就跟上：读者认 `w:beforeLines` 多过认 `w:before`，留着一个对不上的行数，这一击在
-      // WPS 里等于没发生。件只说了行数、说不出档位时（201 份里段前 33 枚、段后 91 枚），被替掉的那句就摘掉。
+      // WPS 里等于没发生。件只说了行数、说不出档位时——授权口径 46 份的 `w:pPr` 里 `w:before`/`w:beforeLines`
+      // 成对 16 枚、`w:after`/`w:afterLines` 64 枚，只写行数不写缇数的只有 2 枚（`.scratch/corpus-recheck2.mjs`）
+      // ——被替掉的那句就摘掉。
       if (said.has(linesName)) {
         const pitch = pitchOf(name, linesName);
         putAttr(written, linesName, value === undefined || pitch === undefined ? undefined : String(Math.round((value * 100) / pitch)), SPACING_ORDER, prefix);
       }
-      // 「按行自动加空」与刚填进去的数不能两头都说；关掉的字面是件自己写的那种（语料里 13 枚就这么写）。
+      // 「按行自动加空」与刚填进去的数不能两头都说；关掉的字面是件自己写的那种（作废口径里 13 枚这么写，
+      // `w:*Autospacing` 在授权 46 份上没重测：待重证）。
       if (said.has(autoName) && value !== undefined && saidOn(autoName)) putAttr(written, autoName, "0", SPACING_ORDER, prefix);
     };
     putGap("spacingBefore", "before", "beforeLines", "beforeAutospacing");
@@ -4630,15 +5117,18 @@ export function syncParaSlots(p: Paragraph): void {
     if (moved("lineSpacing") || moved("lineSpacingRule")) {
       const line = p.lineSpacing as number | undefined;
       putAttr(written, "line", line === undefined ? undefined : String(Math.round(line)), SPACING_ORDER, prefix);
-      // 件里 `w:line` 与 `w:lineRule` 从来没单独出现过（201 份里 7,810 枚成对、0 枚只写一边），所以行高连着
+      // 件里 `w:line` 与 `w:lineRule` 从来没单独出现过（授权口径 46 份的 document+footnotes+endnotes 三件里，
+      // 挂在真 `w:p` 的 `w:pPr` 下 3,948 枚成对、0 枚只写一边，`.scratch/corpus-recheck2.mjs` 与
+      // `.scratch/spacing-part-scope.py`），所以行高连着
       // 它的单位一起写；模型只存了数没存规则时按 §17.3.1.27 的缺省签名 `w:auto`。
       putAttr(written, "lineRule", line === undefined ? undefined : String(p.lineSpacingRule ?? "auto"), SPACING_ORDER, prefix);
     }
     wanted.push({ tag: "spacing", xml: written.length ? `<${prefix}:spacing ${written.map((k) => k.xml).join(" ")}/>` : "" });
   }
   // 「如果定义了文档网格，则对齐到网格」那一句：件里只有两种拼法——说开**裸写**、说关写 `w:val="0"`
-  // （201 份 `document.xml` 的 3,466 枚里裸写 1,416、`"0"` 2,381，没有一枚写 `"1"` 或 `"false"`；
-  // `.scratch/snap-grid-audience.ts`）。字段是三态的：`undefined` = 这一段没说（照样式链或缺省的「吸」），
+  // （授权口径 46 份的 `word/document.xml` 里 406 枚，裸写 180、说关写 `"0"` 226，两笔合起来就是全部，
+  // 没有一枚写 `"1"` 或 `"false"`；`.scratch/corpus-recheck2.mjs`）。字段是三态的：
+  // `undefined` = 这一段没说（照样式链或缺省的「吸」），
   // 所以只有动过且说得出开/关才整枚换掉；没说过的原件一个字都不动。
   const snapMoved = moved("snapToGrid") && p.snapToGrid !== undefined;
   if (snapMoved) {
@@ -4647,7 +5137,27 @@ export function syncParaSlots(p: Paragraph): void {
       xml: p.snapToGrid ? `<${prefix}:snapToGrid/>` : `<${prefix}:snapToGrid ${prefix}:val="0"/>`,
     });
   }
-  const owned = new Set(["pStyle", "pageBreakBefore", "numPr", "jc", ...(indMoved ? ["ind"] : []), ...(spacingMoved ? ["spacing"] : []), ...(snapMoved ? ["snapToGrid"] : [])]);
+  // 框：逐边对着读快照比，只有动过的那几边重写；没动的边——这一段自己写的、还有从样式链借来的——一个字节不动。
+  // 借来的那一份尤其要说清：`asRead.borders` 里就有它（入件时页面上画的那一整套），把它抄进段落自己的
+  // `w:pBdr` 就是替文件编一句「这一段说过框」，而它说的只有被改过的那一边。
+  const box = moved("borders") ? paraBorderChanges(p) : undefined;
+  if (box) {
+    wanted.push({ tag: "pBdr", xml: paraBorderSlotXml(slots.find((s) => s.tag === "pBdr")?.xml, box, prefix) });
+  }
+  // 地：字段只装着 `w:fill` 那一句，图案（`w:val`）与边线色（`w:color`）是件的说法，原样留着；件没写过这一枚
+  // 孩子时才按授权语料的形状补上（46 份里 30 枚段落底纹，`.scratch/pbdr-audience.ts`；这 30 枚连同其余各层，
+  // 1,676 枚 `w:shd` 无一例外写 `w:val="clear"`（`.scratch/shd-audience.ts`），而那句 `w:color="auto"` 只在作废
+  // 口径的 30/30 里取过证，授权 46 份上是待重证）。
+  const shdFill = moved("shading") ? p.shading : undefined;
+  const shdMoved = shdFill !== undefined;
+  if (shdMoved) {
+    wanted.push({ tag: "shd", xml: shadingSlotXml(slots.find((s) => s.tag === "shd")?.xml, shdFill, prefix) });
+  }
+  // 断页那一枚只在「说了要」时认领：`keep` 对 false 一言不发，若这里照样认领，件自己那句
+  // `<w:pageBreakBefore w:val="0"/>`（授权 46 份里 180 枚）会在认领时连同槽位一起消失。
+  const owned = new Set(["pStyle", ...(p.pageBreakBefore === true ? ["pageBreakBefore"] : []), "numPr", "jc",
+    ...(indMoved ? ["ind"] : []), ...(spacingMoved ? ["spacing"] : []),
+    ...(snapMoved ? ["snapToGrid"] : []), ...(box ? ["pBdr"] : []), ...(shdMoved ? ["shd"] : [])]);
   let next = slots.filter((s) => !owned.has(s.tag));
   for (const w of wanted) {
     const at = next.findIndex((s) => pprRank(s.tag) > pprRank(w.tag));
@@ -4655,6 +5165,102 @@ export function syncParaSlots(p: Paragraph): void {
   }
   p.pPrSlots = next.length ? [...next].sort((a, b) => pprRank(a.tag) - pprRank(b.tag)) : undefined;
 }
+
+/** `CT_Border` 的属性序（§17.3.2.36 的每一条边）：模型认前四枚，后四枚是件的，改这一边时也留在原位。 */
+const BORDER_ATTR_ORDER = ["val", "sz", "space", "color", "themeColor", "themeShade", "themeTint", "frame"];
+/** `CT_Shd` 的属性序（§17.13.12）：授权口径 46 份里 30/30 枚段落底纹只写头一枚与末两枚，中间那四枚主题色 0 枚。 */
+const SHD_ATTR_ORDER = ["val", "color", "themeColor", "themeFill", "themeColorTint", "themeColorShade", "fill"];
+
+/**
+ * 一枚框槽（`w:pBdr` / `w:tblBorders` / `w:tcBorders`）里已有的孩子，按标签索引、连件的字节一起留着。
+ * 按 `childSpans` 拆而不按正则：`CT_Border` 只有属性，可 `<w:top w:val="single"></w:top>` 这一样也合规，
+ * 而重建是把槽里的孩子**逐枚摆回去**的——正则只认自闭合那种，遇到成对写法就会把这一边整枚抹掉。
+ */
+function borderSidesOf(xml: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const kid of childSpans(elementContent(xml))) out.set(kid.tag, kid.xml);
+  return out;
+}
+
+/**
+ * 这一段这一击**动过的边**：对着读快照逐边比，内容没变的边不说。`asRead.borders` 是入件时页面上画的那一整套
+ * （含样式链借来的），所以「没变」的那几边就算报出去也只是把样式的话抄到段落身上；而 §17.7.2 是**逐边**解决的，
+ * 只报动过的那几条在语义上完整——没报的边继续从样式借。没有快照的段（编辑器自己拆出来的）每一边都算动过。
+ */
+export function paraBorderChanges(p: Paragraph): ParaBorderSet | undefined {
+  const now = p.borders;
+  if (!now) return undefined;
+  const was = p.asRead?.borders;
+  const out: ParaBorderSet = {};
+  let any = false;
+  for (const side of PBDR_ORDER) {
+    const edge = now[side];
+    if (!edge || (was && samePropValue(was[side], edge))) continue;
+    out[side] = edge;
+    any = true;
+  }
+  return any ? out : undefined;
+}
+
+/** 一边的字面：件写过的属性留着，模型认得的那四枚跟着字段走。 */
+function borderSideXml(side: string, base: string | undefined, edge: TableBorder, prefix: string): string {
+  const written = attrsWritten(base ?? "");
+  putAttr(written, "val", edge.val, BORDER_ATTR_ORDER, prefix);
+  putAttr(written, "sz", edge.size === undefined ? undefined : String(edge.size), BORDER_ATTR_ORDER, prefix);
+  putAttr(written, "space", edge.space === undefined ? undefined : String(edge.space), BORDER_ATTR_ORDER, prefix);
+  putAttr(written, "color", edge.color, BORDER_ATTR_ORDER, prefix);
+  return `<${prefix}:${side}${written.length ? ` ${written.map((k) => k.xml).join(" ")}` : ""}/>`;
+}
+
+/**
+ * 重建一枚框槽：`changes` 点名的边由字段重写，没点名的边（含这一段/这一张表自己写的其余边）按件的字节带着走。
+ * 孩子按 `sides` 的边序摆，`sides` 之外还留在件里的那些排在后面——槽里没有模型不认的孩子时，这两段是同一件事。
+ */
+function borderSlotXml(
+  tag: string,
+  own: string | undefined,
+  changes: Record<string, TableBorder | undefined>,
+  sides: readonly string[],
+  prefix: string,
+): string {
+  const base = borderSidesOf(own ?? "");
+  for (const side of sides) {
+    const edge = changes[side];
+    if (edge) base.set(side, borderSideXml(side, base.get(side), edge, prefix));
+  }
+  const kids = [...sides.filter((side) => base.has(side)), ...[...base.keys()].filter((side) => !sides.includes(side))].map(
+    (side) => base.get(side)!,
+  );
+  return kids.length ? `<${prefix}:${tag}>${kids.join("")}</${prefix}:${tag}>` : "";
+}
+
+/** 重建这一段那一枚 `w:pBdr`：动过的边由字段重写，其余按件的字节走。 */
+function paraBorderSlotXml(own: string | undefined, changes: ParaBorderSet, prefix: string): string {
+  return borderSlotXml("pBdr", own, changes, PBDR_ORDER, prefix);
+}
+
+/**
+ * 底纹那一枚孩子（`w:pPr`、`w:tblPr`、`w:tcPr` 三层共用同一条写法）：只有 `w:fill` 跟着字段走，
+ * `w:val`/`w:color` 是件的说法，件没写过时按授权语料的形状补——46 份件里 1,676 枚 `w:shd` 全是
+ * `w:val="clear" w:color="auto"` 加一个 `w:fill`（`.scratch/shd-audience.ts`），没有第二种组合。
+ */
+function shadingSlotXml(own: string | undefined, fill: string, prefix: string): string {
+  const written = attrsWritten(own ?? "");
+  const said = new Map(written.map((k) => [k.name, k.value]));
+  putAttr(written, "val", said.get("val") ?? "clear", SHD_ATTR_ORDER, prefix);
+  putAttr(written, "color", said.get("color") ?? "auto", SHD_ATTR_ORDER, prefix);
+  putAttr(written, "fill", shadingFillToken(fill), SHD_ATTR_ORDER, prefix);
+  return `<${prefix}:shd ${written.map((k) => k.xml).join(" ")}/>`;
+}
+
+/**
+ * `w:shd@w:fill` 的写法：模型里 `#RRGGBB` 是读端给一枚颜色画的形状，回到件里是六位大写、不带 `#`；
+ * 别的值（`auto`）是文件在颜色的位置上写的那个 token，转成大写就是替件签一个 schema 里没有的词（`w:fill="AUTO"`）。
+ */
+export const shadingFillToken = (v: string): string => {
+  const bare = v.startsWith("#") ? v.slice(1) : v;
+  return /^[0-9A-Fa-f]{6}$/.test(bare) ? bare.toUpperCase() : v;
+};
 
 /**
  * `w:lineRule="auto"` 那一族里 `w:line` 的单位：240 分之一行（§17.3.1.27）。`exact`/`atLeast` 的两笔按缇数，
@@ -4664,8 +5270,8 @@ export const LINE_ONE = 240;
 
 /**
  * 件的同一句 `w:spacing` 里两笔一起说时，它们的商就是这个文档认的「一行多高」（缇）：`w:before`／(`w:beforeLines`/100)。
- * 201 份里这样成对写下的有段前 2,007 枚、段后 1,850 枚，商几乎全落在 312 缇（`kind="lines"` 的 `w:docGrid` 那一档，
- * 见 #130），1,865 枚前后两档没有一枚不一致（`.scratch/spacing-shape.ts`）。只说一边说不出来。
+ * 授权口径 46 份的 `w:pPr` 里这样成对写下的有段前 16 枚、段后 64 枚，商落在 312 缇的是其中 68 枚
+ * （`w:type="lines"` 的 `w:docGrid` 那一档，见 #130；`.scratch/corpus-recheck2.mjs`）。只说一边说不出来。
  */
 export const linePitchTwips = (absTwips: string | undefined, lines: string | undefined): number | undefined => {
   const a = Number(absTwips);
@@ -4675,8 +5281,9 @@ export const linePitchTwips = (absTwips: string | undefined, lines: string | und
 
 /**
  * 这一段自己那句 `w:spacing` 里件认的一行多高（缇），给对话框把「0.5 行」这样的字面摆出来用。只读这一段的
- * `w:pPr` 直接孩子：段落标记 `w:rPr` 里那个同名的 `w:spacing` 说的是字符间距（201 份里 913 枚，值是 `w:val`），
- * 它整枚待在 `rPr` 槽的字节里，不是这里的输入。
+ * `w:pPr` 直接孩子：段落标记 `w:rPr` 里那个同名的 `w:spacing` 说的是字符间距（授权口径 46 份的正文部件里
+ * `w:rPr/w:spacing@w:val` 只有 14 枚，`.scratch/corpus-recheck2.mjs`），它整枚待在 `rPr` 槽的字节里，
+ * 不是这里的输入。
  */
 export function paraSpacingPitch(p: Paragraph): number | undefined {
   const xml = p.pPrSlots?.find((s) => s.tag === "spacing")?.xml ?? "";
@@ -4696,8 +5303,12 @@ function attrsWritten(xml: string): { name: string; xml: string; value: string }
 
 /**
  * 把模型握着的那一个属性摆进文件自己的序列：`spell` 为空就是这一笔不要了；原来写着就原地换值，没写过就按
- * `order` 的先后插进第一个比它晚的属性前面——顺序是件定的（201 份的 10,248 枚 `w:spacing` 里属性先后只有一簇，
- * 全在 `before, beforeLines, beforeAutospacing, after, afterLines, afterAutospacing, line, lineRule` 这一条上）。
+ * `order` 的先后插进第一个比它晚的属性前面——顺序是件定的。作废口径里那一簇（201 份的 10,248 枚 `w:spacing`
+ * 全落在 `before, beforeLines, beforeAutospacing, after, afterLines, afterAutospacing, line, lineRule` 这一条上）
+ * 的属性先后没有重测，是待重证；授权 46 份能给出的是形状本身：`word/document.xml` + `word/footnotes.xml` +
+ * `word/endnotes.xml` 三件里，挂在真 `w:p` 的 `w:pPr` 下成对写 `w:line`+`w:lineRule` 的 3,948
+ * 枚中 3,696 枚只写这一对，全部属性组合共 8 种（`.scratch/corpus-recheck2.mjs`；部件拆分见
+ * `.scratch/spacing-part-scope.py`：3,924 + 12 + 12）。
  */
 function putAttr(
   written: { name: string; xml: string; value: string }[],
@@ -4720,6 +5331,179 @@ function putAttr(
 }
 
 
+/**
+ * 一件属性集（`w:tblPr` / `w:tcPr` / `w:sectPr` 那一类）里换掉**一枚孩子**：原有的整枚原地替换，没有的按
+ * `order` 的序插进第一枚比它晚的孩子前面，给空串就是摘掉这一枚。其余孩子与孩子**之间**的文字按原件带着走，
+ * 与 `applyPageSetup` 对 `w:sectPr` 做的事同一条口径——用户要改的是这一枚孩子，不是这个文件的排版。
+ */
+function replaceElementChild(setXml: string, tag: string, xml: string, order: readonly string[]): string {
+  const rank = (t: string): number => {
+    const at = order.indexOf(t);
+    return at < 0 ? order.length : at;
+  };
+  const content = elementContent(setXml);
+  const pieces: { tag: string; xml: string; before: string }[] = [];
+  let rest = content;
+  let carry = "";
+  let saw = false;
+  for (const kid of childSpans(content)) {
+    const at = rest.indexOf(kid.xml);
+    if (at < 0) continue;
+    carry += rest.slice(0, at);
+    rest = rest.slice(at + kid.xml.length);
+    if (kid.tag === tag) {
+      saw = true;
+      if (!xml) continue;
+      pieces.push({ tag, xml, before: carry });
+    } else pieces.push({ tag: kid.tag, xml: kid.xml, before: carry });
+    carry = "";
+  }
+  rest = carry + rest;
+  if (xml && !saw) {
+    const at = pieces.findIndex((p) => rank(p.tag) > rank(tag));
+    const piece = { tag, xml, before: at < 0 ? "" : pieces[at]!.before };
+    if (at >= 0) pieces[at] = { ...pieces[at]!, before: "" };
+    if (at < 0) pieces.push(piece);
+    else pieces.splice(at, 0, piece);
+  }
+  const body = pieces.map((p) => p.before + p.xml).join("") + rest;
+  const name = /^<([^/\s>]+)/.exec(setXml)?.[1] ?? "";
+  return body ? `<${name}>${body}</${name}>` : `<${name}/>`;
+}
+
+/** 一个孩子集里某一枚孩子的原文，没有就是这一件没写过这一枚。 */
+const childOf = (setXml: string, tag: string): string | undefined => childSpans(elementContent(setXml)).find((s) => s.tag === tag)?.xml;
+
+/** 一枚元素自己的名字空间前缀别名：新写的孩子要与同组的邻居用同一个前缀，否则读起来是另一枚元素。 */
+const tagPrefix = (xml: string): string => /^<([A-Za-z_][-\w.]*):/.exec(xml)?.[1] ?? "w";
+
+/** `CT_TblPr`（§17.4.60）给孩子的序：新写的一枚按它插，不是摆在末尾。 */
+const TBLPR_CHILD_ORDER = [
+  "tblStyle", "tblpPr", "tblOverlap", "bidiVisual", "tblStyleRowBandSize", "tblStyleColBandSize", "tblW", "jc",
+  "tblCellSpacing", "tblInd", "tblBorders", "shd", "tblLayout", "tblCellMar", "tblLook", "tblCaption",
+  "tblDescription", "tblPrChange",
+];
+/** `CT_TcPr`（§17.4.73）给孩子的序。 */
+const TCPR_CHILD_ORDER = [
+  "cnfStyle", "tcW", "gridSpan", "hMerge", "vMerge", "tcBorders", "shd", "noWrap", "tcMar", "textDirection",
+  "tcFitText", "vAlign", "hideMark", "headers", "cellIns", "cellDel", "cellMerge", "tcPrChange",
+];
+/**
+ * `CT_TblBorders`（§17.4.76）的孩子序：表比一格多出「内部横/内部竖」两条，斜线两边都有。
+ * 与模型那一份 `BORDER_ORDER` 同序同集合——`w:between` 是 `CT_PBdr`（§17.3.2.36）才有的那一枚，
+ * 摆进这一族就是在编 schema 里不存在的孩子。
+ */
+export const TBL_BORDER_SIDES = [...BORDER_ORDER] as const;
+/** `CT_TcBorders`（§17.4.77）的孩子序：一格只有自己的四条与两条斜线，说不出「内部」——那是表才有的那一枚孩子。 */
+export const TC_BORDER_SIDES = ["top", "start", "left", "bottom", "end", "right", "tl2br", "tr2bl"] as const;
+
+/**
+ * 这一击**动过的边**：把补丁前后的两套框逐边比，没变的边不进这一份。表与格没有段落那样的读快照（`asRead`），
+ * 参照就是件里带回来的那一份；没点名的边继续按件的字节走，连模型没有字段的那些属性（`w:themeColor`、`w:frame`）
+ * 与「写过一条没有 `w:val` 的边」这种形状一起留着——`bordersOf` 只认带 `w:val` 的边，整槽重拼就会替件把那几条抹掉。
+ */
+export function borderDelta(before: BorderSet | undefined, after: BorderSet | undefined): BorderSet {
+  const out: BorderSet = {};
+  for (const side of BORDER_ORDER) {
+    const edge = after?.[side];
+    if (edge && !samePropValue(before?.[side], edge)) out[side] = edge;
+  }
+  return out;
+}
+
+/**
+ * 表这一击动过的边写回它自己的 `w:tblPr`，`shading` 给了就把同一击的底纹也写回同一枚 `w:tblPr` 的 `w:shd` 槽。
+ * 表若没有 `tblPrXml`（编辑器自己造的表），这里什么都不做：写出器本来就按字段拼 `w:tblBorders` 与 `w:shd`，
+ * 这条只管「件自己写过」的那一半。
+ * 只点底纹、没动边时，`w:tblBorders` 一个字节也不许多动：那一枚孩子原样留在件里，`replaceElementChild`
+ * 只在 `slot` 非空时才碰它——`borderSlotXml` 对「一件没改」的输入会照抄件里已有的那些边，所以这条不会凭空造。
+ */
+export function syncTableBox(t: Table, changes: BorderSet, shading?: string): void {
+  const own = t.tblPrXml;
+  if (!own) return;
+  let next = own;
+  const slot = borderSlotXml("tblBorders", childOf(own, "tblBorders"), changes, TBL_BORDER_SIDES, tagPrefix(own));
+  if (slot) next = replaceElementChild(next, "tblBorders", slot, TBLPR_CHILD_ORDER);
+  if (shading !== undefined)
+    next = replaceElementChild(
+      next,
+      "shd",
+      shadingSlotXml(childOf(next, "shd"), shading, tagPrefix(next)),
+      TBLPR_CHILD_ORDER,
+    );
+  t.tblPrXml = next;
+}
+
+/** 一格这一击动过的边与地写回它自己的 `w:tcPr`；与表同一条口径，没有原件的格子由写出器按字段拼。 */
+export function syncCellBox(cell: TableCell, changes: BorderSet, shading?: string): void {
+  const own = cell.tcPrXml;
+  if (!own) return;
+  let next = own;
+  const slot = borderSlotXml("tcBorders", childOf(own, "tcBorders"), changes, TC_BORDER_SIDES, tagPrefix(own));
+  if (slot) next = replaceElementChild(next, "tcBorders", slot, TCPR_CHILD_ORDER);
+  if (shading !== undefined)
+    next = replaceElementChild(next, "shd", shadingSlotXml(childOf(next, "shd"), shading, tagPrefix(next)), TCPR_CHILD_ORDER);
+  cell.tcPrXml = next;
+}
+
+/** 一套属性在孩子里说过的那几枚：别人的待裁决不算进这一份快照。 */
+const statedChildren = (setXml: string): PropSlot[] =>
+  childSpans(elementContent(setXml))
+    .filter((k) => !TABLE_RECORD_TAGS.has(k.tag))
+    .map((k) => ({ tag: k.tag, xml: k.xml }));
+
+/** 一件部件自己说过的字段——「拒绝」按 `restore*` 把这一份捡回模型。 */
+const statedFields = <T extends object>(part: T, keys: readonly string[]): Record<string, unknown> => {
+  const out: Record<string, unknown> = {};
+  const src = part as Record<string, unknown>;
+  for (const key of keys) if (src[key] !== undefined) out[key] = src[key];
+  return out;
+};
+
+/** 表自己说过的那一整套 `w:tblPr` 字段。 */
+export const tableShapeOf = (t: Table): TableStyle => statedFields(t, TABLE_STYLE_KEYS) as TableStyle;
+/** 一格自己说过的那一整套 `w:tcPr` 字段。 */
+export const cellShapeOf = (c: TableCell): CellStyle => statedFields(c, CELL_STYLE_KEYS) as CellStyle;
+
+/**
+ * 开着修订改表这一圈（`w:tblBorders`、`w:tblPr/w:shd`）时留下的 `w:tblPrChange`。记的是**改之前那一整套自己
+ * 说过**的属性，与段落、run 那两条同口径：从 `w:tblStyle` 借来的不进快照，一张表本来什么也没说时记的是一枚空套，
+ * 拒绝就把它放回「借用」那一边。两份都得留：文字那一份挂进带着的 `w:tblPr` 末尾，因为 `decideSetXml` 与写出读的都是
+ * 这一枚孩子，而件里没建模的属性（`w:tblLook`、`w:tblCellMar`）连自己的字一起回去；字段那一份是给「拒绝」把属性
+ * 捡回模型用的。没有 `w:tblPr` 的表（编辑器自己造的）没有文字可挂，记录只进字段，由写出器按字段拼这一枚孩子。
+ * 同一个人记过就不再重签：一条 `w:id` 只裁一次，两击得一起退。
+ */
+export function signTableRevision(t: Table, sign: { id: number; author: string; date?: string }, was: TableStyle, wasXml?: string): TableFormatRevision {
+  const mine = t.revFormat?.author === sign.author ? t.revFormat : undefined;
+  if (mine) return mine;
+  const rec: TableFormatRevision = { kind: "format", tag: "tblPrChange", ...sign, prev: was, prevSlots: wasXml ? statedChildren(wasXml) : [] };
+  t.revFormat = rec;
+  if (t.tblPrXml) {
+    const recorded = rec.prevSlots.map((s) => s.xml).join("");
+    t.tblPrXml = replaceElementChild(t.tblPrXml, "tblPrChange", changeRecordXml("tblPrChange", sign, recorded, tagPrefix(t.tblPrXml)), TBLPR_CHILD_ORDER);
+  }
+  return rec;
+}
+
+/**
+ * 开着修订改一格那一圈时留下的 `w:tcPrChange`，与表那一条同两分：文字挂进 `w:tcPr`（按 `CT_TcPr` 的孩子序，
+ * 落在别人的 `w:cellIns`/`w:cellDel`/`w:cellMerge` 之后），字段留作「拒绝」的参照。
+ * `CT_TcPr`（§17.4.73）里 `w:tcPrChange` 只容一枚，所以新签的这枚把上一枚顶掉——模型这一侧同步顶，否则
+ * `revs` 里留一条文字里已经没有的记录，「拒绝」就会把一套没写过的属性摆回件里。
+ * 同一个人记过就不再重签：一条 `w:id` 只裁一次，两击得一起退。
+ */
+export function signCellRevision(cell: TableCell, sign: { id: number; author: string; date?: string }, was: CellStyle, wasXml?: string): CellRevision {
+  const mine = (cell.revs ?? []).find((r) => r.tag === "tcPrChange" && r.author === sign.author);
+  if (mine) return mine;
+  const rec: CellRevision = { tag: "tcPrChange", ...sign, prev: was, prevSlots: wasXml ? statedChildren(wasXml) : [] };
+  if (cell.tcPrXml) {
+    const recorded = rec.prevSlots.map((s) => s.xml).join("");
+    cell.tcPrXml = replaceElementChild(cell.tcPrXml, "tcPrChange", changeRecordXml("tcPrChange", sign, recorded, tagPrefix(cell.tcPrXml)), TCPR_CHILD_ORDER);
+  }
+  cell.revs = [...(cell.revs ?? []).filter((r) => r.tag !== "tcPrChange"), rec];
+  return rec;
+}
+
 /** One edge of `w:tblBorders` or `w:tcBorders`. */
 function borderOf(node: any): TableBorder | undefined {
   const val = str(node?.["@_val"]);
@@ -4740,6 +5524,101 @@ function bordersOf(set: any): BorderSet | undefined {
     }
   }
   return any ? out : undefined;
+}
+
+/** `w:pBdr` (§17.3.2.36): the six sides a paragraph may state, one element per side it says anything about. */
+function paraBordersOf(set: any): ParaBorderSet | undefined {
+  if (!set) return undefined;
+  const out: ParaBorderSet = {};
+  let any = false;
+  for (const side of PBDR_ORDER) {
+    const b = borderOf(set[side]);
+    if (b) {
+      out[side] = b;
+      any = true;
+    }
+  }
+  return any ? out : undefined;
+}
+
+/**
+ * `w:shd@w:fill` (§17.3.2.33) as the element signed it: a colour, or the token the file used where a colour
+ * would go — `w:fill="auto"` in 1,600 of the authorized 46 份's 1,676 `w:shd` elements, the other 76 naming a
+ * hex. Keeping the token is what makes the ladder's
+ * `??` mean 「这一段说不要地」 instead of 「这一段没说」; see `ParaStyle.shading` for the two audiences.
+ * A value the model can't name travels verbatim and draws nothing, so the byte round-trip never invents one.
+ * 授权口径实测（`.scratch/shd-audience.ts`，46 份件）：1,676 枚全是 `w:val="clear" w:color="auto"` 加一个
+ * `w:fill`，其中 `w:tcPr` 1,646 枚（`auto` 1,600 / 十六进制 46）、`w:pPr` 30 枚（十六进制），`w:tblPr` 0 枚。
+ */
+function shadingOf(shd: any): string | undefined {
+  const fill = str(shd?.["@_fill"]);
+  return fill === undefined ? undefined : hex(fill) ?? fill;
+}
+
+/**
+ * The paragraph's own sides over the ones its style chain names. Per side, not per element: §17.7.2 resolves one
+ * property at a time, and a `w:pBdr` whose bottom says `none` under a style whose bottom says `single` is the
+ * paragraph taking that one line back, not the paragraph refusing a box. The corpus says that sentence 18 times
+ * among its 26 `w:pBdr` elements — 16 styles naming all four sides `none`, 2 header-part paragraphs naming a
+ * `none` bottom (`.scratch/pbdr-audience.ts`) — but 0 body paragraphs write a refusal under a style that lends a
+ * line, so the per-side merge is what this ladder needs for the click that has no measured instance yet, and the
+ * measured cases are all one rung up. A paragraph naming no side of
+ * its own keeps the chain's object **by reference**, which is how `nextSplit` tells a borrowed box from one the
+ * paragraph wrote.
+ */
+function mergeParaBorders(own?: ParaBorderSet, lent?: ParaBorderSet): ParaBorderSet | undefined {
+  if (!own) return lent;
+  if (!lent) return own;
+  return { ...lent, ...own };
+}
+
+/**
+ * `w:pPr/w:tabs/w:tab` (§17.4.19) as one stop. `posTwips` is measured from the **left edge of the text area** —
+ * the page's left margin plus `w:gutter`, which is what `render.ts` puts in `--pad-l` — not from the paragraph's
+ * own indent. `leader` keeps the file's `w:leader` token; the page does not draw it yet.
+ *
+ * 受众（授权 46 份，`.scratch/tabs-audience.py`）：370 块 `w:tabs` 全在 `w:pPr` 底下——`word/document.xml` 230、
+ * `word/styles.xml` 90、带子 12，其中 106 块一次写两枚以上；520 枚 `w:tab` 枚枚写 `w:pos`（0 枚漏），
+ * 档只拼了四种——`left` 304、`right` 152、`center` 58、`clear` 6，`decimal`/`bar` 各 0 枚，所以模型不收它们；
+ * 带 `w:leader` 的 94 枚。正文里真正走这些位的制表符（`w:r/w:tab`）116 枚、带子 2 枚。
+ */
+export type TabStop = { posTwips: number; val: "left" | "center" | "right" | "clear"; leader?: string };
+
+/** The `w:tabs` block as written, `w:val="clear"` included. A block that names no stop says nothing. */
+function tabStopsOf(tabs: any): TabStop[] | undefined {
+  const out: TabStop[] = [];
+  for (const t of asArray(tabs?.tab)) {
+    const pos = Number(t?.["@_pos"]);
+    // 没有 `w:pos` 的制表位落不到任何位置上；`w:val` 没说就按 ST_TabVal 的默认值 `left` 算。授权 46 份 520 枚
+    // 枚枚两样都写，这两句只是不给坏件留半枚画歪的位置。
+    if (!Number.isFinite(pos)) continue;
+    const val = str(t?.["@_val"]);
+    out.push({
+      posTwips: pos,
+      val: val === "center" || val === "right" || val === "clear" ? val : "left",
+      leader: str(t?.["@_leader"]),
+    });
+  }
+  return out.length ? out : undefined;
+}
+
+/**
+ * The paragraph's stops over the chain's, **one position at a time** (§17.7.2 resolves a tab stop as its own
+ * property): `upper` replaces the stop `lower` wrote at the same `w:pos` and leaves the rest of that list alone,
+ * while `w:val="clear"` spends itself on the position it names and keeps no place of its own. Nearest-wins over
+ * the whole element — what `paraLent` does for every other key — would let one stop in the paragraph erase a
+ * style's whole set, and 106 of the 370 blocks in the authorized 46 份 write two or more stops at once.
+ */
+function mergeTabStops(lower?: readonly TabStop[], upper?: readonly TabStop[]): TabStop[] | undefined {
+  if (!upper?.length) return lower ? [...lower] : undefined;
+  const byPos = new Map<number, TabStop>();
+  for (const s of lower ?? []) byPos.set(s.posTwips, s);
+  for (const s of upper) {
+    if (s.val === "clear") byPos.delete(s.posTwips);
+    else byPos.set(s.posTwips, s);
+  }
+  const out = [...byPos.values()].sort((a, b) => a.posTwips - b.posTwips);
+  return out.length ? out : undefined;
 }
 
 /**
@@ -4815,6 +5694,7 @@ function tableStyleOf(tblPr: any): TableStyle {
     layout: str(tblPr?.tblLayout?.["@_type"]),
     borders: bordersOf(tblPr?.tblBorders),
     cellMargin: marginOf(tblPr?.tblCellMar),
+    shading: shadingOf(tblPr?.shd),
   };
 }
 
@@ -4901,7 +5781,7 @@ function cellStyleOf(tcPr: any): CellStyle {
   const out: CellStyle = {
     widthTwips: num(tcPr?.tcW?.["@_w"]),
     widthType: str(tcPr?.tcW?.["@_type"]),
-    shading: hex(tcPr?.shd?.["@_fill"]),
+    shading: shadingOf(tcPr?.shd),
     spanCols: num(tcPr?.gridSpan?.["@_val"]),
     spanRows: tcPr?.vMerge === undefined ? undefined : tcPr.vMerge["@_val"] === "restart" ? 1 : 0,
     valign: str(tcPr?.vAlign?.["@_val"]),
@@ -4924,6 +5804,7 @@ export const TABLE_STYLE_KEYS: (keyof TableStyle)[] = [
   "layout",
   "borders",
   "cellMargin",
+  "shading",
 ];
 
 /** Every row property a `w:trPrChange` can carry. */
@@ -4997,27 +5878,31 @@ function runStyle(rPr: any, theme?: ThemeFonts): RunStyle {
   // `w:u` belongs to this same family and spells its cancellation with an enum name instead of `0`: §17.3.2.25's
   // `ST_Underline` says `none`. Reading that as silence left the property the odd one out — a run that said
   // "no underline" under a style that lends one kept the style's line, because §17.7.2 stops per property at the
-  // first rung that *stated* one, and this rung stated it. The files write the sentence: 952 `w:u` with `val`
-  // `none` in the 86 body parts, 254 of them on runs this reader resolves into fields (`.scratch/underline-counted.ts`,
-  // `.scratch/underline-audience.ts`), and not one of those 254 leaves `w:val` off — the shape read here is the
-  // shape WPS writes. None of the 254 sits on a chain that lends a line today, so this is a representation fix,
-  // not a pixel fix; what it buys is that the statement survives an edit that should not have changed it.
+  // first rung that *stated* one, and this rung stated it. 授权 46 份把这句话写得很勤：**`w:u` 1,615 枚 = `single`
+  // 1,565 + `none` 30 + `thick` 20，0 枚裸写**（ElementTree 逐枚；1,593 枚在 `word/document.xml`、22 枚在
+  // `word/styles.xml`）。作废语料上那一句「952 枚 none、其中 254 枚坐在本 reader 解析成字段的 run 上」是
+  // 待重证的旧读数，现在换成上面这组。那 30 枚一枚都不落在「链上有人借给它一条线」的位置上：样式层那 22 枚
+  // `w:u` 全部是**字符样式**写的 `single`，只有 run 自己点名（`w:rStyle`）才借得到，而这 30 枚里没有一枚带
+  // `w:rStyle`（28 枚两个样式指针都没写，2 枚只写 `w:pStyle`），段落样式层 0 枚写 `w:u`。所以这一条同样是
+  // representation fix，不是 pixel fix——它买到的是「一句文件写过的话，不该被一次不相干的编辑改掉」。
   if (rPr.u !== undefined) s.underline = rPr.u["@_val"] !== "none";
   // The last two members of the same on/off family. `w:strike` is §17.3.2.19's `ST_OnOff`, so `0` and `false`
   // cancel it just as they cancel `w:b` — reading the element as "struck, whatever it says" put a line through the
-  // 2 runs in these 86 body parts that state `<w:strike w:val="0"/>` (of the 56 `w:strike` they write, 36 say on
-  // with no `w:val`, 18 sit on a paragraph mark) and give the reader text to hang it on
-  // (`.scratch/onoff-where.ts`, `.scratch/onoff-audience.ts`). `w:vertAlign`'s cancellation is an enum name again
-  // (§17.3.2.24's `ST_VerAlignRun`: `baseline`), and the bodies state nothing else — all 3860 of them, 717 on runs
-  // this reader resolves, none sitting on a chain that lends a superscript — so that half is representation rather
+  // 2 runs stating `<w:strike w:val="0"/>` among the 56 `w:strike` of the quarantined 86's body parts (36 of those
+  // say on with no `w:val`, 18 sit on a paragraph mark) and gave the reader text to hang it on
+  // (`.scratch/onoff-where.ts`, `.scratch/onoff-audience.ts`); `w:strike` has no authorized reading yet — 待重证.
+  // `w:vertAlign`'s cancellation is an enum name again (§17.3.2.24's `ST_VerAlignRun`: `baseline`), and those
+  // bodies state nothing else — all 3860 of them, 717 on runs this reader resolves, none sitting on a chain that
+  // lends a superscript — likewise 待重证 on the authorized 46 份, so that half is representation rather
   // than pixels, the same verdict `w:u` got above.
   if (rPr.strike !== undefined) s.strike = rPr.strike["@_val"] !== "0" && rPr.strike["@_val"] !== "false";
   if (rPr.sz) s.sizePt = Number(rPr.sz["@_val"]) / 2;
   const color = rPr.color?.["@_val"];
   if (color && color !== "auto") s.color = hex(color);
   // `none` is kept as the value it is, not folded into the absence above it: §17.17.64 spells its cancellation with
-  // that enum name, and the files use it for 4,135 of the 4,605 `w:highlight` elements they state — the other 470
-  // all say `yellow`, and no run in these 86 documents leaves `w:val` off (`.scratch/highlight-counted.ts`).
+  // that enum name, and the quarantined 86 use it for 4,135 of the 4,605 `w:highlight` elements they state — the
+  // other 470 all saying `yellow` and none leaving `w:val` off (`.scratch/highlight-counted.ts`). `w:highlight`
+  // has not been re-counted on the authorized 46 份, so that split is 待重证; see `RunStyle.highlight`.
   if (rPr.highlight?.["@_val"]) s.highlight = rPr.highlight["@_val"];
   if (rPr.rFonts) {
     // One element, several faces, and a document may state any subset of them. Each attribute is read on its
@@ -5030,9 +5915,13 @@ function runStyle(rPr: any, theme?: ThemeFonts): RunStyle {
     // A face can also be stated by pointing at the theme instead of naming one, and these files do it for
     // 250 of styles.xml's references and 58 documents' whole run floor (`.scratch/theme-font-audience.ts`).
     // Only where no literal face was written: §17.3.2 gives no precedence between the two, and per slot the files
-    // never need one — across the 55,585 `w:rFonts` in every part of the 201 documents, **0 state a literal face
-    // and a theme reference in the same slot**, though 5,260 elements state one slot literally and another by theme
-    // (`.scratch/theme-slot-pair.ts`). So each slot is asked on its own and a slot that named a face is not asked.
+    // never need one on the authorized set: its 46 份 state `w:asciiTheme` and `w:hAnsiTheme` 1,796 times each,
+    // `w:eastAsiaTheme` 1,143 and `w:csTheme` 1,155, while 11,324 slots name a literal `w:ascii`/`w:eastAsia` face
+    // (`.scratch/corpus-recheck2.mjs`). Whether the two spellings ever share **one** slot is measured on that same
+    // authorized set: of its 14,642 `w:rFonts` tags, 1,957 point a slot at the theme, 11,905 name a literal face and
+    // 650 do both in different slots — while a slot that writes a literal name *and* a theme reference is **0 枚 / 0 件**
+    // (`.scratch/theme-slot-pair-authorized.mjs`). So each slot is asked on its
+    // own and a slot that named a face is not asked.
     if (theme) {
       const script = themeFontScript(asArray(rPr.lang)[0]?.["@_eastAsia"]);
       if (!s.font) {
@@ -5048,6 +5937,59 @@ function runStyle(rPr: any, theme?: ThemeFonts): RunStyle {
   const va = rPr.vertAlign?.["@_val"];
   if (va === "superscript" || va === "subscript" || va === "baseline") s.vertAlign = va;
   return s;
+}
+
+/** §17.3.2.26 按书写系统分派时算东亚的那一类码位，与 `render.ts` 的 `unicode-range` 同一套码段。 */
+export const EAST_ASIAN_TEXT = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+
+/**
+ * 一次「挑脸」管不管得到汉字槽。ribbon 的字体框说的是一个 run 的脸，而 §17.3.2.26 把一个 run 的字按书写系统
+ * 分给 `w:ascii`/`w:hAnsi`/`w:eastAsia` 三槽，所以这一句落到哪几槽得先看件自己怎么说。授权口径 46 份把正文、页眉
+ * 页脚、脚注尾注那几件部件合起来数（`.scratch/corpus-recheck2.mjs`）：1,800 枚 `w:rFonts` 指主题、11,324 枚至少写
+ * 了 `w:ascii` 或 `w:eastAsia` 的一张实名，两槽都写而两张名**不同**的 161 枚——`corpus-recheck.mjs` 独立数出同一枚
+ * 161（并给出两槽都写的 4,475 枚、分布在 15 件里），两份脚本的 161 相符，故引用「4,475 枚中 161 枚不同」这一对；逐槽看（`.scratch/theme-slot-pair-authorized.mjs`，
+ * 各部件 14,642 枚标签）同一槽既写实名又指主题的 **0** 枚 / **0** 件。作废口径那组按正文文字分类的数（汉字正文
+ * 两槽同值 7,706、不同值 47；纯拉丁两槽全同值 1,062；只写拉丁槽的汉字正文 2,331，`.scratch/font-slot-shape.ts`）
+ * 没有按这个口径重测，是待重证。于是：件里已经给这个 run 留了汉字槽（写名或指主题都算留），除非它明说两张不同
+ * 的脸，挑的那张就接着管这一槽；件里没留，只有这段文字自己带汉字时才替它补上——不给一段纯拉丁的 run 写一句
+ * 关于中文的话。
+ * `w:cs`/`w:cstheme` 模型里没有字段，照旧按原件搬。真机 WPS 的字体框改一次究竟写哪几槽仍未取证。
+ */
+export function pickedFaceCoversHan(slots: PropSlot[] | undefined, text: string): boolean {
+  const tag = slots?.find((s) => s.tag === "rFonts")?.xml ?? "";
+  const attr = (name: string): string => new RegExp(`[\\w.-]+:${name}="([^"]*)"`).exec(tag)?.[1]?.trim() ?? "";
+  const latin = attr("ascii") || attr("hAnsi");
+  const east = attr("eastAsia");
+  if (east || attr("eastAsiaTheme")) return !(east && latin && east !== latin);
+  return EAST_ASIAN_TEXT.test(text);
+}
+
+/**
+ * 一次「挑脸」在一个 run 上摊开到哪几槽——这条规矩只有这一个主人：`patched`（选区那一下）与 `armPending`
+ * （悬光标处攒着的那一下）都调它，测试也调它。主人放在 core 而不是 UI，是因为 `src/ui` 那一层要能被这份件
+ * 自己说过的话决定，不该再抄一遍摊开的写法。
+ */
+export function applyFacePick(run: Pick<Inline, "text" | "rPrSlots" | "runText">, face: string): Pick<RunStyle, "font" | "fontEastAsia"> {
+  // 问的是整枚 run：件里那一套 `w:rPr` 是 run 共用的，`w:tab` 那半句自己不带字，但同一枚 run 里写的是中文。
+  return pickedFaceCoversHan(run.rPrSlots, run.runText ?? run.text) ? { font: face, fontEastAsia: face } : { font: face };
+}
+
+/**
+ * 一条格式命令落在一个 run 上的样子。挑脸那一句先问 `applyFacePick` 该管哪几槽——不该管的槽一个字都不动，写端才
+ * 认得出它没挪；空串是「这句撤回」，字段删掉，落回原件那半边的字节。
+ * 主人放在 core 而不是 UI：`src/ui/doc-edit.ts` 的 `restyle` 与 `armPending` 都只是它的调用方，UI 里再抄一份摊开
+ * 的写法就是第二个主人（抄的那份永远不会漏，本文件第一轮即如此）。
+ */
+export function applyRunPatch(inline: Inline, patch: Partial<RunStyle>): Inline {
+  const out: Inline = { ...inline };
+  const entries = Object.entries(patch) as [keyof RunStyle, RunStyle[keyof RunStyle]][];
+  if (patch.font) entries.push(...(Object.entries(applyFacePick(inline, patch.font)) as [keyof RunStyle, RunStyle[keyof RunStyle]][]));
+  for (const [key, value] of entries) {
+    if (value === undefined) continue;
+    if (typeof value === "string" && value === "") delete out[key];
+    else (out as unknown as Record<string, unknown>)[key] = value;
+  }
+  return out;
 }
 
 /**

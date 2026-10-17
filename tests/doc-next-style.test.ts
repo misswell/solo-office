@@ -3,6 +3,7 @@ import { WordDocument, type Paragraph } from "../src/core/docx.js";
 import { writeDocx } from "../src/core/write-docx.js";
 import { OpcPackage, text } from "../src/core/opc.js";
 import { makeOutlineDocx, pStyle } from "./helpers/make-outline.js";
+import { unstamped } from "./helpers/unstamp.js";
 
 /**
  * §17.7.2.24 `w:next` — the style a paragraph takes when Enter splits the one before it, which is what makes
@@ -65,7 +66,7 @@ describe("w:next：样式说「回车之后换成谁」", () => {
     expect(d.nextStyleOf("T1")).toBe("Body1");
     expect(d.paragraphStyleOf("Body1")?.align).toBe("both");
     expect(d.edited).toBe(false);
-    expect(Buffer.from(writeDocx(d)).equals(Buffer.from(bytes))).toBe(true);
+    expect(unstamped(writeDocx(d))).toEqual(unstamped(bytes));
   });
 });
 

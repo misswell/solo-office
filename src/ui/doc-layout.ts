@@ -11,10 +11,12 @@
  * 量的口径都在这里，别处不另定一份：
  *
  * - 一张纸能放正文的高度 = `w:pgSz@w:h` 换 px − 上边距 − 下边距。两个边距取的是**纸上算出来的 padding**
- *   （`render.ts` 由节写成 `--pad-t`/`--pad-b`），所以装订线、纸张方向、横竖版都在这一处自动跟着走。
+ *   （`render.ts` 由节写成 `--pad-t`/`--pad-b`，`applyBandYield` 再往上加带子让出的那一截
+ *   `--band-yield-t/-b`），所以装订线、纸张方向、横竖版与页眉页脚的高低都在这一处自动跟着走。
  *   纸盒自己的 `min-height:1000px` 不参与：那是画出来好看，不是节说的纸高。
- * - `w:header`/`w:footer` 那两个距离**不进这个式子**：这一页的页眉页脚画在纸盒之外（`render.ts` 的 `.hf`），
- *   没有从正文里占走高度。Word 一族是把带子放在页边距之内的，所以我们量出的页数可能比真机少——**未取证**差多少。
+ * - `w:header`/`w:footer` 那两个距离**进这个式子**：带子贴在纸内（`render.ts` 的 `.solo-hf-master`），
+ *   越过边距线的那一截从正文里占走——真机量的就是这条（`/tmp/tall-header.docx`：页眉 10 行、四边 1440 缇、
+ *   `w:header` 720 缇 → 正文上沿 ≈3445 缇，#159）。带子比整页还高时未取证，本版不裁。
  * - 行盒从**画出来的盒子**里量：`Range.getClientRects()` 给的是每个文字碎片的盒子，同一行上的碎片按 `top`
  *   归堆（容差取本段自己那条 `line-height` 的八成：跨行至少差一整行高，同行上两段字号不同也就差几像素）。
  *   一堆算一行，**这一行占多高按它在纸上推进多少算**（本堆上沿到下一堆上沿，最后一堆到这一截在纸上的下沿），
@@ -25,8 +27,9 @@
  *   只读容器（`.doc-carry`）整块算一枚。`w:cantSplit` 这一版没读，所以「这行不许拆」的文件与没写的同样铺。
  * - 另起一页的来路有三条，都是**声明**不是几何：`br[data-brk]` 里那句源文本的 `w:type` 为 `page`、
  *   `render.ts` 由 `w:pageBreakBefore` 写出的 `page-break-before:always`，以及**节界**——带
- *   `w:pPr/w:sectPr` 的段落结束它那一节，下一节从新的一页起。`w:type` 这一版没读：语料那侧的 31 枚
- *   段级 `w:sectPr` 全部没写它（`.scratch/sect-audience.mjs`），也就是 §17.6.22 的缺省 `nextPage`；
+ *   `w:pPr/w:sectPr` 的段落结束它那一节，下一节从新的一页起。`w:type` 这一版没读：授权口径 46 份里段级
+ *   `w:sectPr` 12 枚（8 件），而整批里**任何** `<w:type>` 元素都是 0 枚（`.scratch/oneoff-gap.mjs`、
+ *   `.scratch/corpus-recheck.mjs` #4），也就是 §17.6.22 的缺省 `nextPage`；
  *   写了 `continuous` 的件真机上不在此处另起一页，本版会多算一页（未建模、未取证）。断点后面没有内容时
  *   仍然多算一页（那一页是空的）——断点说的是「从这里另起一页」，不是「后面有东西才另起」。
  * - **段尾断点多画出来的那几行空白既不计行也不占高**：断点落在段落末尾时浏览器给那一段多画空行，但**最后一条不画**
@@ -38,13 +41,15 @@
  *   垫片的高度按真实几何让位（那几行空白落在垫距里），但它们仍不进单位，页数那一侧照旧偏乐观。
  *   `.scratch/pagination-dom.ts` 按这条口径钉行数，独立来路扣的是「枚数−1」而不是「枚数」。
  * - **分栏符是一条推导**：这一版模型没有 `w:cols` 字段，画出来就是一栏；一栏的下一栏起点就是下一页同一处，
- *   所以 `w:type="column"` 也按另起一页铺。语料那侧的量是「86 份 WPS 写出的件里 115 枚 `w:cols` 全部
- *   `w:num="1"`」（`.scratch/br-audience.mjs`），单栏是这些件的常态；WPS 真机上分栏符怎么翻页**未取证**。
+ *   所以 `w:type="column"` 也按另起一页铺。授权口径那 46 份的量是「55 枚 `w:cols`，`w:num` 只有 `1` 一档」
+ *   （`.scratch/corpus-recheck.mjs` #8；`w:br w:type="column"` 本身 0 枚，`.scratch/oneoff-gap.mjs`），
+ *   单栏是这些件的常态；WPS 真机上分栏符怎么翻页**未取证**。
  * - **多节按各自节说的纸高量**：块 `b` 属于第 `#{e < b}` 节（`e` 是 `sectionEndsOf` 数出的节尾段落下标，
  *   0 起），每一节用它**自己那一节**的页高 − 上下边距当容量（第一节那张仍走纸上画出来的 padding，因为它
  *   就是纸上那张；其余各节按节自己的声明算，那儿没有画出来的东西可读），节界必另起一页。**纸宽没有重排**：
  *   `render.ts` 只画一张连续的纸，行盒全是按第一节的宽度折的，所以横版那几节的真实折行与真机多半不同
- *   （一个节的宽与高都换的件是语料里的多数：86 份里 18 份多节、14 份各节纸张组合不同，未取证差多少）；
+ *   （授权口径 46 份里 8 件多节，而这 8 件**各节纸张组合全都相同**——`w:pgSz` 的字面一枚都没换过，
+ *   `.scratch/corpus-recheck.mjs` #9：宽与高一起换的那一类件在授权语料里没有观众，差多少仍**未取证**）；
  *   画页缝（`applySheetGaps`）时这一处**仍未改**：每张纸按各自节的高让位，宽还是第一节那张的宽。
  * - **光标落在第几页**（状态栏「第 X 页」，WPS 叫 `KxWpsStatusPageNumberInfoCommand`）走 `pageAtCaret()`：
  *   取光标处（折叠 Range）自己画出来的那枚矩形，用它的**中线**在量好的单位里找落点，再用与 `packPages`
@@ -84,7 +89,7 @@
  * （字体度量、行盒取整、页眉占位、孤行控制都不一样，这些也都**未取证**），所以这里不写「与 WPS 一致」。
  */
 import { DEFAULT_SECTION, sectionEndsOf, twipsToPx, type Section, type WordDocument } from "../core/docx.js";
-import { CARRY_CLASS, PAGE_BORDER_CLASS } from "../core/render.js";
+import { BAND_MASTER_CLASS, BAND_SOURCE_CLASS, CARRY_CLASS, PAGE_BORDER_CLASS } from "../core/render.js";
 
 /**
  * 铺在纸上的一枚单位：一个行盒，或一枚不能拆的东西（表格的一行、一个只读容器）。
@@ -150,14 +155,33 @@ const FIT_SLACK = 0.01;
 /** 页缝里垫的那段空白（`applySheetGaps` 插进段落里的行内块级 span，空元素、不携带文字）。 */
 export const SHEET_GAP_CLASS = "solo-sheet-gap";
 
+/**
+ * 页缝落在**两枚表行之间**时垫的那一行（#158）：一行一个空格子，无框、不接鼠标、不可编辑，高就是这一道的推距。
+ *
+ * 它与段落里那枚垫片同职——只是「缝」落在表行之间时，块级垫片既进不了 `<table>` 的肚子里（HTML 只允许
+ * `tr` 做它的孩子），也不该把整张表推开（那会把缝画在表中间）。垫一行是唯一能在两行之间真正让出高度的落笔。
+ *
+ * 它是**画的装饰，不是表的一枚行**，所以三道口径都不数它：`tableRowsOf`（铺排量的每一枚行）、
+ * `doc-edit.ts` 的 `rowsOf`（读回模型）、`main.ts` 冒烟里的行数读数。写进件里的 `<w:tr>` 枚数因此与垫之前
+ * 逐枚相同——`sheets-dom` 那一条按重拼后的 document.xml 数 `w:tr` 钉住这一条。
+ */
+export const SHEET_GAP_ROW_CLASS = "solo-sheet-gap-row";
+
 /** 两张纸之间留出的空档，px。WPS 真机留多宽**未取证**，这一版自定 24。 */
 export const SHEET_GAP_PX = 24;
 
 /** 页缝处盖住空档的条带：纸盒里的绝对定位装饰，排在正文块之后（编辑器按位置数块，装饰得垫底）。 */
 export const SHEET_STRIP_CLASS = "solo-sheet-strip";
 
-/** 一条页缝：条带（盖住空档的那一段）在**视口坐标**里的上沿与高度。 */
-export type SheetStrip = { top: number; height: number };
+/** 一条页缝：条带（盖住空档的那一段）在**纸盒本地的纸的像素**里的上沿与高度（直接写 CSS 长度，不再除 zoom），以及它收口的那一页与下一页各属于第几节。 */
+export type SheetStrip = { top: number; height: number; page: number; section: number; nextSection: number };
+
+/**
+ * 页眉页脚带在**第二张纸往后**的复件（`doc-edit.ts` 的 `applySheets` 画）：纸盒里的绝对定位装饰，
+ * 与页面边框、条带同一族——编辑器按位置数块，装饰不能占一块。带子自己只在纸盒外画一份（首页那份，
+ * 可点、可改），其余每张纸上的是它照着的复件：不可点、不进模型、不进保存。
+ */
+export const BAND_CLONE_CLASS = "solo-hf-clone";
 
 /**
  * `w:br` 自己那句 `w:type`。按 local name 取值——前缀是文件的写法，与 `docx.ts` 里 `attrsOf` 同一条理由；
@@ -176,10 +200,34 @@ function forcesPage(br: HTMLElement): boolean {
   return type === "page" || type === "column";
 }
 
-/** 这一段自己的行高，px。`line-height` 认不出数时退回这段画出来的高度。 */
-function lineHeightOf(el: HTMLElement): number {
+/**
+ * 这一张纸被放大到多少（`doc-edit.ts` 的 `setZoom` 写在纸盒的 `style.zoom` 上，缺省 1）。
+ *
+ * 纸上同时存在两套像素，这一趟量出来的每一个数都属意在其中一套里，比长短之前必须先对齐：
+ * - **视口像素**：`getBoundingClientRect()` 与 `Range.getClientRects()` 报的、以及 `caretMid` 那种光标自己
+ *   的矩形——`zoom` 过的纸上是真实屏幕距离，放大后比纸的像素大 zoom 倍。
+ * - **纸的像素**：`twipsToPx` 从节算出来的页高/边距、`getComputedStyle` 报的 `padding`/`line-height`、
+ *   以及最后写进 CSS 的那些长度——它们不随 `zoom` 变，纸放大时跟着纸一起放大。
+ *
+ * 规矩按「谁开口」定，不按「谁算」定：
+ * - 与**量出来的视口读数**比长短的那一节（行高、正文起点、装箱用的纸容量、纵向位置里量出来的那一截），
+ *   声明长度先乘 `zoom` 进视口空间。这一片的体重与首尾沿都从画出来的盒子里量，装箱就在视口空间里比。
+ * - 交出去当**纸上的一截长度**（`pagePositionAt` 的读数、`PageMeasure.contentHeightPx`）或要写进 CSS 的
+ *   （页缝条带、复件摆位、垫片高度 `SheetStrip`），保持纸的像素——`applySheetGaps` 把量回来的视口读数
+ *   按纸盒上沿一次除回纸的像素，那条链自己算，不在这规矩外另开一口。
+ */
+function zoomOf(page: HTMLElement): number {
+  return parseFloat(page.style.getPropertyValue("zoom")) || 1;
+}
+
+/**
+ * 这一段自己的行高，按**视口像素**报（调用方拿它跟画出来的行盒比长短）。
+ * `line-height` 那句声明是纸的像素，缩放过的纸要乘 `zoom` 才是画出来的那一格高；认不出数时退回量这段自己的
+ * 盒子——那条读数本来就是视口像素，不能再乘一遍。
+ */
+function lineHeightOf(el: HTMLElement, zoom: number): number {
   const v = parseFloat(getComputedStyle(el).lineHeight);
-  if (Number.isFinite(v) && v > 0) return v;
+  if (Number.isFinite(v) && v > 0) return v * zoom;
   return Math.max(1, el.getBoundingClientRect().height);
 }
 
@@ -193,7 +241,8 @@ function lineHeightOf(el: HTMLElement): number {
  * 反过来，312 缇的网格上一枚量到「声明 20.8px、块推进 20.8px、墨顶比格顶还高 1px」（同一份件在
  * `.scratch/para-gap-dom.ts` 的 `原始账`：块上 206 而墨顶 205）——那 1px 是字自己洒进上一格的墨水，不花流里的
  * 地。按碎片边沿 charging 时每枚量到 21.8px，930.53px 的一页只装 42 行而不是纸上 real 有的 44.7 格，而吸网格
- * 的段落正是语料里最大的那一档（13,426 个根层段落里 9,884 个按一格画）。两件事在这里合成一条：
+ * 的段落正是授权语料里最大的那一档（正文部件 7,398 枚 `w:p` 里 5,879 枚落在声明了行网格的 39 件下——件级口径，
+ * 按一份件的首节判，未按每一节精确）。两件事在这里合成一条：
  * **起点用流上沿（`from`）而不是碎片上沿，末枚收到 `to − from − 前面各枚`；`from`/`to` 不可信（下一个 `br`
  * 零高量不到自己那行）时才退回碎片边沿**。
  * 一枚差 1px 看着不要紧，六十段就累出一张纸——装箱与 `pageAtCaret` 读的是同一列画出来的位置，两处必须
@@ -258,17 +307,23 @@ function breaksBefore(el: HTMLElement): boolean {
  * `Range.getClientRects()` 会当成一枚矩形报出来（`.scratch/gap-probe.html` 量到 120px 的假行盒），
  * 所以量程必须把它排除在外，靠的就是这一刀。
  */
-function unitsOfParagraph(el: HTMLElement): PlacedUnit[] {
-  const lh = lineHeightOf(el);
+function unitsOfParagraph(el: HTMLElement, zoom: number): PlacedUnit[] {
+  const lh = lineHeightOf(el, zoom);
   const cuts = [...el.querySelectorAll<HTMLElement>(`br, .${SHEET_GAP_CLASS}`)].filter(
     (n) => n.tagName !== "BR" || forcesPage(n as unknown as HTMLBRElement),
   );
-  // 每一截在纸上的上下沿：第一截从块自己的内容上沿起，往后各截从前一枚切断元素的下沿起；末尾收到下一枚
-  // 切断元素的上沿，最后一截收到块的内容下沿。`br` 画出来是零高的（量不到自己那一行），不当边界。
+  // 每一截在纸上的上下沿：第一截从**块自己的盒子外沿**起，往后各截从前一枚切断元素的下沿起；末尾收到下一枚
+  // 切断元素的上沿，最后一截收到块的外沿。`br` 画出来是零高的（量不到自己那一行），不当边界。
+  //
+  // 外沿而不是内容沿：`w:pBdr` 那条线和 `w:space` 那截间距是这一段在流里真实占掉的地方（`w:space` 量的正是它与
+  // 字之间的距离，#144 把它画成这一段的 `padding`），而 `unitBlocksOf` 的游标按 `rect.bottom` 往前推。这里若把
+  // 两头的线与间距扣掉，那截地方就两头都不认：`unitBlocksOf` 已经走过去，枚高里却没有，于是页少算、状态栏的
+  // 页码/页数、「定位」与「纵向位置」全都跟着错（`.scratch/para-box-dom.ts` 第 20 条量的就是这一条：同 40 段、
+  // 只差那一圈，纸数必须变多）。没画框的段落两个沿是同一个数，#132 那套充电量法不动。
+  // 已知少一处：段里被页缝垫片切开、且垫片后面没有字时（一段正好跨在页边界上），垫片以下那两截线与间距还没有
+  // 主人——它落在最后一截之外，而那一截量不出行盒。授权口径里正文段落自己写 `w:pBdr` 的是 0 枚（26 枚全在
+  // `styles.xml` 与页眉部件，`.scratch/corpus-recheck2.mjs`），先记下不动。
   const box = el.getBoundingClientRect();
-  const cs = getComputedStyle(el);
-  const contentTop = box.top + (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.paddingTop) || 0);
-  const contentBottom = box.bottom - (parseFloat(cs.borderBottomWidth) || 0) - (parseFloat(cs.paddingBottom) || 0);
   const cutBoxes = cuts.map((c) => c.getBoundingClientRect());
   const out: PlacedUnit[] = [];
   for (let i = 0; i <= cuts.length; i++) {
@@ -279,8 +334,8 @@ function unitsOfParagraph(el: HTMLElement): PlacedUnit[] {
     else range.setEndBefore(cuts[i]!);
     const prev = i > 0 ? cutBoxes[i - 1]! : undefined;
     const next = i < cuts.length ? cutBoxes[i]! : undefined;
-    const from = prev ? (prev.height > 0 ? prev.bottom : NaN) : contentTop;
-    const to = next ? (next.height > 0 ? next.top : NaN) : contentBottom;
+    const from = prev ? (prev.height > 0 ? prev.bottom : NaN) : box.top;
+    const to = next ? (next.height > 0 ? next.top : NaN) : box.bottom;
     const boxes = lineBoxesOf(range, lh, from, to);
     if (i === 0) {
       out.push(...boxes.map((b) => ({ height: b.height, forcePage: false, top: b.top })));
@@ -305,20 +360,36 @@ function unitsOfParagraph(el: HTMLElement): PlacedUnit[] {
   return out;
 }
 
-/** 一块画出来的东西自己的上下沿（不含它与上一块之间那段空白）。 */
-function unitsOfBlock(el: HTMLElement): PlacedUnit[] {
+/**
+ * 这张表自己的行，按页写出来的顺序（`#158`）：页缝垫下的那一枚 `SHEET_GAP_ROW_CLASS` **不是表的一枚行**，
+ * 从这里就撇掉——量、取点、落笔三个口径都必须与「没有缝的时候」逐枚同一份，否则垫一行会把后面的页界整体推歪。
+ * 嵌套在格子里的表属于那个表对象，`rows` 本来也不会给过来。
+ */
+function tableRowsOf(table: HTMLTableElement): HTMLTableRowElement[] {
+  return [...table.rows].filter((r) => !r.classList.contains(SHEET_GAP_ROW_CLASS));
+}
+
+/** 表里量得出高度的行（0 高的行不产一枚单位，与 `unitsOfBlock` 同一口径），带上各自的矩形。 */
+function measuredRows(table: HTMLTableElement): { el: HTMLTableRowElement; rect: DOMRect }[] {
+  const out: { el: HTMLTableRowElement; rect: DOMRect }[] = [];
+  for (const r of tableRowsOf(table)) {
+    const rect = r.getBoundingClientRect();
+    if (rect.height > 0) out.push({ el: r, rect });
+  }
+  return out;
+}
+
+/** 一块画出来的东西自己的上下沿（不含它与上一块之间那段空白）。枚的高与沿都按**视口像素**报。 */
+function unitsOfBlock(el: HTMLElement, zoom: number): PlacedUnit[] {
   if (el.tagName === "TABLE") {
     // `rows` 只给这张表自己的行：格子里的嵌套表属于那个表对象，不会被这里数两遍。
-    return [...(el as HTMLTableElement).rows]
-      .map((r) => r.getBoundingClientRect())
-      .filter((b) => b.height > 0)
-      .map((b) => ({ height: b.height, forcePage: false, top: b.top }));
+    return measuredRows(el as HTMLTableElement).map(({ rect }) => ({ height: rect.height, forcePage: false, top: rect.top }));
   }
   if (el.classList.contains(CARRY_CLASS)) {
     const b = el.getBoundingClientRect();
     return [{ height: b.height, forcePage: false, top: b.top }];
   }
-  const units = unitsOfParagraph(el);
+  const units = unitsOfParagraph(el, zoom);
   if (units.length) return units;
   const b = el.getBoundingClientRect();
   return [{ height: Math.max(1, b.height), forcePage: false, top: b.top }];
@@ -327,11 +398,14 @@ function unitsOfBlock(el: HTMLElement): PlacedUnit[] {
 /**
  * 正文的开始线：纸盒上沿 + 上边框 + 上边距（`--pad-t`）。这一段之前的空白不算进任何一块。
  * 光标不在纸面上时（调用方判掉后）按这条线当作「文首」。
+ * 报的是**视口像素**（与每一枚枚的 `top` 同一个空间，`unitBlocksOf` 拿两者相减得出段间空白）：
+ * 上沿是量回来的，边框与内边距是纸的像素，缩放过的纸要乘 `zoom` 才接得上。
  */
 export function contentTopOf(page: HTMLElement): number {
   const box = page.getBoundingClientRect();
   const cs = getComputedStyle(page);
-  return box.top + (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.paddingTop) || 0);
+  const zoom = zoomOf(page);
+  return box.top + ((parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.paddingTop) || 0)) * zoom;
 }
 
 /**
@@ -341,13 +415,14 @@ export function contentTopOf(page: HTMLElement): number {
  */
 function unitBlocksOf(page: HTMLElement): { el: HTMLElement; units: PlacedUnit[] }[] {
   const out: { el: HTMLElement; units: PlacedUnit[] }[] = [];
+  const zoom = zoomOf(page);
   let cursor = contentTopOf(page);
   for (const child of [...page.children]) {
     const el = child as HTMLElement;
-    if (el.classList.contains(PAGE_BORDER_CLASS) || el.classList.contains(SHEET_STRIP_CLASS)) continue;
+    if (el.classList.contains(PAGE_BORDER_CLASS) || el.classList.contains(SHEET_STRIP_CLASS) || el.classList.contains(BAND_CLONE_CLASS) || el.classList.contains(BAND_MASTER_CLASS)) continue;
     const rect = el.getBoundingClientRect();
     const gap = Math.max(0, rect.top - cursor);
-    const units = unitsOfBlock(el);
+    const units = unitsOfBlock(el, zoom);
     if (units.length && gap > 0) units[0] = { ...units[0]!, height: units[0]!.height + gap };
     else if (!units.length && gap > 0) units.push({ height: gap, forcePage: false, top: rect.top });
     if (units.length && breaksBefore(el)) units[0] = { ...units[0]!, forcePage: true };
@@ -377,6 +452,111 @@ function unitBlocksOf(page: HTMLElement): { el: HTMLElement; units: PlacedUnit[]
 /** 把这张连续的纸上画出来的东西读成一列单位（行盒与不可拆的块），按文档顺序。 */
 export function layoutUnits(page: HTMLElement): PlacedUnit[] {
   return unitBlocksOf(page).flatMap((b) => b.units);
+}
+
+/**
+ * 带子在纸上占走的那一截（纸的像素），一节一个数，挂在纸盒上：铺排、页沿推距、读数口都从这一处取，
+ * 别处不另定一份（与文件头「量的口径都在这里」同一条守则）。
+ *
+ * 真机量到的是「带子贴在页边距之内、正文为它让位」：夹具 `/tmp/tall-header.docx`（页眉 10 行、A4、四边
+ * 1440 缇、`w:header` 720 缇）正文上沿 ≈3445 缇。此前带子画在纸盒之外、让位增量恒为 0，同一件差出
+ * **2005 缇 = 133.67px**（#157/#159）。距离没说 → 带子贴纸沿；这一节没有这一族带子 → 让 0，
+ * 没有东西要从正文里占走。
+ */
+export const BAND_YIELD_TOP = "data-band-yield-t";
+export const BAND_YIELD_BOTTOM = "data-band-yield-b";
+
+/** 纸盒上挂着的那一串让位数；没挂 = 这一趟还没量过 = 一处都不让（与「量不出就不给」同一条守则）。 */
+function bandYieldsOf(page: HTMLElement, attr: string): number[] {
+  const raw = page.getAttribute(attr);
+  if (raw === null) return [];
+  return raw.split(",").map((v) => {
+    const n = parseFloat(v);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  });
+}
+
+/** 带子从正文里占走的那一截：只算**越过边距线**的那部分。距离没说 → 带子贴纸沿；带子整个坐在边距线以内 →
+ *  让 0——那一截空白本来就是纸的边距，不是从正文里借的。 */
+export function bandYieldPx(distanceTwips: number | undefined, heightPx: number, marginTwips: number): number {
+  return Math.max(0, (distanceTwips === undefined ? 0 : twipsToPx(distanceTwips)) + heightPx - twipsToPx(marginTwips));
+}
+
+/** 量一枚带子在纸上占到多高。母本躲在 `display:none` 里量不到（`offsetHeight` 恒 0），按实测那条路走：
+ *  克隆一挂进隐藏副本立刻量得到。克隆要补上带子该有的 `.hf` 字面样式（母本自己不是 `.hf`，字号差一档）。
+ *
+ *  **扣掉锚边那一圈的内边距**：`bandYieldPx` 的算式假设带子的盒顶就在「纸沿 + 距离」上，而摆位不是这么摆的——
+ *  距离说的是**文字**到纸沿，所以 `applyBandYield`（原件）与 `paintBandCopies`（纸上的复件）都把元素顶放在
+ *  `距离 − 上内边距`，让第一行正好落在距离上。于是上内边距那一截坐在纸沿与首行之间，**已经算在距离里**；
+ *  连着盒高一起交给算式就把同一圈内边距数了两遍。真机对照量到这一处：夹具 `/tmp/tall-header.docx` 页眉 10 行、
+ *  四边 1440 缇、`w:header` 720 缇、`.hf` 上内边距 18px，盒高 201px 直接交给算式得到正文上沿 3735 缇，
+ *  而 WPS 是 ≈3445 缇——多出来的正好是那 18px = 270 缇。扣掉之后装好的壳量到 231px = **3465 缇**，与真机差
+ *  20 缇 = 1.33px，而且正好落在画上那枚带子的下沿（原件 `top:140` + `offsetHeight:201` = 纸沿以下 231px）——
+ *  让位与摆位同一口径。剩下的那一档是带子的字面样式（`index.html` 的 `.hf{font-size:9.5pt}` ×
+ *  `.hf-p{line-height:1.4}` = 一行 17.73px，真机那一侧反推是 181.67px/10 行 = 18.17px）：页面自己的字号行高，
+ *  不是文件说的，**WPS 那一档未取证**。
+ *
+ *  另一头（页眉的下内边距、页脚的上内边距）留在盒里：那是带子最后一行以下、正文必须绕开的一截，
+ *  纸上画着的带子确实占着它。
+ *
+ *  命令条（`.hf-bar`，「插入页码」那一枚按钮）也摘掉：那是**编辑器的把手**，纸上的带子里没有它
+ *  （`paintBandCopies` 画复件时同样摘它）。留着就把这一排把手的高度算进带子的高度、让位跟着多半截——
+ *  真机对照量到这一处：同一份 10 行页眉，WPS 让出 2005 缇，带着把手的这一版让出 2670 缇。 */
+function bandHeightPx(host: HTMLElement, src: HTMLElement, which: "header" | "footer"): number {
+  const probe = src.cloneNode(true) as HTMLElement;
+  probe.querySelector(".hf-bar")?.remove();
+  probe.classList.remove(BAND_SOURCE_CLASS, BAND_MASTER_CLASS);
+  probe.classList.add("hf", `hf-${which}`);
+  probe.removeAttribute("title");
+  for (const p of ["display", "position", "top", "bottom"]) probe.style.removeProperty(p);
+  probe.style.cssText += ";position:absolute;left:-9999px;top:-9999px;visibility:hidden;pointer-events:none";
+  host.append(probe);
+  // 内边距归 CSS 类管（`.hf{padding:18px 96px 6px}`），摘掉母本身上那份内联声明并不能把它去掉——
+  // 要的那一圈得从**量出来的盒**里减，所以读克隆自己的 computed，而不是假设它是 0。
+  const anchored = parseFloat(getComputedStyle(probe).getPropertyValue(which === "header" ? "padding-top" : "padding-bottom")) || 0;
+  const h = probe.offsetHeight - anchored;
+  probe.remove();
+  return h;
+}
+
+/**
+ * 铺排前的那一趟：按每一节**真正显示的那一份**带子量出越过边距线的那一截，写回纸盒。第一节走 CSS 变量
+ * （正文顶就是纸盒的上内边距，开始线与容量都跟着这一格走），其余各节挂在属性上由 `planOf`/`applySheetGaps`
+ * 取。顺手把能点的那份原件挪到「文字贴在节说的距离上」，与纸上的复件同一算法。
+ */
+export function applyBandYield(host: HTMLElement, page: HTMLElement, doc: WordDocument): void {
+  const sections = doc.sections.length ? doc.sections : [DEFAULT_SECTION];
+  const owners = new Map<string, HTMLElement>();
+  for (const el of host.querySelectorAll<HTMLElement>(`.${BAND_MASTER_CLASS}, .${BAND_SOURCE_CLASS}`)) {
+    if (el.dataset.hfPart) owners.set(el.dataset.hfPart, el);
+  }
+  const tops: number[] = [];
+  const bottoms: number[] = [];
+  for (const sec of sections) {
+    const over = (which: "header" | "footer", distance: number | undefined, margin: number): number => {
+      const band = doc.sectionBand(which, sections.indexOf(sec));
+      const src = band ? owners.get(band.part) : undefined;
+      if (!band || !src) return 0;
+      return bandYieldPx(distance, bandHeightPx(host, src, which), margin);
+    };
+    tops.push(over("header", sec.margins.header, sec.margins.top));
+    bottoms.push(over("footer", sec.margins.footer, sec.margins.bottom));
+  }
+  page.style.setProperty("--band-yield-t", `${tops[0] ?? 0}px`);
+  page.style.setProperty("--band-yield-b", `${bottoms[0] ?? 0}px`);
+  page.setAttribute(BAND_YIELD_TOP, tops.join(","));
+  page.setAttribute(BAND_YIELD_BOTTOM, bottoms.join(","));
+  for (const el of host.querySelectorAll<HTMLElement>(`.${BAND_MASTER_CLASS}`)) {
+    // 两份原件各守这一叠纸的一端，锚就在它自己那一头：页眉从纸盒**上沿**往下数（第一张的纸沿就是盒子的上沿），
+    // 页脚从纸盒**下沿**往上数（画出来的最后一张的下沿就是盒子的下沿——纸盒的空白永远铺到最后一张的底）。
+    // 距离说的是**文字**到纸沿（§17.3.2.7/9），样式自己那圈内边距不算在距离里，所以要扣回来，与纸上的复件同一算法。
+    const isHeader = el.dataset.hf !== "footer";
+    const distance = (isHeader ? sections[0]?.margins.header : sections[sections.length - 1]?.margins.footer) ?? 0;
+    const cs = getComputedStyle(el);
+    const pad = parseFloat(cs.getPropertyValue(isHeader ? "padding-top" : "padding-bottom")) || 0;
+    if (isHeader) el.style.top = `${twipsToPx(distance) - pad}px`;
+    else el.style.bottom = `${twipsToPx(distance) - pad}px`;
+  }
 }
 
 /**
@@ -522,11 +702,23 @@ function planOf(page: HTMLElement, doc: WordDocument): PagePlan | undefined {
   const sections = doc.sections.length ? doc.sections : [DEFAULT_SECTION];
   const contentHeightPx = contentHeightOf(page, sections[0]!);
   if (contentHeightPx === undefined) return undefined;
-  const sheets: Sheet[] = [{ contentHeightPx }];
-  for (const s of sections.slice(1)) {
-    const sheet = sheetOf(s);
+  // 装箱比的是一枚枚**画出来的**高（视口像素），而纸容量是节说的一截长度（纸的像素）：纸放大 zoom 倍，行盒
+  // 跟着放大，纸的容量也得放大同样倍数，两边才是同一个空间。这一记乘在这里，「换缩放档张数不变」就落在唯一
+  // 一处——`placementsAcrossSections` 自己不知道缩放，交出去的 `pages` 只由「量出来的高 ÷ 说出来的容量」定。
+  // `PagePlan.contentHeightPx` 交回给外面的仍是纸的像素（它是报给人看的一截物理长度，不是比长短的中间量）。
+  const zoom = zoomOf(page);
+  // 第一节的两端让位已经写进纸上画出来的内边距（`applyBandYield` 的 `--band-yield-t/-b`），上面那一格
+  // `contentHeightOf` 量回来就带着它；其余各节的纸没画在流里，按属性上同一趟写下的数自己扣——两边问的是
+  // 同一截高度，谁也不多扣一次。让完放不下一行正文的节不给方案（宁可少一行读数）。
+  const yieldT = bandYieldsOf(page, BAND_YIELD_TOP);
+  const yieldB = bandYieldsOf(page, BAND_YIELD_BOTTOM);
+  const sheets: Sheet[] = [{ contentHeightPx: contentHeightPx * zoom }];
+  for (let s = 1; s < sections.length; s++) {
+    const sheet = sheetOf(sections[s]!);
     if (!sheet) return undefined;
-    sheets.push(sheet);
+    const body = sheet.contentHeightPx - (yieldT[s] ?? 0) - (yieldB[s] ?? 0);
+    if (!(body > 0)) return undefined;
+    sheets.push({ contentHeightPx: body * zoom });
   }
   const ends = sectionEndsOf(doc.blocks);
   const blocks = unitBlocksOf(page);
@@ -780,7 +972,10 @@ export function pagePositionAt(page: HTMLElement, doc: WordDocument, caret: { mi
   const sections = doc.sections.length ? doc.sections : [DEFAULT_SECTION];
   const sec = sections[plan.unitSections[first]!];
   if (!sec) return undefined;
-  return top - plan.units[first]!.top + twipsToPx(sec.margins.top);
+  // 交出去的是**纸的像素**里那一截长度（状态栏按厘米显示）：分子是量回来的视口读数相减，缩放过的纸要除回
+  // zoom 才与节说的数同在一个空间里相加。相加的那一段是「上边距 + 这一节为页眉让出的那一截」——正文开始线
+  // 现在确实比边距低（#157），只加边距会把带子占走的那一截漏掉，纸沿因此比画出来的高。
+  return (top - plan.units[first]!.top) / zoomOf(page) + twipsToPx(sec.margins.top) + (bandYieldsOf(page, BAND_YIELD_TOP)[plan.unitSections[first]!] ?? 0);
 }
 
 /** 块里第一枚真文字的起点；一枚文字都没有（空段落）时退回块自己的开头——那里同样落得进光标。 */
@@ -837,8 +1032,8 @@ export function pageCaretAnchor(page: HTMLElement, doc: WordDocument, target: nu
   const segment = found.seg;
   if (atFlowEnd) return { ...tailPositionOf(block), block };
   if (block.tagName === "TABLE") {
-    // 表的一枚单位是一行；0 高的行 `unitsOfBlock` 已经撇掉，这里按同一口径取第 segment 行。
-    const row = [...(block as HTMLTableElement).rows].filter((r) => r.getBoundingClientRect().height > 0)[segment];
+    // 表的一枚单位是一行；0 高的行与页缝垫下的那一枚 `unitsOfBlock` 都撇掉了，这里按同一口径取第 segment 行。
+    const row = measuredRows(block as HTMLTableElement)[segment]?.el;
     return row ? { ...headPositionOf(row), block } : undefined;
   }
   // 段落（非表格、非只读容器）：这一页头一枚单位的落笔位置就是那一枚行盒的**行首**——与「行」目标走同一条
@@ -900,8 +1095,8 @@ export function lineCaretAnchor(page: HTMLElement, doc: WordDocument, target: nu
   const block = found.el;
   const segment = found.seg;
   if (block.tagName === "TABLE") {
-    // 表的一枚单位是一行；0 高的行 `unitsOfBlock` 已经撇掉，这里按同一口径取第 segment 行（`pageCaretAnchor` 同一条）。
-    const row = [...(block as HTMLTableElement).rows].filter((r) => r.getBoundingClientRect().height > 0)[segment];
+    // 表的一枚单位是一行；0 高的行与页缝垫下的那一枚 `unitsOfBlock` 已经撇掉，这里按同一口径取第 segment 行（`pageCaretAnchor` 同一条）。
+    const row = measuredRows(block as HTMLTableElement)[segment]?.el;
     return row ? { ...headPositionOf(row), block } : undefined;
   }
   if (block.classList.contains(CARRY_CLASS)) return { ...headPositionOf(block), block };
@@ -924,13 +1119,13 @@ export function sectionCaretAnchor(page: HTMLElement, ends: readonly number[], t
   const block = page.children[target === 1 ? 0 : ends[target - 2]! + 1] as HTMLElement | undefined;
   if (!block || block.classList.contains(PAGE_BORDER_CLASS)) return undefined;
   if (block.tagName === "TABLE") {
-    const row = [...(block as HTMLTableElement).rows][0];
+    const row = tableRowsOf(block as HTMLTableElement)[0];
     return row ? { ...headPositionOf(row), block } : undefined;
   }
   return { ...headPositionOf(block), block };
 }
 
-/** 页缝垫片：一枚空的块级 span，`contenteditable=false`，不接鼠标事件、不携带文字。 */
+/** 页缝里垫的那枚空白 span（段落之间用；表行之间用 `makeSheetGapRow`）。 */
 function makeSheetGap(height: number): HTMLElement {
   const gap = document.createElement("span");
   gap.className = SHEET_GAP_CLASS;
@@ -940,10 +1135,47 @@ function makeSheetGap(height: number): HTMLElement {
   return gap;
 }
 
-/** 清掉上一趟垫下的页缝，并把被 `splitText` 切开过的文字节点合回去——下一趟还在这一段里找行首。 */
+/**
+ * 一张表的格子有几列（页缝垫片那一枚 `td` 要横跨的枚数）。
+ *
+ * 按每一行自己的 `colSpan` 加起来取最大：`render.ts` 把竖合并的续行也写成 `<td>`（`display:none`），
+ * 所以横竖合并混在一起时仍是同一个数。这张表里页缝垫下的那一枚不算行——它自己就是按这个数写的，
+ * 算进去只会让下一趟比上一趟多一列。数不出列（表是空的）就给 1：一行一格，高照样让出来。
+ */
+function gridColumnsOf(table: HTMLTableElement): number {
+  let n = 1;
+  for (const tr of tableRowsOf(table)) {
+    let inRow = 0;
+    for (const td of tr.children) inRow += (td as HTMLTableCellElement).colSpan || 1;
+    if (inRow > n) n = inRow;
+  }
+  return n;
+}
+
+/**
+ * 缝落在两枚表行之间时垫下的那一行（#158）：空格子、`border:0`、不接鼠标、不可编辑。
+ * `border-style:none` 而不是 `hidden`——合并边框里 `none` 输给邻格真框（上下两行各自的线照画），
+ * `hidden` 会把它们一起抹掉。高就是这一道的推距（纸的像素，与段落垫片同一个口径）。
+ */
+function makeSheetGapRow(height: number, columns: number): HTMLElement {
+  const tr = document.createElement("tr");
+  tr.className = SHEET_GAP_ROW_CLASS;
+  tr.setAttribute("aria-hidden", "true");
+  const td = document.createElement("td");
+  td.colSpan = Math.max(1, columns);
+  td.contentEditable = "false";
+  td.style.cssText = `height:${height}px;padding:0;border:0 none;background:transparent;pointer-events:none;user-select:none`;
+  tr.append(td);
+  return tr;
+}
+
+/**
+ * 清掉上一趟垫下的页缝，并把被 `splitText` 切开过的文字节点合回去——下一趟还在这一段里找行首。
+ * 两种垫片一起清：段落里的空 span，与表行之间的那一行（`#158`）。
+ */
 function clearSheetGaps(page: HTMLElement): void {
   const parents = new Set<Element>();
-  for (const gap of [...page.querySelectorAll<HTMLElement>(`.${SHEET_GAP_CLASS}`)]) {
+  for (const gap of [...page.querySelectorAll<HTMLElement>(`.${SHEET_GAP_CLASS}, .${SHEET_GAP_ROW_CLASS}`)]) {
     if (gap.parentElement) parents.add(gap.parentElement);
     gap.remove();
   }
@@ -1021,8 +1253,8 @@ function firstPositionOfUnit(el: HTMLElement, unit: PlacedUnit): { node: Node; o
  *
  * 纸盒仍是一张连续的白纸，分页是量出来的数（`planOf`）；这里做的是**画**出「一张纸到这儿为止」：
  * 每一道页界，在下页第一枚有内容的单位的正上方垫一段行内块级空白（`SHEET_GAP_CLASS`），把它推到
- * 「上一张纸的下沿 + 页缝 + 下一节的上边距」的位置；返回的空档位置给调用方按纸盒本地坐标画条带
- * 盖住（`SheetStrip`，视口坐标）。页从哪切与 `pageAtCaret` 同一份 `planOf`。
+ * 「上一张纸的下沿 + 页缝 + 下一节的上边距」的位置；返回的空档位置给调用方画条带盖住（`SheetStrip`，
+ * 纸盒本地的纸的像素，可直接写进 CSS）。页从哪切与 `pageAtCaret` 同一份 `planOf`。
  *
  * 垫片自己不在量的口径里：`unitsOfParagraph` 按它把量程切段，它那一截不产单位、高度也不进任何一枚
  * 单位，所以垫过之后再量，页界分毫不动。每一趟先 `clearSheetGaps` 再量——幂等，且被切开过的文字
@@ -1036,7 +1268,12 @@ function firstPositionOfUnit(el: HTMLElement, unit: PlacedUnit): { node: Node; o
  *   （匿名块的首行不承接段首缩进，`.scratch/gap-probe.html` 量到 0 对 32px）。
  * - 块首、上一块进不去（表格、只读容器）而本块是段落：垫在**本块开头**——本块首行的缩进会丢，
  *   这一处**接受瑕疵**并记录；WPS 真机怎么画**未取证**。
- * - 落到表格行里、或两边都进不去：这一道界**不动 DOM**（垫片进去会改表格行高），也不画条带。
+ * - 落在两枚表行之间（含整张表的第一行）：块级垫片进不了 `<table>` 的肚子，垫的是**一行空格子**
+ *   （`SHEET_GAP_ROW_CLASS`，无框、不可编辑）。它不是表的一枚行：量的每一枚（`tableRowsOf`）、读回模型
+ *   （`doc-edit.ts` 的 `rowsOf`）、冒烟里的行数读数三处都撇掉它，所以重拼出来的件里 `<w:tr>` 枚数一枚不多。
+ * - 本块与上一块都进不去（只读容器紧跟一张表）：垫在那张表的**最后一行之下**，两张纸照样分得开。
+ * - 落到只读容器内部、又找不到上述任何一处：这一道界**不动 DOM**，也不画条带（垫片压不进那一块，
+ *   画了条带会把字盖住）。
  *
  * 0 高的断点记号不是内容：页界落在记号上时推的是记号之后第一枚 `height>0` 的单位。若那枚已经在更
  * 后面的页上（连着两枚断点＝中间空出一整张纸），这一道不垫——空纸的空白由更下面那一道垫片的推距
@@ -1045,24 +1282,159 @@ function firstPositionOfUnit(el: HTMLElement, unit: PlacedUnit): { node: Node; o
  *
  * 高度差从量出来的几何来：第 p 道缝的推距 H = 目标 − 现位 − **上面各道已让出的推距之和**（上面每垫一段，
  * 下面所有内容都跟着下沉那么多——推距是一组三角形方程，从上往下一趟解完），目标 = 这一页的纸沿 + 这一节的
- * 纸高 + 页缝 + 下一节的上边距。纸沿按链推：第 1 页是画出来的纸盒上沿（`render.ts` 的 `--pad-t` 与节的
- * 上边距同源），其后每张 = 上一张纸沿 + 上一节纸高 + 页缝——链不经过单位自己的上沿，整页只有 0 高记号的
- * 空纸也算得出。落笔点与推距都按**原 DOM** 解出（这时一个垫片都还没插），插的时候从下往上——同一段文字里
- * 先切靠后的位置，靠前的落笔点才不会被切开后的节点边界带偏。量不出纸（`planOf` 不给）、H 不是正数、行首
- * 位置找不着时都不猜：这一道跳过，条带也省掉。页缝多宽、条带什么颜色，WPS 真机**未取证**（`SHEET_GAP_PX`
- * 是自定的）。
+ * 纸高 + 页缝 + 下一节的上边距。纸沿按链推：第 1 页的上沿就是画出来的纸盒上沿（本地坐标 0，`render.ts` 的
+ * `--pad-t` 与节的上边距同源），其后每张 = 上一张纸沿 + 上一节纸高 + 页缝——链不经过单位自己的上沿，整页只有
+ * 0 高记号的空纸也算得出。现位是量回来的视口读数换算到同一条链上（见下）。落笔点与推距都按**原 DOM** 解出
+ * （这时一个垫片都还没插），插的时候从下往上——同一段文字里先切靠后的位置，靠前的落笔点才不会被切开后的节点
+ * 边界带偏。量不出纸（`planOf` 不给）、H 不是正数、行首位置找不着时都不猜：这一道跳过，条带也省掉。页缝多宽、
+ * 条带什么颜色，WPS 真机**未取证**（`SHEET_GAP_PX` 是自定的）。
  */
-export function applySheetGaps(page: HTMLElement, doc: WordDocument): SheetStrip[] | undefined {
+/**
+ * 段落元素上带的那一串制表位（`render.ts` 从 `p.tabStops` 写的）：`缇:档` 逗号分隔，档 `l`/`c`/`r`。
+ * 数写在 `data-` 上而不是 `style` 上：编辑读回模型时看的是格式，不该把这些位置当成段落新说的一句话。
+ */
+export const TAB_STOPS_ATTR = "data-tab-stops";
+
+/** `data-tab-stops` 的字面读回来：按缇排好序，认不出的那一节直接丢（半枚画歪的位置不如没有）。 */
+export function parseTabStops(raw: string): { posTwips: number; val: "left" | "center" | "right" }[] {
+  const out: { posTwips: number; val: "left" | "center" | "right" }[] = [];
+  for (const part of raw.split(",")) {
+    const at = part.lastIndexOf(":");
+    if (at <= 0) continue;
+    const pos = Number(part.slice(0, at));
+    if (!Number.isFinite(pos)) continue;
+    out.push({ posTwips: pos, val: part.slice(at + 1) === "r" ? "right" : part.slice(at + 1) === "c" ? "center" : "left" });
+  }
+  return out.sort((a, b) => a.posTwips - b.posTwips);
+}
+
+/** 制表符至少要走出来的一点宽度：停在原地不算走过去（Word 在同一位置上也照样前进到下一格）。 */
+const TAB_MIN_PX = 0.5;
+
+/**
+ * 把 `w:pPr/w:tabs` 说的位置画到纸上（#168）。页面本来只有 `.page .tab { width: 32px }` 一枚发明值，
+ * 也就是说正文部件写了 318 枚制表位（230 张 `w:pPr/w:tabs` 清单）和 116 枚制表符、三份部件合计 520 枚位，
+ * 而纸把每一枚都停在 32px 上——这一段与那一格对齐的说法整个丢了。这一趟按 §17.4.19/§17.3.2.9 的摆位算：
+ * 位置从**正文区左沿**（`--pad-l` = 左边距加 `w:gutter`）起算，越过最后一枚明写的位之后按
+ * `w:defaultTabStop` 一步步走（授权 46 份：43 份 420、3 份 720，全写了）；
+ * `left` 让后头的文字起在位上，`right` 让那一截的**末沿**贴在位上，`center` 把它骑在位上。
+ *
+ * 318 与 116 这两个数是同一个口径下对出来的账（`.scratch/tabs-roundtrip-46.ts` 与拼法切片）：正文部件里
+ * `<w:tab` 起头的标签 434 枚 = 带属性的位定义 318 + 自闭的制表符 116；这 434 枚隔一次真实编辑（43 份可编辑，
+ * 3 份 `Normal.dotm` 没有可改的段）进出一致，逐段解析出的位置与类型也一字不差。
+ *
+ * 116 枚那笔账对得上（`.scratch/tabs-inline-context.py` 按最近的结构祖先分档，六份文件）：正文部件里
+ * `w:r/w:tab` 116 枚，其中 **30 枚**住在正文段落（模型 `doc.blocks` 直接那一层，分 14 段），**86 枚**住在
+ * `w:sdt` 容器里的段落。后 86 枚画在只带的 carried 盒子（`.doc-carry`，#32 那一档：内容看得见、光标进不去），
+ * 不是 `.para`，这一趟不动它们。前 30 枚的分档也量了（`.scratch/tabs-default-audience.ts`）：14 段里 4 段的
+ * 样式链上有位，**10 段 / 26 枚**一枚都没写——只按 `data-tab-stops` 选宿主就会把这 26 枚留在发明的 32px 上。
+ *
+ * 每一枚都先撤掉上一趟的宽度再量，从左往右一枚一枚落笔：读一次 `getBoundingClientRect()` 就同步排一次版，
+ * 所以下一枚量到的起点已经带上前一枚垫出来的宽度——这与 Word 的行内推进是同一个方向。那一截的宽按**第一行**
+ * 算（跨行的段落里，制表位管的是它这一行的那一截）。都不够用时给一步默认格，而不是硬挤到 0。
+ *
+ * 两档写在明面上没接：① `w:leader` 只画位置不画点线（94 枚全说 `dot`：正文 92、样式 2）——点线是 WPS 画出来的
+ * 东西，手上没有它的实据，按「未取证的不猜」留着；② 格子里那一段（`w:tc` 里的 `w:p`）挡掉不做，它的基准该是
+ * 格沿而不是正文区左沿——授权 46 份里这样的 `w:tabs` **0 块**（`.scratch/tabs-inside-table.py`），所以这一挡
+ * 眼下没有受众，只是不让将来落进格子里的制表位按纸的边距画。③ 带子里的 12 枚位与 2 枚制表符仍按 `pre-wrap`
+ * 的浏览器默认走，不带这一趟的账（带子的字面字号那一档本就未取证）。
+ *
+ * 落点由 `.scratch/tab-place-dom.ts` 在真 DOM 里量（17 例：三档各贴自己的位、走过第一格找下一格、清单乱序按缇
+ * 排、没写位的走 `w:defaultTabStop` 整步、借位与 `clear`、无 settings 时的兜底那一步、zoom 与重跑不改答案）；
+ * 反向对照（摘掉下面那一调用）13 条红。
+ */
+export function applyTabStops(page: HTMLElement, doc: WordDocument): void {
+  // 凡是画了制表符的正文段都要走这一趟，**没有** `data-tab-stops` 的那一类也算：授权 46 份里带制表符的正文段
+  // 14 段共 30 枚，其中 10 段 / 26 枚的样式链上一枚位都没写（`.scratch/tabs-default-audience.ts`），
+  // 它们该按 `w:defaultTabStop` 的步长走，而不是留在 CSS 那枚发明的 32px 上。
+  const hosts = [...page.querySelectorAll<HTMLElement>(".para")].filter(
+    (el) => !el.closest("table") && el.querySelector("span.tab"),
+  );
+  if (!hosts.length) return;
+  const zoom = zoomOf(page);
+  const originLeft = page.getBoundingClientRect().left;
+  const cs = getComputedStyle(page);
+  const padL = parseFloat(cs.paddingLeft) || 0;
+  const padR = parseFloat(cs.paddingRight) || 0;
+  const dtsPx = twipsToPx(doc.defaultTabStop() ?? 420);
+  // 正文区的右沿：纸宽（视口读数除回纸的像素）减去两头的边距。默认格子只排到这一条线为止。
+  const areaRight = page.getBoundingClientRect().width / zoom - padR;
+  const localLeft = (viewportLeft: number): number => (viewportLeft - originLeft) / zoom;
+  for (const el of hosts) {
+    const stops = parseTabStops(el.getAttribute(TAB_STOPS_ATTR) ?? "");
+    const tabs = [...el.querySelectorAll<HTMLElement>("span.tab")];
+    // 候选位：明写的每一枚，加上从正文区左沿按默认步长排开、且排在最后一枚明写的位之后的那些格子。
+    const cands = stops.map((s) => ({ x: padL + twipsToPx(s.posTwips), val: s.val }));
+    const lastX = cands.length ? cands.reduce((a, b) => Math.max(a, b.x), 0) : padL;
+    for (let x = padL + dtsPx; x <= areaRight; x += dtsPx) if (x > lastX + TAB_MIN_PX) cands.push({ x, val: "left" });
+    cands.sort((a, b) => a.x - b.x || 0);
+    if (!cands.length) continue;
+    for (const t of tabs) t.style.width = "";
+    for (let i = 0; i < tabs.length; i++) {
+      const t = tabs[i]!;
+      const x0 = localLeft(t.getBoundingClientRect().left);
+      const segPx = firstLineWidthPx(t, tabs[i + 1] ?? null, el, zoom);
+      let width = 0;
+      for (const s of cands) {
+        if (s.x <= x0 + TAB_MIN_PX) continue;
+        const need = s.val === "left" ? s.x - x0 : s.val === "right" ? s.x - segPx - x0 : s.x - segPx / 2 - x0;
+        if (need < TAB_MIN_PX) continue;
+        width = need;
+        break;
+      }
+      t.style.width = `${(width > 0 ? width : dtsPx).toFixed(2)}px`;
+    }
+  }
+}
+
+/**
+ * 这一枚制表符后面那一截文字的宽，只算它**第一行**上的那些矩形（下一枚制表符或这一段末尾为界）。
+ * `Range` 的矩形是按碎片给的，行内换行时同一个 Range 会横跨几行，取第一行那一档就是取这一行真正要挤进去的那截。
+ * 取的是那一档的**跨度**（最右沿减最左沿），不是各块矩形之和：装机件上实测（`.scratch/tabs-dom-dump.js`，
+ * 段落里只有一个 `<span>` 的三字符段）Blink 对同一个 Range 的同一行给了**两枚一模一样的矩形**，按之和量就
+ * 把段宽读成两倍，右对齐差一整截、居差半截（2026-10-18 量到 `widthPx` 少 48px）。跨度对重复矩形天然免疫，
+ * 对一行里真有几块碎片（换脸、加粗）也正是这一行要挤进去的那一段。
+ */
+function firstLineWidthPx(from: HTMLElement, to: HTMLElement | null, host: HTMLElement, zoom: number): number {
+  const r = document.createRange();
+  if (to) {
+    r.setStartAfter(from);
+    r.setEndBefore(to);
+  } else {
+    r.selectNodeContents(host);
+    r.setStartAfter(from);
+  }
+  const rects = [...r.getClientRects()].filter((b) => b.width > 0);
+  if (!rects.length) return 0;
+  const top = rects[0]!.top;
+  const line = rects.filter((b) => Math.abs(b.top - top) <= 1);
+  return (Math.max(...line.map((b) => b.right)) - Math.min(...line.map((b) => b.left))) / zoom;
+}
+
+export type SheetLayout = { strips: SheetStrip[]; pages: number };
+
+export function applySheetGaps(page: HTMLElement, doc: WordDocument): SheetLayout | undefined {
   clearSheetGaps(page);
   const plan = planOf(page, doc);
   if (!plan) return undefined;
   const { blocks, units, unitSections, places, pages } = plan;
-  if (pages < 2) return [];
+  if (pages < 2) return { strips: [], pages };
   const sections = doc.sections.length ? doc.sections : [DEFAULT_SECTION];
-  const padTopOf = (s: number): number => twipsToPx((sections[s] ?? sections[0]!).margins.top);
+  // 下一张纸的正文开始线 = 节说的上边距 + 这一节为页眉让出的那一截。第一张由纸盒画出来的上内边距表达，
+  // 往后的每一张由这里的推距表达——同一趟 `applyBandYield` 量出来的同一个数（#157：真机上带子在纸内，
+  // 正文一张一张都从它下沿起排，不是只有第一张）。
+  const yieldTopOf = bandYieldsOf(page, BAND_YIELD_TOP);
+  const padTopOf = (s: number): number => twipsToPx((sections[s] ?? sections[0]!).margins.top) + (yieldTopOf[s] ?? 0);
   const paperHOf = (s: number): number => twipsToPx((sections[s] ?? sections[0]!).pageHeightTwips);
   const firstUnitOfPage = (target: number): number => places.indexOf(target);
-  const sheetTop: number[] = [0, page.getBoundingClientRect().top];
+  // 两种像素：单位的位置是 `getBoundingClientRect()` 量出来的**视口像素**，纸高/页缝/边距是节自己说的
+  // **纸的像素**（`twipsToPx`）。纸盒带 `zoom` 时两者差 zoom 倍，而这一趟算出来的落笔点与条带上沿最后都要
+  // 写成 CSS 长度——CSS 长度在缩放过的纸里就是纸的像素。所以纸沿一律从纸盒上沿起算（本地坐标），量回来的
+  // 视口读数按同一个原点、同一个 zoom 除回纸的像素：原点只读这一次，读两次会因中间改动 DOM 后的滚动锚定对不上。
+  const zoom = parseFloat(page.style.getPropertyValue("zoom")) || 1;
+  const origin = page.getBoundingClientRect().top;
+  const localTopOf = (viewportTop: number): number => (viewportTop - origin) / zoom;
+  const sheetTop: number[] = [0, 0]; // 第 1 张纸的上沿就是画出来的纸盒上沿：本地坐标 0
   for (let target = 2; target <= pages; target++) {
     sheetTop.push(sheetTop[target - 1]! + paperHOf(unitSections[firstUnitOfPage(target - 1)] ?? 0) + SHEET_GAP_PX);
   }
@@ -1071,44 +1443,84 @@ export function applySheetGaps(page: HTMLElement, doc: WordDocument): SheetStrip
   // 推距是三角形方程组：第 p 道缝的垫片会把**下面所有内容**一起推下沉，所以往下解时每一道都要扣掉上面
   // 各道已经让出的距离（`lifted`）。先从上往下一趟把「哪一道垫多少」全解出来、落笔点也全按**原 DOM**
   // 找好（这时一个垫片都还没插），再统一下手插——顺序见下。
-  const ops: { h: number; node?: Node; offset: number; prev?: HTMLElement; block?: HTMLElement }[] = [];
+  const ops: { h: number; offset: number; node?: Node; prev?: HTMLElement; block?: HTMLElement; row?: HTMLTableRowElement; place?: "before" | "after" }[] = [];
   let lifted = 0;
   for (let p = 1; p <= pages - 1; p++) {
     const idxNext = firstUnitOfPage(p + 1);
     if (idxNext < 0) continue;
     const sheetBottom = sheetTop[p]! + paperHOf(unitSections[firstUnitOfPage(p)] ?? 0);
+    const seam = { top: sheetBottom, height: SHEET_GAP_PX, page: p, section: unitSections[firstUnitOfPage(p)] ?? 0, nextSection: unitSections[idxNext] ?? 0 };
     let content = idxNext;
     while (content < units.length && units[content]!.height <= 0) content++;
     if (content >= units.length) continue;
     if (places[content] !== p + 1) {
-      strips.push({ top: sheetBottom, height: SHEET_GAP_PX });
+      strips.push(seam);
       continue;
     }
     const where = locateUnit(blocks, content);
     if (!where) continue;
     const target = sheetBottom + SHEET_GAP_PX + padTopOf(unitSections[content] ?? 0);
-    const h = target - units[content]!.top - lifted;
+    // 目标说的是**块的上沿**该落在哪一条开始线上（第一张纸就是画出来的纸盒上内边距），而 `units[].top` 报的是
+    // **行盒**的顶（见 `lineBoxesOf` 末尾那一句）。两者差一枚「半行距余量」：12pt 的字配 1.62 的行距，块沿以下
+    // 3.5px 才是第一行的行盒。拿行盒顶当块顶推，第二张往后的正文就比第一张高这一截——真机实测：第一张的块沿
+    // 正好压在开始线上（差 0），往后的张上是行盒压在开始线、块沿差 **−3.5px = −52.5 缇**（夹具
+    // `/tmp/tall-header-2sheet.docx`，`.scratch/sheet-2yield-probe.js`）。按块自己那一枚的第一行来补：同一块
+    // 里的续行与首行同一档字面，量首行与块沿的差就是这一档的余量；表行的第一枚本来就是表行的盒子，量出来 ≈0，
+    // 不用另开一支。量出负数（负边距、上标之类把行盒提到块沿以上）就当 0——与「量不出就不给」同一条守则。
+    const firstOfBlock = units[content - where.seg];
+    const above = firstOfBlock
+      ? Math.max(0, localTopOf(firstOfBlock.top) - localTopOf(where.el.getBoundingClientRect().top))
+      : 0;
+    const h = target - localTopOf(units[content]!.top) + above - lifted;
     if (!(h > 0)) continue;
     if (where.seg > 0) {
-      if (opaque(where.el)) continue;
-      const pos = firstPositionOfUnit(where.el, units[content]!);
-      if (!pos) continue;
-      ops.push({ h, node: pos.node, offset: pos.offset, block: where.el });
+      if (where.el.tagName === "TABLE") {
+        // 缝落在第 seg 枚表行之前：块级垫片进不了 `<table>` 的肚子里，垫的那一行落在它前面。
+        const row = measuredRows(where.el as HTMLTableElement)[where.seg]?.el;
+        if (!row) continue;
+        ops.push({ h, row, place: "before", offset: -1 });
+      } else if (opaque(where.el)) {
+        continue;
+      } else {
+        const pos = firstPositionOfUnit(where.el, units[content]!);
+        if (!pos) continue;
+        ops.push({ h, node: pos.node, offset: pos.offset, block: where.el });
+      }
     } else {
       const prev = blocks[where.index - 1]?.el;
+      // 先后次序按「哪一处推得最小」：上一块进得去就垫在上一块尾（原有的那一条），本块进得去就垫在本块首
+      // （段首一枚垫片，不动任何表）。两张表之间的缝、只读带紧跟一张表这两条才有别的可选。
       if (prev && !opaque(prev)) ops.push({ h, prev, offset: -1 });
       else if (!opaque(where.el)) ops.push({ h, node: where.el, offset: 0 });
-      else continue;
+      else if (where.el.tagName === "TABLE") {
+        // 缝正落在这张表的第一行之前，而上一块进不去（另一张表、或只读容器）：垫在这一张的第一行之上。
+        const row = measuredRows(where.el as HTMLTableElement)[0]?.el;
+        if (!row) continue;
+        ops.push({ h, row, place: "before", offset: -1 });
+      } else if (prev?.tagName === "TABLE") {
+        // 本块进不去（只读容器），上一块是表：垫在那张表的最后一行之下，两道纸才真分得开。
+        const rows = measuredRows(prev as HTMLTableElement);
+        const row = rows[rows.length - 1]?.el;
+        if (!row) continue;
+        ops.push({ h, row, place: "after", offset: -1 });
+      } else continue;
     }
     lifted += h;
-    strips.push({ top: sheetBottom, height: SHEET_GAP_PX });
+    strips.push(seam);
   }
   // 从下往上插：同一段文字里先切靠后的落笔点，靠前的那个（按原 DOM 解出来的节点与偏移）才不会被切开
   // 的节点边界带偏。跨段落的插入互不影响，顺序只对这一处有约束。
   for (let i = ops.length - 1; i >= 0; i--) {
     const op = ops[i]!;
     if (op.prev) op.prev.append(makeSheetGap(op.h));
-    else if (op.node && op.block) insertSheetGapAt(op.node, op.offset, op.h, op.block);
+    else if (op.row) {
+      const table = op.row.closest("table");
+      if (!table) continue;
+      const gapRow = makeSheetGapRow(op.h, gridColumnsOf(table));
+      // DOM 方法不能从宿主上摘下来调（摘了就 `Illegal invocation`，整趟渲染探针全废）：按落笔方向各调一次。
+      if (op.place === "after") op.row.after(gapRow);
+      else op.row.before(gapRow);
+    } else if (op.node && op.block) insertSheetGapAt(op.node, op.offset, op.h, op.block);
   }
-  return strips;
+  return { strips, pages };
 }

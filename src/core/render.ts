@@ -1,5 +1,5 @@
-import type { Block, Carried, CarriedInline, Inline, NumberLevel, PageBorder, Paragraph, RowInfo, Section, Table, TableBorder, TableCell, WordDocument } from "./docx.js";
-import { DEFAULT_SECTION, LINE_ONE, MARGIN_SIDES, PAGE_BORDER_SIDES, headingLevel, lineGridPitchTwips, twipsToPx } from "./docx.js";
+import type { Block, Carried, CarriedInline, HeaderFooter, Inline, NumberLevel, PageBorder, Paragraph, RowInfo, Section, Table, TableBorder, TableCell, WordDocument } from "./docx.js";
+import { DEFAULT_SECTION, LINE_ONE, MARGIN_SIDES, PAGE_BORDER_SIDES, PBDR_ORDER, headingLevel, lineGridPitchTwips, twipsToPx } from "./docx.js";
 import type { CommentAnchor } from "./comments.js";
 import type { Presentation, Shape, SlideParagraph } from "./pptx.js";
 
@@ -9,8 +9,9 @@ const esc = (s: string): string =>
 /**
  * §17.3.2.26 splits a run's text by script: `w:ascii` draws the Latin, `w:eastAsia` the Chinese, Japanese and
  * Korean. A plain CSS font stack falls through per glyph by *coverage*, which is a different rule — a Latin face
- * that happens to hold Han glyphs would swallow the Chinese (178 of the corpus's 1,783 Chinese runs whose faces
- * differ name a Chinese family for `w:ascii` too: `.scratch/run-font-eastasia.ts`). So the east-asian face travels
+ * that happens to hold Han glyphs would swallow the Chinese (178 of the 1,783 Chinese runs whose faces differ
+ * naming a Chinese family for `w:ascii` too — a pass on the quarantined cohort; `.scratch/run-font-eastasia.ts`
+ * has no authorized reading, so that audience is 待重证). So the east-asian face travels
  * as a family scoped to the East Asian ranges by `unicode-range`, and the browser's own matching dispatches by
  * script the way the element says. `src: local()` only resolves against a face the machine has installed; a file
  * naming one it does not falls through to the Latin face, which is exactly what this page drew before the field
@@ -42,8 +43,10 @@ export function eastAsiaFaceRules(faces: string[]): string {
 
 /** The stack a run draws with: the east-asian family first (it only answers for East Asian codepoints), the
  *  Latin one after it. Quoted, because a face name is a string, not an identifier. A numbered paragraph's mark
- *  builds the same stack from its own resolved faces, so the symbol and the text beside it wear one pair. */
-function fontStack(run: Pick<Inline, "font" | "fontEastAsia">): string {
+ *  builds the same stack from its own resolved faces, so the symbol and the text beside it wear one pair.
+ *  Exported because the editor's pending-format placeholder previews a picked face and must not invent a second
+ *  spelling of the pair. */
+export function fontStack(run: Pick<Inline, "font" | "fontEastAsia">): string {
   const parts: string[] = [];
   if (run.fontEastAsia) parts.push(`"${faceKey(run.fontEastAsia)}"`);
   const latin = run.font?.replace(/[;\\]/g, "").trim();
@@ -183,11 +186,14 @@ function carryTag(carry: CarriedInline): string {
  * the number the field cached, because this product has no pagination to say which page it would be.
  */
 function hfFieldTag(carry: CarriedInline): string {
-  return `<span class="${RUN_CARRY_CLASS}" data-carry="${carry.key}" data-tag="${esc(carry.tag)}" contenteditable="false" style="border:1px dashed #9aa3b0;border-radius:3px;padding:0 5px;margin:0 2px;background:#f2f5fa;color:#3b4453">${esc(carry.show)}</span>`;
+  return `<span class="${RUN_CARRY_CLASS}" data-carry="${carry.key}" data-tag="${esc(carry.tag)}"${carry.field ? ` data-field="${carry.field}"` : ""} contenteditable="false" style="border:1px dashed #9aa3b0;border-radius:3px;padding:0 5px;margin:0 2px;background:#f2f5fa;color:#3b4453">${esc(carry.show)}</span>`;
 }
 
-/** The band's own row of commands, and the button that matches the page's other small buttons. */
-const HF_BAR_STYLE = "display:flex;gap:6px;margin-top:4px";
+/** The band's own row of commands, and the button that matches the page's other small buttons.
+ *  停着的时候这一排是收起来的：它是编辑器的把手，纸上的带子里没有它。摊在带子的一行里，原件就比纸上的复件
+ *  高出一排按钮那么高，而让位只按纸上那一截留（真机对照：同一份 10 行页眉 WPS 让 2005 缇，带把手的那一版让
+ *  2670 缇）——多出来那一截不但不留给正文，还直接压在正文第一行上。点开这一枚带子时由 `doc-edit.ts` 亮出来。 */
+const HF_BAR_STYLE = "display:none;gap:6px;margin-top:4px";
 const HF_BTN_STYLE = "font:inherit;font-size:11px;padding:2px 8px;border:1px solid #c3c9d2;border-radius:5px;background:#f2f4f7;color:#26292e;cursor:pointer";
 
 /** Runs between an open range's markers are wrapped, so the anchored text reads as one block. */
@@ -223,9 +229,10 @@ function wordRuns(inlines: Inline[], state: CommentState): string {
  * The paragraph's first-line indent as one CSS value, from whichever of the two spellings the file put its
  * weight behind: the twips value when it states a non-zero one, otherwise the character count (WPS writes 首行
  * 缩进 2 字符 as `w:firstLineChars="200"`), and a `w:hanging` pulls the other way. Both are stated in 1,147 of
- * the corpus's elements and their ratio is always a font size, so choosing the twips value there draws what
- * WPS drew; the 88 that state a positive `w:firstLine` next to `w:firstLineChars="0"` are the reason the
- * character form does not simply win, as §17.3.1.14 has it.
+ * the quarantined cohort's elements and their ratio is always a font size, so choosing the twips value there
+ * draws what WPS drew; the 88 that state a positive `w:firstLine` next to `w:firstLineChars="0"` are the reason
+ * the character form does not simply win, as §17.3.1.14 has it. `w:ind` has not been re-counted on the authorized
+ * 46 份, so 1,147 / 88 / 236 below are 待重证.
  *
  * A `w:firstLineChars` with no twips counterpart — 236 elements — is drawn in `em`, which makes it follow this
  * page's own font size rather than the document's. 未取证 how wide WPS makes it, since the size WPS measures
@@ -246,12 +253,14 @@ const ptToPx = (pt: number): number => roundPx((pt * 96) / 72);
 
 /**
  * The line grid the page measures snapped paragraphs in, in px, or `undefined` when the section asks for none.
- * §17.3.2.9 gives `w:docGrid@w:type` four spellings and the corpus uses one: **234 of its 235 `w:sectPr` state a
- * `w:docGrid` and every one of the 234 says `lines`** (`.scratch/wps-grid-audience.mjs`, per-section counters),
- * so `default`, `linesAndChars` and `snapToColumns` all land here as "no line grid to draw" — which is also what
- * a section that states no `w:docGrid` at all means, and what every fixture written before this round states. A
- * grid with no `w:linePitch` says where the lines are but not how far apart they lie, and a number this model
- * would have to invent is not a grid: all 234 state the pitch, so the branch is spec-guarded, not corpus-fed.
+ * §17.3.2.9 gives `w:docGrid@w:type` four spellings and the authorized corpus uses three: **58 `w:sectPr` carry 58
+ * `w:docGrid`, 49 of them saying `lines`, 6 saying `linesAndChars`, 3 saying nothing**
+ * (`.scratch/corpus-recheck2.mjs`, per-section counters). `linesAndChars` is a line grid too — the character grid
+ * is what it adds, not what it replaces — so both spellings land in `lineGridPitchTwips`, while `default`,
+ * `snapToColumns` (0 instances here) and a whole absent `w:docGrid` all mean "no line grid to draw", which is what
+ * every fixture written before this round states. A grid with no `w:linePitch` says where the lines are but not how
+ * far apart they lie, and a number this model would have to invent is not a grid: all 58 state the pitch, so the
+ * branch is spec-guarded, not corpus-fed.
  * 哪一种 `w:type` 算「有行网格」由 `lineGridPitchTwips` 一处判定，「段落」对话框那句小字问的是同一个答案。
  */
 const gridPitchPx = (sec: Section): number | undefined => {
@@ -262,8 +271,8 @@ const gridPitchPx = (sec: Section): number | undefined => {
 /**
  * The grid's own height for a line that needs `px`: the next whole number of grid lines, never less than one.
  * This is what 对齐到网格 does to a line taller than the grid — 固定值 18 磅 on a 312 缇 grid draws 41.6px, two
- * lines, which is the well-known "行距莫名其妙变大一倍" whose standard fix is unchecking that box (the corpus
- * writes that box off itself 1,994 times at a paragraph's own property slot, `.scratch/wps-snap-where.mjs`).
+ * lines, which is the well-known "行距莫名其妙变大一倍" whose standard fix is unchecking that box (the authorized
+ * corpus writes that box off itself 226 times at a paragraph's own property slot, `.scratch/corpus-recheck2.mjs`).
  * 未取证: how WPS rounds is a font-metrics question no observation here settles; the reading is §17.3.2.9's, and
  * the direction — a snapped line never gets shorter than the height asked for — is the only one that keeps
  * 固定值 a floor rather than a clip.
@@ -274,9 +283,11 @@ const gridLinesPx = (px: number, pitchPx: number): number => roundPx(Math.max(1,
  * The tallest character height this paragraph asks for, in points — the height a 倍数 or a 最小值 line is really
  * measured against. Two places the file can put it: the run's own resolved size (§17.7.2's ladder, docDefaults
  * included, so a run that states no `w:sz` still has one) and the paragraph mark's (§17.3.1.4). Taking the
- * greater of the two is what keeps a floor from clipping: 63 of the 201 WPS-written documents' 1,298 snapped
- * multiplier paragraphs hold text taller than their own mark (`.scratch/em-ref-impact.ts`), so a floor read off
- * the mark alone would draw those lines under the glyphs. Undefined only when the file says nothing about any
+ * greater of the two is what keeps a floor from clipping. 待重证: the audience for "text taller than its own
+ * paragraph mark" was counted on the quarantined cohort (63 of 201 份 / 1,298 snapped multiplier 段,
+ * `.scratch/em-ref-impact.ts`) and has not been re-derived on the authorized 46; the rule itself does not lean on
+ * that number, because it follows from §17.3.1.4 (the mark carries a height too) and from a floor being a floor —
+ * a mark-only reading would draw those lines under the glyphs. Undefined only when the file says nothing about any
  * of it, which is where `em` and the page's own size are all there is to draw against.
  */
 const textHeightPt = (p: Paragraph): number | undefined => {
@@ -332,7 +343,91 @@ const lineHeight = (p: Paragraph, pitchPx?: number): string => {
   return `max(${pitch}px, ${text === undefined ? `${multiple}em` : `${ptToPx(text * multiple)}px`})`;
 };
 
-function renderParagraph(p: Paragraph, doc: WordDocument, counters: Map<string, number>, state: CommentState, gridPx?: number): string {
+/**
+ * A ground the page may paint: exactly the shape `hex()` reads a `w:fill` into. Anything else the field holds is
+ * the file's own token for no colour (`auto`), and a token goes into a `style` attribute verbatim, so only this
+ * form is drawn.
+ */
+const GROUND = /^#[0-9A-Fa-f]{6}$/;
+
+/**
+ * 段落的框与底纹在页上占的那一块：§17.3.2.36 的 `w:pBdr` 与 §17.3.2.33 的 `w:shd`。
+ *
+ * 每一边各说各的，所以逐边问：`none`/`hidden`/`nil` 三枚字面都是「这一边不画线」（`drawsLine`，与表框、
+ * 页框同一个口径），而 #85 那条教训在这里更要紧——样式把四边全说成 `none` 的那 16 枚是**取消**，不是空白，
+ * 对着「没写」画就等于替文件编一条它明令不要的线。只有真画线的那一边才把它的 `w:space`（磅）垫成
+ * padding：线离字多远是文件自己说的，没线的一边不占这一格。
+ *
+ * 受众（`.scratch/pbdr-audience.ts`，46 份授权件、7,430 个正文段）：26 枚 `w:pBdr` 里 24 枚在
+ * `word/styles.xml`（16 枚四边全 `none`、8 枚一条 `single` 底线），页眉部件的段落 2 枚全取消，正文段落自己
+ * 写框的 0 枚。
+ * `w:between`（相邻两段中间那条）与 `w:bar`（贯穿左边距的那一条）在这 26 枚里 0 枚，`w:shadow` 也 0 枚。
+ * `w:between` 自 #153 起**画**：ribbon 那条「内部横框线」落在段落上说的就是它（见 `betweenOf`），落笔不画就是
+ * 一句没有反馈的话——但那一档 `w:space` 与「一条段落的框线该多厚」在语料里都还没有样本，横边按顶/底那一档走。
+ * `w:bar` 与 `w:shadow` 不画，也还没有实据可照着画（未取证），字节按 `pPrSlots` 原样带回，读得出（`p.borders`）。
+ *
+ * 底纹只认 `w:fill`（30 枚段落底纹全是 `w:val="clear"` 加一个十六进制 `w:fill`，`w:color` 30/30 写 `auto`）。
+ * 十六进制以外的那一枚 token（`auto`）不画：那是文件说「要页面自己的地」，不是没有说——样式链上那一层填了色，
+ * 对着「没说」画就会把样式的地铺进一段明令不要地的段落（`ParaStyle.shading`：段落层 0 例，`w:tcPr` 层 1,600 例，
+ * 形状是文件自己的惯用写法）。铺多宽是 未取证 的另一半：这里铺段落自己那一格（缩进之内、含首行缩进让出的那块），
+ * WPS 把底纹铺到缩进外还是里没观察过。
+ */
+function paraBox(p: Paragraph, middle?: TableBorder): string[] {
+  const out: string[] = [];
+  let padBottom = 0;
+  for (const side of PBDR_ORDER) {
+    if (side === "between" || side === "bar") continue;
+    const edge = p.borders?.[side];
+    if (!drawsLine(edge?.val)) continue;
+    const css = borderCss(`border-${side}`, edge);
+    if (!css) continue;
+    out.push(css.slice(0, -1));
+    const space = edge?.space;
+    if (space !== undefined && space > 0) {
+      const px = roundPx(ptToPx(space));
+      // 底边那一格与中间那一条要的是同一块地方，取大的那一个，别让后推的那条把前一条挤没。
+      if (side === "bottom") padBottom = px;
+      else out.push(`padding-${side}:${px}px`);
+    }
+  }
+  if (middle) {
+    // 中间那一条画在**这一段自己的下沿**：贴着 padding 盒的底，所以落在底框线更内侧的那一格。用背景而不是再来
+    // 一条 border，是因为 `w:bottom` 与 `w:between` 同时说话时那两条线确实各画一条，一条 CSS 边画不出两条。
+    // 背景画不出 `double` 那种双线，虚线/点线按 6/12 与 2/4 的重复段近似——这两档的间距是**推断**，语料里
+    // `w:between` 一枚样本都没有，落笔的那几条腿只写得 `single`。
+    const px = edgeWidthPx(middle);
+    const color = edgeColor(middle);
+    const stroke = STROKE[middle.val ?? ""] ?? "solid";
+    const paint =
+      stroke === "dashed"
+        ? `repeating-linear-gradient(90deg,${color} 0 6px,transparent 6px 12px)`
+        : stroke === "dotted"
+          ? `repeating-linear-gradient(90deg,${color} 0 2px,transparent 2px 4px)`
+          : `linear-gradient(${color},${color})`;
+    out.push(`background-image:${paint}`);
+    out.push("background-position:bottom left");
+    out.push(`background-size:100% ${px}px`);
+    out.push("background-repeat:no-repeat");
+    padBottom = Math.max(padBottom, roundPx(ptToPx(middle.space ?? 0)) + px);
+  }
+  if (padBottom > 0) out.push(`padding-bottom:${padBottom}px`);
+  if (p.shading && GROUND.test(p.shading)) out.push(`background-color:${p.shading}`);
+  return out;
+}
+
+/**
+ * `w:between` 该不该在这一段下面画那一条：件里说的是**这一段与下一段之间**（§17.3.2.36，`docx.ts` 的
+ * `PBDR_ORDER` 那一句），所以两头都得在——下一块是段落、而且两段是同一个样式（样式不同就没有「之间」那句话）。
+ * 一段说完下一段不必再说，所以问的是**这一段**自己。
+ */
+const betweenOf = (p: Paragraph, next: Block | undefined): TableBorder | undefined => {
+  const edge = p.borders?.between;
+  if (!edge || !drawsLine(edge.val)) return undefined;
+  if (next?.kind !== "paragraph") return undefined;
+  return next.styleId === p.styleId ? edge : undefined;
+};
+
+function renderParagraph(p: Paragraph, doc: WordDocument, counters: Map<string, number>, state: CommentState, gridPx?: number, next?: Block): string {
   const style: string[] = [];
   if (p.align && ALIGN[p.align]) style.push(`text-align:${ALIGN[p.align]}`);
   if (p.indentLeft) style.push(`margin-left:${twipsToPx(p.indentLeft)}px`);
@@ -341,35 +436,43 @@ function renderParagraph(p: Paragraph, doc: WordDocument, counters: Map<string, 
   if (first) style.push(`text-indent:${first}`);
   if (p.spacingBefore !== undefined) style.push(`margin-top:${twipsToPx(p.spacingBefore)}px`);
   if (p.spacingAfter !== undefined) style.push(`margin-bottom:${twipsToPx(p.spacingAfter)}px`);
+  style.push(...paraBox(p, betweenOf(p, next)));
   // The size the file's ladder resolves for this paragraph's own mark, on the paragraph. Without it the page's
-  // 12pt answers for the strut, for a run that states no size, and for the height of an empty paragraph — while
-  // 9,421 of the 201 WPS-written documents' 13,426 root-level paragraphs resolve *below* 12pt and 425 above it
-  // (`.scratch/em-ref-impact.ts`). A ladder that says nothing stays in the stylesheet's number: this draws the
-  // file's size where the file states one, never one it does not.
+  // 12pt answers for the strut, for a run that states no size, and for the height of an empty paragraph. On the
+  // authorized 46 files the ladder speaks for 3,119 of its 3,120 正文段 (one says nothing): 1,422 of them draw a multiple of the grid
+  // and 488 of those resolve *above* 12pt (432) or below it (34) — 408 paragraphs whose drawn number really moves
+  // once the reference is the file's own size, in 24 of the 46 files — while the plain multiple branch holds 188
+  // with 76 off 12pt (`.scratch/em-ref-impact.ts` over `/tmp/wps-authorized.txt`). A ladder that says nothing stays
+  // in the stylesheet's number: this draws the file's size where the file states one, never one it does not.
   if (p.markSizePt !== undefined) style.push(`font-size:${p.markSizePt}pt`);
   const lh = lineHeight(p, gridPx);
   if (lh) style.push(`line-height:${lh}`);
   if (p.pageBreakBefore) style.push("page-break-before:always");
   // The heading a paragraph is drawn as. `data-outline` is the outline level the model resolves — its own or
   // the one its style chain states (§17.3.2.26) — and the 大纲 pane counts those marks in the order the page
-  // writes them, which is why the attribute carries the resolved number rather than a guessed one: 846 of the
-  // 86 WPS-written documents' 46,417 paragraphs have a level, 785 of them a heading one (0 × 30, 1 × 368,
-  // 2 × 367, 3 × 20, `.scratch/outline-census.ts`).
+  // writes them, which is why the attribute carries the resolved number rather than a guessed one. On the authorized
+  // 46 files 408 of its 7,430 paragraph blocks resolve a level — 202 stating it themselves, 206 taking it from the
+  // chain — spread as 0 × 298, 1 × 60, 9 × 26, 2 × 14, 3 × 8, 4 × 2 (`.scratch/outline-census.ts` over
+  // `/tmp/wps-authorized.txt`).
   const outline = headingLevel(p);
   // The tag follows that level, but only down to 4. The page's stylesheet holds those four level-neutral
   // (`font: inherit; line-height: inherit; margin: 0`), so an `h1` the file says nothing about draws exactly the
   // line body text draws (#135); a deeper level stays a `div`, because the browser's own sheet would draw `h5`
   // and below *smaller* than body text — turning a deep level into a heading would put the file's heading under
   // the paragraph it introduces. A `w:pStyle` name still counts on its own, because a Word file can name
-  // `Heading2` and state no level; 0 of the corpus's 433 level-stating styleIds match that pattern, so on these
-  // files the branch below never fires alone.
+  // `Heading2` and state no level — and on the authorized 46 files that branch is the one nobody reaches: of the
+  // 172 paragraph styles that state a level, **0 carry a `w:styleId` matching `^Heading([1-9])$`** (110 of them are
+  // *named* the English `heading N` but carry some other id), so the tag below is always the resolved level's.
   const named = /^Heading([1-9])$/i.exec(p.styleId ?? "");
   const drawn = outline ?? (named ? Number(named[1]) : undefined);
   const tag = drawn !== undefined && drawn <= 4 ? `h${drawn}` : "div";
   let prefix = "";
   // `w:numId w:val="0"` is the file saying this paragraph is not numbered (§17.3.4.25) while still carrying a
-  // `w:numPr`: 517 of the corpus's 981 paragraphs that have the element are that cancellation, 86 of them signed
-  // `w:ilvl="-1"` (`.scratch/num-from-style.ts`). Drawing a bullet for one adds a list member the file refused.
+  // `w:numPr`: the authorized 46 files have 298 paragraphs with the element and 52 of them are that cancellation
+  // (`.scratch/corpus-recheck2.mjs`; `.scratch/pgmar.mjs` counts 0 that omit `w:numId` altogether). Drawing a
+  // bullet for one adds a list member the file refused. `w:ilvl w:val="-1"` — 86 of them on the old, quarantined
+  // reading — appears **0** times in the authorized corpus (`.scratch/oneoff-gap.mjs`), so that spelling is
+  // 未取证 and nothing here depends on it.
   if (p.numPr && p.numPr.numId !== 0) {
     const { numId, ilvl } = p.numPr;
     const level = doc.levelOf(numId, ilvl);
@@ -412,6 +515,11 @@ function renderParagraph(p: Paragraph, doc: WordDocument, counters: Map<string, 
   const fmt = p.revFormat;
   const classes = `para${p.styleName ? " s-" + esc(p.styleName.replace(/\s+/g, "-")) : ""}${mark ? ` rev-mark-${mark.kind}` : ""}${fmt ? " para-rev" : ""}`;
   const carried =
+    // 段落自己算好的制表位（缇、档），由 `doc-layout.ts` 的 `applyTabStops` 拿去量每一枚制表符该走多宽。
+    // 写在 data 上而不是 style 上：编辑读回的是格式，不该把这些数当成段落自己新说的一句话。
+    (p.tabStops?.length
+      ? ` data-tab-stops="${p.tabStops.map((s) => `${s.posTwips}:${s.val === "right" ? "r" : s.val === "center" ? "c" : "l"}`).join(",")}"`
+      : "") +
     (mark
       ? ` data-rev-mark="${mark.kind}" data-rev-mark-id="${mark.id}" data-rev-mark-author="${esc(mark.author)}"${mark.date ? ` data-rev-mark-date="${esc(mark.date)}"` : ""}${mark.move ? ` data-rev-mark-move="${mark.move}"` : ""}`
       : "") +
@@ -426,14 +534,17 @@ function renderParagraph(p: Paragraph, doc: WordDocument, counters: Map<string, 
 /**
  * What the symbol in front of a numbered paragraph is made of. The file states it as `w:lvlText`, a template
  * whose `%N` is the number of level N of the same list (§17.3.1.65), so the digits and the punctuation between
- * them both come from the part rather than from this renderer: over the 86 WPS-written documents all 617
- * `w:lvl` elements state a `w:lvlText` of their own, and what follows the placeholder is 、 for 91 of the 92
- * `chineseCounting` levels, ")" for 72 of the 75 `lowerLetter` ones, and only 84 of the 205 `decimal` ones —
- * the "." this file used to append was wrong for more than half of them (`.scratch/numfmt-census.ts`).
- * Replay of the same model through the old and the new renderer puts the page consequence in one number: of the
- * 501 paragraphs that draw a symbol, 380 draw a different one now (213 whose `chineseCounting` level had been
- * drawn as digits, 167 whose punctuation the template decides) and 121 draw exactly what they drew before
- * (`.scratch/num-draw-impact.ts`).
+ * them both come from the part rather than from this renderer. 授权 46 份里 22 份带 `word/numbering.xml`（去重 13
+ * 个模板），**110 枚 `w:lvl` 全写 `w:lvlText`，110 枚全含 `%N`**；最后一个占位符之后跟的东西是（正则切片与
+ * ElementTree 两条口径逐枚一致，`.scratch/authorized-families3.mjs`）：
+ * `decimal` 88 枚 → `.` 66、`、` 10、`）` 6、`．` 2、`)` 2、什么都不跟 2；`chineseCounting` 14 枚 → `、` 10、`）` 4；
+ * `lowerLetter` 4 枚 → `．` 2、`）` 2；`lowerRoman` 2 枚 → 一个空格；`decimalEnclosedCircleChinese` 2 枚 → 空。
+ * So the "." this file used to append is right for 66 of the 88 `decimal` levels and wrong for 22 of them, and the
+ * split is not even clean per format: the same `chineseCounting` answers with two different marks inside one
+ * corpus, which is why the template is copied rather than reconstructed from `w:numFmt`.
+ * 待重证: the earlier replay of old-vs-new renderer (501 段 draws a symbol, of which 380 change) counted over the
+ * quarantined cohort and has not been re-run; the fixtures that pin 符号按模板画 carry the same facts one paragraph
+ * at a time.
  *
  * A `%N` that names another level reads the counter that list is on; one nothing has drawn yet shows that
  * level's `w:start`. A level with no `w:lvlText` at all falls back to the bare number in its own format, and a
@@ -543,6 +654,13 @@ const NO_LINE: ReadonlySet<string> = new Set(["none", "hidden", "nil"]);
  */
 export const drawsLine = (val?: string): boolean => val !== undefined && !NO_LINE.has(val);
 
+/** `w:sz`（八分之一磅）落到 CSS 的那一档，最小一条线。 */
+const edgeWidthPx = (edge?: TableBorder): number => Math.max(1, Math.round((edge?.size ?? 8) / 6));
+
+/** `w:color` 说的颜色；`auto` 是「跟着字走」，不是没有说。 */
+const edgeColor = (edge?: TableBorder): string =>
+  !edge?.color || edge.color === "auto" ? "currentColor" : "#" + edge.color.replace(/^#/, "").toUpperCase();
+
 /**
  * One edge as CSS — a table's rule, a cell's, or the page's own border, which is why the edge is taken by
  * structure rather than by name. A token `STROKE` has no entry for draws a solid line of the width asked for,
@@ -551,9 +669,7 @@ export const drawsLine = (val?: string): boolean => val !== undefined && !NO_LIN
  */
 function borderCss(property: string, edge?: TableBorder): string {
   if (!edge || !drawsLine(edge.val)) return "";
-  const width = Math.max(1, Math.round((edge.size ?? 8) / 6)); // eighths of a point → CSS px
-  const color = !edge.color || edge.color === "auto" ? "currentColor" : "#" + edge.color.replace(/^#/, "").toUpperCase();
-  return `${property}:${width}px ${STROKE[edge.val] ?? "solid"} ${color};`;
+  return `${property}:${edgeWidthPx(edge)}px ${STROKE[edge.val] ?? "solid"} ${edgeColor(edge)};`;
 }
 
 const isSet = (edge?: TableBorder): edge is TableBorder => edge !== undefined;
@@ -673,6 +789,8 @@ function renderTable(t: Table, doc: WordDocument, state: CommentState, gridPx?: 
     borderCss("border-left", table?.left ?? table?.start),
     borderCss("border-bottom", table?.bottom),
     borderCss("border-right", table?.right ?? table?.end),
+    // 表自己的地（`w:tblPr/w:shd`）铺在格子底下；`auto` 不铺——那是文件说「要页面自己的地」，不是「铺个透明」。
+    t.shading && GROUND.test(t.shading) ? `background:${t.shading};` : "",
   ].join("");
   const rows = t.rows
     .map((cells, r) => {
@@ -692,7 +810,9 @@ function renderTable(t: Table, doc: WordDocument, state: CommentState, gridPx?: 
           const style = [
             merge.hidden ? "display:none;" : "",
             c.widthTwips ? `width:${c.widthType === "pct" ? `${c.widthTwips / 50}%` : `${twipsToPx(c.widthTwips)}px`};` : "",
-            c.shading ? `background:${c.shading};` : "",
+            // 认不出是颜色的那一句（`auto`、具名色）不往 style 里放：与段落同一道闸（`GROUND`），
+            // 也是「说了不要地」与「没说」的分别——三态读法自 #152 起把 token 原样带进模型。
+            c.shading && GROUND.test(c.shading) ? `background:${c.shading};` : "",
             c.valign ? `vertical-align:${VALIGN[c.valign] ?? c.valign};` : "",
             c.noWrap ? "white-space:nowrap;" : "",
             c.textDirection ? `writing-mode:${writingMode(c.textDirection)};` : "",
@@ -715,7 +835,13 @@ function renderTable(t: Table, doc: WordDocument, state: CommentState, gridPx?: 
 
 function renderBlocks(blocks: Block[], doc: WordDocument, counters: Map<string, number> = new Map(), state: CommentState = { open: new Set(), numbers: new Map(), done: new Set() }, gridPx?: number): string {
   return blocks
-    .map((b) => (b.kind === "paragraph" ? renderParagraph(b, doc, counters, state, gridPx) : b.kind === "table" ? renderTable(b, doc, state, gridPx) : renderCarried(b)))
+    .map((b, i) =>
+      b.kind === "paragraph"
+        ? renderParagraph(b, doc, counters, state, gridPx, blocks[i + 1])
+        : b.kind === "table"
+          ? renderTable(b, doc, state, gridPx)
+          : renderCarried(b),
+    )
     .join("");
 }
 
@@ -738,6 +864,17 @@ function renderCarried(b: Carried): string {
 
 /** The class a page border's element wears: drawn inside the paper box, and never a block of text. */
 export const PAGE_BORDER_CLASS = "doc-page-border";
+
+/**
+ * 后面那些节自己的带子的**母本**（#157）：可点可改的只有纸盒外那两份原件（首张的页眉、末张的页脚），
+ * 其余每一节真正显示的那一份画在这里，`display:none`、不可点、不带 `.hf` 这个名——
+ * `doc-edit.ts` 的 `paintBandCopies` 拿它做那张纸上的复件。占 `.hf` 的名会被 `wireHF` 认领成可编辑的带子，
+ * 一份件里两份能改的带子就都归不了一个主人。
+ */
+export const BAND_SOURCE_CLASS = "solo-hf-src";
+/** 纸盒里那两份能点、能改的带子原件（#157：带子搬进纸内，正文按它占走的高度让位）。数块的时候与条带、
+ *  复件同一条守则剔掉：它是纸上的装饰加一个可点的编辑口，不是正文的一块。 */
+export const BAND_MASTER_CLASS = "solo-hf-master";
 
 /**
  * The line `w:pgBorders` asks for, drawn as one absolutely positioned element per stated side inside the paper
@@ -769,6 +906,23 @@ function renderPageBorders(sec: Section): string {
   }).join("");
 }
 
+/**
+ * A band's paragraphs as the page shows them. `.hf-p` is `white-space: pre-wrap`, so a tab the part holds stays
+ * a tab on screen and comes back as one when the line is read out of the page again. A paragraph that holds a
+ * field is drawn piece by piece, because the field is not text and the order the two sit in is the file's, not
+ * the reader's.
+ */
+function bandParagraphsHtml(area: HeaderFooter): string {
+  return (
+    area.paragraphs
+      .map((_, i) => {
+        const segs = area.segments?.[i] ?? [{ text: area.paragraphs[i] ?? "" }];
+        return `<div class="hf-p">${segs.map((s) => (s.carry ? hfFieldTag(s.carry) : esc(s.text ?? ""))).join("") || "<br>"}</div>`;
+      })
+      .join("") || '<div class="hf-p"><br></div>'
+  );
+}
+
 export function renderWord(doc: WordDocument): string {
   const sec = doc.sections[0] ?? DEFAULT_SECTION;
   const width = twipsToPx(sec.pageWidthTwips);
@@ -777,32 +931,29 @@ export function renderWord(doc: WordDocument): string {
   const gutter = sec.margins.gutter ?? 0;
   // The line grid every snapping paragraph on this page is measured in. It comes from the same section the page
   // box comes from, because one rendered page draws one section's text column — and on this corpus a later
-  // section cannot disagree with it anyway: 0 of the 201 WPS-written documents state two different `w:docGrid`
-  // over their own 235 sections (`.scratch/wps-grid-audience.mjs` counts one `(type, linePitch)` pair per file).
+  // section cannot disagree with it anyway: 授权 46 份的 **58 枚 `w:sectPr` 全带 `w:docGrid`，同一件里两节的
+  // `(type, linePitch)` 不同的情况 0 件**（opener-walk 切片与 ElementTree 两条口径同为 58/58/0，pitch 值域只有
+  // 312/285/360，`.scratch/authorized-families3.mjs`）。取第一节的网格因此不是赌气，是没有可分的第二格。
   const gridPx = gridPitchPx(sec);
   const style = `--page-w:${width}px;--pad-t:${twipsToPx(sec.margins.top)}px;--pad-r:${twipsToPx(sec.margins.right)}px;--pad-b:${twipsToPx(sec.margins.bottom)}px;--pad-l:${twipsToPx(sec.margins.left + gutter)}px`;
-  // The distance a band's text is held from the body's, taken from the section's own `w:header`/`w:footer`.
-  // Those count from the **page edge**, so what separates a band from the body text is the margin it sits in
-  // minus that distance: a header pinned near the edge has a wide gap under it, one pushed down toward the
-  // text has almost none. 未取证: WPS' own scrolling view was not observed placing the band, and here the band
-  // hangs outside the paper box, so the declared distance can only show as spacing rather than as placement
-  // inside the margin. A section that states neither keeps the stylesheet's fixed gap — inventing Word's
-  // docDefaults here would draw a number nobody wrote.
-  const bandGap = (margin: number, distance: number | undefined): number | undefined =>
-    distance === undefined ? undefined : Math.max(0, twipsToPx(margin - distance));
+  // The distance a band's text is held from the paper's edge, taken from the section's own `w:header`/`w:footer`.
+  // Those count from the **page edge** (§17.3.2.9 note on `w:pgMar`), so the band is placed by its own top, not by
+  // a sentence of padding that holds its text away from the body — that padding was the substitute drawing while the
+  // band hung outside the paper box. The real machine was measured placing it **inside** the margin, with the body
+  // yielding below it (`.scratch` 夹具 `/tmp/tall-header.docx`，正文上沿 ≈3445 缇)，所以这里改成摆位、让位由
+  // `doc-layout.ts` 的 `applyBandYield` 量出来。A section that states neither keeps the paper edge: inventing
+  // Word's docDefaults here would draw a number nobody wrote.
+  const bandEdge = (distance: number | undefined): number => (distance === undefined ? 0 : twipsToPx(distance));
+  // 这两份原件守着这一叠纸的**首尾**，各自贴在所在那一张的纸沿里：页眉是第一张的，页脚是最后一张的，所以各按
+  // `sectionBand` 取那一节真正显示的部件（#157 第二片）。此前两份都取文档级那一对，多节的件就把最后一张的页脚
+  // 画成了第一节的字——纸上的复件按节取、能点的那一份却按文档级取，两边问的不是同一份部件，改完写回的也不是纸上那张。
+  const lastSection = Math.max(0, doc.sectionRefs.length - 1);
+  const visibleBand = (which: "header" | "footer"): HeaderFooter | undefined =>
+    which === "header" ? doc.sectionBand("header", 0) : doc.sectionBand("footer", lastSection);
   const hf = (which: "header" | "footer"): string => {
-    const area = which === "header" ? doc.header : doc.footer;
+    const area = visibleBand(which);
     if (!area) return "";
-    // `.hf-p` is `white-space: pre-wrap`, so a tab the part holds stays a tab on screen and comes back as
-    // one when the line is read out of the page again. A paragraph that holds a field is drawn piece by
-    // piece, because the field is not text and the order the two sit in is the file's, not the reader's.
-    const paras =
-      area.paragraphs
-        .map((_, i) => {
-          const segs = area.segments?.[i] ?? [{ text: area.paragraphs[i] ?? "" }];
-          return `<div class="hf-p">${segs.map((s) => (s.carry ? hfFieldTag(s.carry) : esc(s.text ?? ""))).join("") || "<br>"}</div>`;
-        })
-        .join("") || '<div class="hf-p"><br></div>';
+    const paras = bandParagraphsHtml(area);
     const name = which === "header" ? "页眉" : "页脚";
     const tip = area.editable ? `点击编辑${name}` : `此${name}含表格或图片等富内容，暂不支持编辑`;
     // The command the band carries, drawn outside the paragraphs so reading them back never picks it up as
@@ -811,26 +962,51 @@ export function renderWord(doc: WordDocument): string {
       ? `<div class="hf-bar" contenteditable="false" style="${HF_BAR_STYLE}"><button class="hf-page" data-hf-page="${which}" style="${HF_BTN_STYLE}" title="在此${name}插入页码域">插入页码</button></div>`
       : "";
     // `hf-bottom` is the rule that puts a footer's padding under its text instead of above it. The band
-    // travels with the page's own box variables: it sits beside `.page`, not inside it, so without them the
-    // stylesheet answers with its 794px fallback and a landscape section gets a portrait header — same page,
-    // two widths. The horizontal padding is overridden to the section's margins so the band's text starts at
-    // the same column as the body's.
-    const gap = bandGap(which === "header" ? sec.margins.top : sec.margins.bottom, which === "header" ? sec.margins.header : sec.margins.footer);
-    const spacing = gap === undefined ? "" : `;padding-${which === "header" ? "bottom" : "top"}:${gap}px`;
-    return `<div class="hf hf-${which}${which === "footer" ? " hf-bottom" : ""}" data-hf="${which}" style="${style};padding-left:var(--pad-l);padding-right:var(--pad-r)${spacing}" title="${tip}">${paras}${bar}</div>`;
+    // travels with the page's own box variables: it lives inside the paper box now, and the horizontal padding
+    // is overridden to the section's margins so the band's text starts at the same column as the body's.
+    // Without them the stylesheet answers with its 794px fallback and a landscape section gets a portrait
+    // header — same page, two widths.
+    // 带子这一侧的纵向数按**它所属那一节**取：页脚原件守的是最后一张，那一节的下边距与 `w:footer` 说的距离
+    // 才是它自己的。横向仍是开篇那一节的整套页变量——这一叠纸只有一个纸盒宽度（`doc-layout.ts` 头注「纵向」
+    // 那条），带子与正文要落在同一栏里。
+    const own = doc.sections[Math.min(which === "header" ? 0 : lastSection, Math.max(0, doc.sections.length - 1))] ?? sec;
+    const edge = bandEdge(which === "header" ? own.margins.header : own.margins.footer);
+    // 纵向落点先按节说的距离写死在这里，`doc-layout.ts` 的 `applyBandYield` 随后把它挪到「文字贴在距离上」
+    // 那一格（样式自己那圈内边距不是距离的一部分，与纸上的复件同一算法），并按带子真正占走的高度让正文让位。
+    const place = which === "header" ? `top:${edge}px` : `bottom:${edge}px`;
+    // 带子现在住在**可编辑的纸盒里**，这一句 `contenteditable="false"` 是它 resting 状态唯一的来源：此前它挂在
+    // 纸盒之外，不可编辑是从宿主继承来的，一句都不用写。缺了这句，`editHF` 开头那句 `isContentEditable` 就
+    // 直接 return——带子点不开、打字落进正文、`sync()` 又把它当装饰跳过，两边都丢。
+    return `<div class="hf hf-${which}${which === "footer" ? " hf-bottom" : ""} ${BAND_MASTER_CLASS}" data-hf="${which}" contenteditable="false" data-hf-part="${esc(area.part)}" style="${style};position:absolute;left:0;${place};padding-left:var(--pad-l);padding-right:var(--pad-r)" title="${tip}">${paras}${bar}</div>`;
   };
   const borders = renderPageBorders(sec);
+  // 后面那些节各自显示的带子的母本（#157）：纸盒外可见的那两份只守着首张与末张，其余每一节真正显示的那一份
+  // 画在这里，纸上的复件按节来抄。母本缺了就不画——把上一节的字贴到这一节的纸上，正是这一片要修的。
+  // 可见的那两份不进母本（`seenBand` 先记下它们的部件）：一份件里两份能改的带子就都归不了一个主人。
+  // 母本用与正文同一套页变量：这一页的纸盒就是按第一节那一套宽度画的（多节各按自己的纸高量，宽仍是这一套，
+  // `doc-layout.ts` 头注「纵向」那条），复件落在同一张纸上，换宽就把正文与带子分到两个宽度里。
+  const seenBand = new Set([visibleBand("header")?.part, visibleBand("footer")?.part]);
+  const bandSources = doc.sectionRefs
+    .flatMap((pair, k) =>
+      (["header", "footer"] as const).flatMap((which) => {
+        const area = which === "header" ? pair.header : pair.footer;
+        if (!area || seenBand.has(area.part)) return "";
+        seenBand.add(area.part);
+        return `<div class="${BAND_SOURCE_CLASS}" data-hf-part="${esc(area.part)}" data-hf-kind="${which}" contenteditable="false" aria-hidden="true" style="${style};display:none;padding-left:var(--pad-l);padding-right:var(--pad-r)">${bandParagraphsHtml(area)}</div>`;
+      }),
+    )
+    .join("");
   // An `@font-face` is a rule, not a declaration, so the east-asian families travel in a stylesheet next to the
   // page rather than in a `style` attribute. It sits beside `.page` for the same reason the borders below do not
   // lead it: the editor counts blocks among `.page`'s children.
   const faceRules = eastAsiaFaceRules(doc.eastAsiaFaces());
-  // The border elements come last, inside the paper box: the editor addresses a block by its position among
-  // `.page`'s children, and a leading decoration would move every one of those positions by a step.
-  return `${faceRules ? `<style>${faceRules}</style>` : ""}${hf("header")}<div class="page" style="${style}${borders ? ";position:relative" : ""}">${renderBlocks(doc.blocks, doc, new Map(), {
+  // 装饰都排在**块之后**：编辑器按块在 `.page` 孩子里的下标寻址，任何排在前面的装饰会把每一个下标顶偏。
+  // 页面边框与两份带子原件都排在正文之后（#157：带子此前排在纸盒之外，画在纸上看不到，正文也从没为它让位）。
+  return `${faceRules ? `<style>${faceRules}</style>` : ""}<div class="page" style="${style};position:relative">${renderBlocks(doc.blocks, doc, new Map(), {
     open: new Set(),
     numbers: new Map(doc.comments.map((c, i) => [c.id, i + 1])),
     done: new Set(doc.comments.filter((c) => c.resolved === true).map((c) => c.id)),
-  }, gridPx)}${borders}</div>${hf("footer")}`;
+  }, gridPx)}${borders}${hf("header")}${hf("footer")}</div>${bandSources}`;
 }
 
 function renderSlideParagraph(p: SlideParagraph): string {

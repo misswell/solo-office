@@ -1,17 +1,19 @@
-import type { Block, Carried, CarriedInline, FormatRevision, HfSegment, Inline, LineSpacingRule, ParaStyle, PageGeometry, PageSetup, Paragraph, ParagraphFormatRevision, PropSlot, Revision, RevisionEntry, RowInfo, RunStyle, Table, TableCell, WordDocument } from "../core/docx.js";
+import type { Block, BorderSet, Carried, CarriedInline, CellStyle, FormatRevision, HeaderFooter, HfSegment, Inline, LineSpacingRule, ParaStyle, PageGeometry, PageSetup, Paragraph, ParagraphFormatRevision, PropSlot, Revision, RevisionEntry, RowInfo, RunStyle, Table, TableBorder, TableCell, TableStyle, WordDocument } from "../core/docx.js";
 import type { CommentAnchor, DocComment } from "../core/comments.js";
 import { bodyShape, commentTexts } from "../core/comments.js";
-import { DEFAULT_SECTION, RUN_STYLE_KEYS, countTexts, lineGridPitchTwips, ownParaStyle, ownRunStyle, paraSpacingPitch, paraStyleOf, paragraphTextsOf, runStyleOf, sectionEndsOf, stampNow, syncParaSlots, twipsToPx } from "../core/docx.js";
+import { DEFAULT_SECTION, EAST_ASIAN_TEXT, RUN_STYLE_KEYS, applyFacePick, applyRunPatch, borderDelta, carriedShape, cellShapeOf, countTexts, lineGridPitchTwips, ownParaStyle, ownRunStyle, paraSpacingPitch, paraStyleOf, paragraphTextsOf, runStyleOf, samePropValue, sectionEndsOf, signCellRevision, signTableRevision, stampNow, syncCellBox, syncParaSlots, syncTableBox, tableShapeOf, twipsToPx } from "../core/docx.js";
 import type { CellWhere, TableEdit } from "../core/doc-table-ops.js";
 import { cellRangeFor, cellRect, cellsInRect, cellsInSweep, deleteColumnHere, deleteRowHere, gridColumns, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, splitHere, splitTableAt } from "../core/doc-table-ops.js";
 import { IMAGE_EXT_BY_MIME } from "../core/media.js";
-import { CARRY_CLASS, CARRY_STYLE, PAGE_BORDER_CLASS, RUN_CARRY_CLASS, highlightColor, renderWord } from "../core/render.js";
+import { BAND_SOURCE_CLASS, CARRY_CLASS, CARRY_STYLE, BAND_MASTER_CLASS, PAGE_BORDER_CLASS, RUN_CARRY_CLASS, fontStack, highlightColor, renderWord } from "../core/render.js";
 import { flatOf, inlineLength, isMark, keepRunIdentity } from "../core/run-identity.js";
 import { CommentPanel } from "./doc-comments.js";
-import { applySheetGaps, caretCharTop, lineCaretAnchor, lineNumberAt, measurePageLayout, pageAtCaret, pageCaretAnchor, pagePositionAt, rowColumnAt, sectionCaretAnchor, SHEET_STRIP_CLASS, type CaretLine, type PageAnchor, type PageMeasure, type PagePlacement } from "./doc-layout.js";
+import { applyBandYield, applySheetGaps, applyTabStops, BAND_CLONE_CLASS, caretCharTop, lineCaretAnchor, lineNumberAt, measurePageLayout, pageAtCaret, pageCaretAnchor, pagePositionAt, rowColumnAt, sectionCaretAnchor, SHEET_GAP_ROW_CLASS, SHEET_STRIP_CLASS, type CaretLine, type PageAnchor, type PageMeasure, type PagePlacement, type SheetStrip } from "./doc-layout.js";
 import { ReviewPanel } from "./doc-review.js";
 import { OutlinePanel } from "./doc-outline.js";
 import { openPageSetup as showPageSetupDialog } from "./doc-page-setup.js";
+import { CELL_BOX_SIDES, PARA_BOX_SIDES, applyBoxPatch, showCellBoxDialog, showParaBorderDialog, showTableBoxDialog, TABLE_BOX_SIDES, TABLE_EDGE_SHAPE } from "./doc-para-border.js";
+import type { BoxPatch, BoxState, CellBoxSide, ParaBoxPatch, ParaBoxState, TableBoxSide } from "./doc-para-border.js";
 import { showParaSpacingDialog } from "./doc-para-spacing.js";
 import type { ParaSpacingPatch, ParaSpacingState } from "./doc-para-spacing.js";
 import { openWordCount, type WordCountReadout } from "./doc-word-count.js";
@@ -55,9 +57,10 @@ const HIGHLIGHT_BY_CSS = new Map<string, string>(HIGHLIGHT_NAMES.map((n) => [css
 const ZWSP = "\u200b";
 
 /**
- * How WPS spells a soft return: `w:type="textWrapping"`, not a bare `w:br`. Measured over the 86 files this
- * machine's WPS wrote — 132 breaks state `type="textWrapping"` with no `w:clear` and 9 add `w:clear="all"`, while
- * **0 are spelled without `w:type`**. A break the page created itself (Shift+Enter, which Blink inserts as a bare
+ * How WPS spells a soft return: `w:type="textWrapping"`, not a bare `w:br`. Authorized 语料 46 份 WPS 自带模板里
+ * `word/document.xml` 一共 **4 枚 `w:br`，4 枚全写 `type="textWrapping"`，0 枚带 `w:clear`，0 枚裸写没有 `w:type`**
+ * （`.scratch/authorized-families.mjs`，与 xmllint 数的 `//w:br` = 4 一致）。旧口径那句「132 枚 textWrapping / 9 枚
+ * clear」来自已作废的 86 份清单，标 待重证。A break the page created itself (Shift+Enter, which Blink inserts as a bare
  * `<br>`) therefore comes back with this token; a break the file authored keeps the token it arrived with.
  */
 const TEXTWRAPPING_BR = '<w:br w:type="textWrapping"/>';
@@ -105,6 +108,13 @@ function styleOf(el: Element): RunStyle {
   const fromCss = bg ? HIGHLIGHT_BY_CSS.get(cssValue("background", bg)) : undefined;
   const hl = fromCss || el.getAttribute("data-hl");
   if (hl) s.highlight = hl;
+  // 待用的那一张脸只活在占位 span 上，模型里还没有它。这里不读 CSS `font-family`：正文那一段的栈是渲染器拼的
+  // `"solo-ea-<中文脸>","<拉丁脸>"`（#77 用 `unicode-range` 把借来的族名收窄到东亚码位），把 `solo-ea-宋体` 读回
+  // 模型就是给件里从没写过的名字盖章。所以 `armPending` 把自己那一句写成两个属性，这一处只认这两个属性。
+  const face = el.getAttribute("data-pick-face");
+  if (face) s.font = face;
+  const faceEa = el.getAttribute("data-pick-face-ea");
+  if (faceEa) s.fontEastAsia = faceEa;
   if (inline.verticalAlign === "super") s.vertAlign = "superscript";
   if (inline.verticalAlign === "sub") s.vertAlign = "subscript";
   return s;
@@ -127,10 +137,15 @@ function revisionOf(el: Element): Revision | undefined {
 /**
  * The rows of this table only. A table nested in a cell is inside the same element, and its rows are not
  * this table's rows.
+ *
+ * A row the page seam put in (`SHEET_GAP_ROW_CLASS`, #158) is paint, not a row: reading it back would add an
+ * empty `w:tr` to the file and shift every row under the seam by one. Same precedent as a sheet strip or a
+ * band copy at block level — the painting pass is not the model.
  */
 function rowsOf(el: Element): Element[] {
+  const isGap = (tr: Element): boolean => tr.classList.contains(SHEET_GAP_ROW_CLASS);
   return [...el.children].flatMap((part) =>
-    part.tagName === "TR" ? [part] : ["TBODY", "THEAD", "TFOOT"].includes(part.tagName) ? [...part.children].filter((tr) => tr.tagName === "TR") : [],
+    part.tagName === "TR" ? (isGap(part) ? [] : [part]) : ["TBODY", "THEAD", "TFOOT"].includes(part.tagName) ? [...part.children].filter((tr) => tr.tagName === "TR" && !isGap(tr)) : [],
   );
 }
 
@@ -328,6 +343,15 @@ export interface DocPath {
   offset: number;
 }
 
+/**
+ * 读者那一处在页面上的位置：**两端**。折叠光标是两端相同的一个点，跨格选区是各在一格的两个端点。
+ * 记一个点不够——ribbon 那一格「边框」按选区派发落点（`borderScope`），撤销只还回一个点的话，第二击就换了层。
+ */
+export interface CaretMark {
+  start: DocPath;
+  end: DocPath;
+}
+
 /** What the four 选择 cells commands answer: whether the page can show such a range, and how many cells it lit up. */
 export type TableSelection = { ok: boolean; reason?: string; selected?: number };
 
@@ -339,7 +363,15 @@ export type RevisionView = "marks" | "final" | "original";
  *  paragraph on the other side of a table wall never is. */
 type BodyText = { runs: Inline[]; spans: { paragraph: Paragraph; length: number; group: number }[] };
 
-export type StylePatch = Partial<Pick<RunStyle, "bold" | "italic" | "underline" | "strike" | "sizePt" | "color" | "highlight">>;
+/**
+ * 一次格式命令能说出口的那几句。`font` 说的是「这个 run 的脸」，而模型里它管两槽（§17.3.2.26 把一个 run 的字按书写
+ * 系统分派），所以 `fontEastAsia` 不在这张名单上——它不是一条命令，只是 `font` 该不该管到汉字那一槽的另外半边
+ * （`pickedFaceCoversHan`）。
+ */
+export type StylePatch = Partial<Pick<RunStyle, "bold" | "italic" | "underline" | "strike" | "sizePt" | "color" | "highlight" | "font">>;
+
+/** `StylePatch` 加上一条命令摊开到的那一槽：只有 `patched` 与 `armPending` 会在内部写它，工具栏递不出。 */
+type WidePatch = StylePatch & Partial<Pick<RunStyle, "fontEastAsia">>;
 
 /** One row of the comment list, shaped for the panel rather than for the file format. */
 export interface CommentEntry {
@@ -442,8 +474,8 @@ export class DocEditor {
    * but the body's `w:sectPr` and the geometry the page is drawn from sit outside it, so a step that cloned
    * only the text would step a margin change back into a page that never moved.
    */
-  private undoStack: { blocks: Block[]; comments: DocComment[]; caret: DocPath | null; page: PageGeometry }[] = [];
-  private redoStack: { blocks: Block[]; comments: DocComment[]; caret: DocPath | null; page: PageGeometry }[] = [];
+  private undoStack: { blocks: Block[]; comments: DocComment[]; caret: CaretMark | null; page: PageGeometry }[] = [];
+  private redoStack: { blocks: Block[]; comments: DocComment[]; caret: CaretMark | null; page: PageGeometry }[] = [];
   private burst = 0;
   private composing = false;
   /**
@@ -460,7 +492,7 @@ export class DocEditor {
    * 占位 span 上那一次点过的格式，攒着的样子（不是最后一次的）：同族再点换掉自己那一项，别族点到往上叠。
    * span 是它的投影，`settlePending` 一收就清空。
    */
-  private pendingFormatPatch: StylePatch = {};
+  private pendingFormatPatch: WidePatch = {};
   private panel: CommentPanel | null = null;
   /** 审阅窗格: the list of every change still waiting, docked beside the page. */
   private review: ReviewPanel | null = null;
@@ -476,7 +508,7 @@ export class DocEditor {
   /** The change last revealed, by `w:id`: `stepRevision` counts from it, so 下一条/上一条 walk the list. */
   private activeRevision?: number;
   /** The last selection that was inside the page, so a toolbar click can still reach it. */
-  private pageSelection: { start: DocPath; end: DocPath } | null = null;
+  private pageSelection: CaretMark | null = null;
   /**
    * The cells 选中整行/整列/整格/整个表格 lit up. A column is not one Range's worth of text and an editable page holds only
    * one range, so what the browser reports back is narrower than what the command picked: while the selection
@@ -522,6 +554,9 @@ export class DocEditor {
     this.review?.mount();
     this.outline?.mount();
     if (!this.page) return;
+    // 纸盒重建一趟，旧的那一枚带子已经不在页里，它那句「失焦就收笔」永远不会再来：认领关系先清掉，
+    // `contenteditable` 由下面这一句交还给正文，编辑开着的那一枚由 `insertPageNumber` 重新点开。
+    this.hfEditing = null;
     this.page.contentEditable = "true";
     this.page.spellcheck = false;
     if (this.zoomLevel !== 1) this.page.style.zoom = String(this.zoomLevel);
@@ -535,34 +570,161 @@ export class DocEditor {
 
   /**
    * 把连续的一张纸画出页缝与纸层（`doc-layout.ts` 的 `applySheetGaps` 量，这里落 DOM）：先清掉上一趟
-   * 的条带，`applySheetGaps` 清掉上一趟的垫片、重量、重垫，再把每一条空档画成纸盒里绝对定位的条带。
-   * 条带排在全部正文块与页面边框之后——编辑器按位置数块，装饰得垫底（`PAGE_BORDER_CLASS` 同一先例）；
-   * 条带是装饰：`sync()` 读回模型时跳过，缩放折算进它的本地坐标（`top` 以纸盒本地 px 计）。
+   * 的条带与带子复件，`applySheetGaps` 清掉上一趟的垫片、重量、重垫，再把每一条空档画成纸盒里绝对定位的
+   * 条带。条带排在全部正文块与页面边框之后——编辑器按位置数块，装饰得垫底（`PAGE_BORDER_CLASS` 同一先例）；
+   * 条带是装饰：`sync()` 读回模型时跳过。它的 `top` 由 `applySheetGaps` 一次换算成纸盒本地的**纸的像素**，
+   * 写进 CSS 长度后 `zoom` 把纸连同缝与复件一起放大，画面上量的间距自然跟着 zoom 走同一倍。
+   *
+   * 量不出纸（`applySheetGaps` 不给）就一样都不画，也不报页码：宁可带子上留着「页码」这两个字。
    */
   private applySheets(): void {
     const page = this.page;
     if (!page) return;
-    for (const el of [...page.querySelectorAll<HTMLElement>(`.${SHEET_STRIP_CLASS}`)]) el.remove();
-    const strips = applySheetGaps(page, this.doc);
-    if (!strips?.length) return;
-    const zoom = parseFloat(page.style.getPropertyValue("zoom")) || 1;
-    const box = page.getBoundingClientRect();
-    page.style.position = "relative";
-    for (const strip of strips) {
-      const el = document.createElement("div");
-      el.className = SHEET_STRIP_CLASS;
-      el.contentEditable = "false";
-      el.setAttribute("aria-hidden", "true");
-      el.style.cssText = `position:absolute;left:0;right:0;top:${(strip.top - box.top) / zoom}px;height:${strip.height}px;background:var(--chrome,#1c1f24);pointer-events:none`;
-      page.append(el);
+    for (const el of [...page.querySelectorAll<HTMLElement>(`.${SHEET_STRIP_CLASS}, .${BAND_CLONE_CLASS}`)]) el.remove();
+    // 带子先量、再排：真机上带子贴在纸内，越过边距线的那一截从正文里占走（#157）。量出来的数写在纸盒上，
+    // 铺排、页沿推距与状态栏那几格读的都是这一处——所以这一趟必须排在 `applySheetGaps` 之前，晚一步就是
+    // 按「不让位」量出来的页界。
+    applyBandYield(this.host, page, this.doc);
+    // 制表位先落：每一枚制表符垫出去的宽度会改这一行往后的推进，铺排与页沿推距必须按**画完制表位的那一流**量。
+    applyTabStops(page, this.doc);
+    const laid = applySheetGaps(page, this.doc);
+    if (!laid) return;
+    const { strips, pages } = laid;
+    if (strips.length) {
+      // `position:relative` 归渲染器那一句 `.page`（带子、边框、条带与复件全都按纸盒定位），这里不再补写一遍。
+      // `applySheetGaps` 交回来的上沿已经是**纸的像素**（纸盒本地，量回来的视口读数它自己换算过）：条带的
+      // `top` 与复件的摆位都写成 CSS 长度，CSS 长度在缩放过的纸里本来就是纸的像素，这里再除一次 zoom 就把
+      // 缝按平方缩放挪走了。往下（`paintBandCopies`）传的都是同一个空间的数。
+      for (const strip of strips) {
+        const el = document.createElement("div");
+        el.className = SHEET_STRIP_CLASS;
+        el.contentEditable = "false";
+        el.setAttribute("aria-hidden", "true");
+        el.style.cssText = `position:absolute;left:0;right:0;top:${strip.top}px;height:${strip.height}px;background:var(--chrome,#1c1f24);pointer-events:none`;
+        page.append(el);
+      }
+      this.paintBandCopies(strips, page, pages);
+    }
+    // 纸里的两份原件守着这一叠纸的首尾：页眉在第一张的纸沿里、页脚在最后一张的纸沿里，所以它们报的是
+    // 首张与末张的号——中间每一张的下沿与下下一张的上沿都由一道缝管着（`paintBandCopies`）。
+    for (const which of ["header", "footer"] as const) {
+      const band = this.host.querySelector<HTMLElement>(`:scope .hf-${which}:not(.${BAND_CLONE_CLASS})`);
+      if (band) this.numberPageFields(band, which === "header" ? 1 : pages, pages);
+    }
+  }
+
+  /**
+   * 页码域在纸上显示的是它算出来的数，不是「页码」「总页数」这两个字——WPS 打印视图里每一张都是那样。
+   * 改的只是显示：域自己的 XML（`data-carry` 指回去的那一段）一个字不动，保存回来的仍是文件里那句
+   * `PAGE`/`NUMPAGES`。数的口径与状态栏同一份（`planOf` 的张数），多节不重新起算——授权语料里
+   * `w:pgNumType` 的 20 枚全是默认（十进制、start 缺省或 1），「按节起算」没有受众。
+   */
+  private numberPageFields(band: HTMLElement, sheet: number, total: number): void {
+    for (const chip of band.querySelectorAll<HTMLElement>("[data-field]")) chip.textContent = chip.dataset.field === "NUMPAGES" ? String(total) : String(sheet);
+  }
+
+  /**
+   * 把页眉页脚带画到第二张纸往后的每一张上（WPS 的带子跟着纸走；这一版此前只在连续纸的外侧画一份）。
+   *
+   * 复件是**装饰**，不是第二条带子：`contenteditable=false`、`aria-hidden`、`pointer-events:none`，命令条
+   * （插入页码那一枚按钮）摘掉，`data-hf` 也摘掉——读回模型与保存只认纸里那一份可点的原件，编辑它，纸上看到
+   * 的每一张跟着变。跳过 `unitBlocksOf` 与 `bodyText()` 的块计数（页面边框、条带同一先例），占块就是把
+   * 正文第 N 块读成这条带子。
+   *
+   * 纵向落在哪：按**这一节自己说的** `w:header`/`w:footer`——ECMA-376 §17.3.2.7/9 那两个数从页边量起，
+   * 所以带子的**文字**贴在纸沿 + 那个距离上（把带子自己的上/下内边距扣回来）。节没说那个距离就贴纸沿：
+   * 发明 Word 的 docDefaults 会把一个没人写过的数画到纸上。
+   *
+   * **带上的字按节取**（#157）：这一节的纸贴的是这一节真正显示的那一份部件（`doc.sectionBand`），
+   * 与可见那一份同部件就照抄可见的（用户正在改的那份，打字立刻跟着变），不是同部件就抄母本那一份
+   * （`render.ts` 的 `BAND_SOURCE_CLASS`，`display:none` 挂在纸盒外）。母本缺了就不画——把上一节的字贴到
+   * 这一节的纸上，正是这一片要修的；宁缺一条带子，不画一条写着别人家页眉的带子。
+   *
+   * 让位不归这一片量，但这一片跟着它走：`applyBandYield` 先在铺排前按每一节真正显示的那一份带子量出越过
+   * 边距线的那一截，正文一张一张都从带子下沿起排（真机取证：夹具 `/tmp/tall-header.docx` 页眉 10 行、四边 1440 缇、
+   * `w:header` 720 缇，WPS 正文上沿 ≈3445 缇；此前自家让位恒为 0，差 **2005 缇 = 133.67px**，#157/#159）。
+   * 复件因此不再有「装不下就不画」那一支——边距线以内那一截空白是量过才让出来的，压不到字。
+   */
+  private paintBandCopies(strips: SheetStrip[], page: HTMLElement, total: number): void {
+    const sections = this.doc.sections.length ? this.doc.sections : [DEFAULT_SECTION];
+    for (const which of ["header", "footer"] as const) {
+      // 可点、可改的那一份：纸里守着首张与末张的原件，它自己的部件写在 `data-hf-part` 上（`render.ts`）。
+      const visible = [...this.host.querySelectorAll<HTMLElement>(`.hf-${which}`)].find((el) => !el.classList.contains(BAND_CLONE_CLASS));
+      const visiblePart = visible?.dataset.hfPart;
+      const sources = new Map<string, HTMLElement>();
+      for (const el of this.host.querySelectorAll<HTMLElement>(`.${BAND_SOURCE_CLASS}`)) {
+        if (el.dataset.hfKind === which && el.dataset.hfPart) sources.set(el.dataset.hfPart, el);
+      }
+      for (const strip of strips) {
+        // 一条页缝收口一页、开启下一页：这一页的页脚与下一页的页眉由同一条缝算出。
+        const section = which === "footer" ? strip.section : strip.nextSection;
+        const sec = sections[section] ?? sections[0] ?? DEFAULT_SECTION;
+        const band = this.doc.sectionBand(which, section);
+        if (!band) continue;
+        const src = band.part === visiblePart ? visible : sources.get(band.part);
+        if (!src) continue;
+        const distance = which === "header" ? sec.margins.header : sec.margins.footer;
+        // 缝的上下沿都按**画出来的那一道**取（`applySheetGaps` 交回来的上沿与高度本来就是纸的像素）：复件贴在
+        // 条带的下沿之外，缩放时才不会各按各的空间算，差出一截谁也对不上谁。
+        const edge = which === "header" ? strip.top + strip.height : strip.top;
+        const clone = src.cloneNode(true) as HTMLElement;
+        clone.querySelector<HTMLElement>(".hf-bar")?.remove();
+        // 母本不是 `.hf`，落在纸上的复件要是：带子的字面样式归 `.hf` 那一条规则管，母本自己躲在纸盒外不参与。
+        clone.classList.remove(BAND_SOURCE_CLASS);
+        // 复件照的是原件，连原件身上「守这一叠纸首尾」那两样也不能一起抄：`solo-hf-master` 是摆位那一趟
+        // （`applyBandYield`）认领原件的名字，抄上了下一趟就会按首/末节的距离把它重新锚一次；`top`/`bottom`
+        // 同理——从可见原件抄来的复件带着那一句 `bottom:30px`，这里再写 `top`，绝对定位就同时钉住上下两边、
+        // 高度摊到整叠纸（真机量到一枚页脚复件 1960px 高、压着正文）。这一片的纵向归这一张自己说了算。
+        clone.classList.remove(BAND_MASTER_CLASS);
+        clone.style.removeProperty("top");
+        clone.style.removeProperty("bottom");
+        delete clone.dataset.hfPart;
+        delete clone.dataset.hfKind;
+        clone.style.removeProperty("display");
+        clone.classList.add("hf", `hf-${which}`, BAND_CLONE_CLASS);
+        if (which === "footer") clone.classList.add("hf-bottom");
+        delete clone.dataset.hf;
+        clone.contentEditable = "false";
+        clone.setAttribute("aria-hidden", "true");
+        clone.removeAttribute("title");
+        clone.style.position = "absolute";
+        clone.style.left = "0";
+        clone.style.pointerEvents = "none";
+        clone.style.margin = "0";
+        // 复件上这一张自己的号：页缝收口第 `strip.page` 张、开启第 `strip.page + 1` 张。
+        this.numberPageFields(clone, which === "footer" ? strip.page : strip.page + 1, total);
+        page.append(clone);
+        const cs = getComputedStyle(clone);
+        const h = clone.offsetHeight;
+        const shift = distance === undefined ? 0 : twipsToPx(distance);
+        // 带子的**文字**贴在「纸沿 + 节说的距离」上：样式自己那圈内边距不是距离的一部分，量回来才落得准。
+        // 节没写距离就贴纸沿——发明 Word 的 docDefaults 会把一个没人写过的数画到纸上。
+        if (which === "header") clone.style.top = `${edge + shift - (parseFloat(cs.paddingTop) || 0)}px`;
+        else clone.style.top = `${edge - shift + (parseFloat(cs.paddingBottom) || 0) - h}px`;
+      }
     }
   }
 
   private hfEditing: HTMLElement | null = null;
 
+  /**
+   * 带子现在住在**可编辑的纸盒里**（#157 第二片），它身上每一次按键都被浏览器算作纸盒的改动，顺着冒泡交给
+   * `wire()` 那一路监听器——`mutated()` 于是按模型把带子重画一遍，刚敲进去的字当场就没，还多报一次改动。
+   * 带子的字归 `editHF`/`commitHF` 那一套路认领，正文的监听器对落在打开着的那一枚带子里的事件一概不认。
+   */
+  private inBand(node: EventTarget | null): boolean {
+    return this.hfEditing !== null && node instanceof Node && this.hfEditing.contains(node);
+  }
+
   private wireHF(): void {
-    for (const el of this.host.querySelectorAll<HTMLElement>(".hf")) {
+    for (const el of this.host.querySelectorAll<HTMLElement>(`.hf:not(.${BAND_CLONE_CLASS})`)) {
       el.addEventListener("click", () => this.editHF(el));
+      // 带子里 Tab 说的是制表位（页眉那一段靠它把字推到右边），不是正文的列表层级；插在打开着的这一枚里。
+      el.addEventListener("keydown", (e) => {
+        if (!el.isContentEditable || e.key !== "Tab" || e.metaKey || e.ctrlKey || e.altKey || e.isComposing) return;
+        e.preventDefault();
+        document.execCommand("insertText", false, "\t");
+      });
     }
     for (const btn of this.host.querySelectorAll<HTMLElement>("[data-hf-page]")) {
       // The band opens for editing on a click anywhere in it; this button is a command, not the caret.
@@ -574,25 +736,42 @@ export class DocEditor {
     }
   }
 
-  /** Click a header/footer area to edit it; blur commits the paragraph texts. */
+  /**
+   * 这一份原件背后的模型：它挂在 `data-hf-part` 上。带子的字按节取（`render.ts` 的 `visibleBand`），
+   * 所以改的时候也问同一份部件——按文档级那一对改，纸上这一张写的就是别人的字，保存也写不回这一张。
+   */
+  private bandEl(el: HTMLElement): HeaderFooter | undefined {
+    const part = el.dataset.hfPart;
+    return part ? this.doc.bandOf(el.dataset.hf === "footer" ? "footer" : "header", part) : undefined;
+  }
+
+  /** Click a header/footer area to edit it; 收笔（`closeHF`）把段落文字交回模型。 */
   private editHF(el: HTMLElement): void {
     if (el.isContentEditable) return;
-    const which = el.dataset.hf === "footer" ? "footer" : "header";
-    const hf = which === "header" ? this.doc.header : this.doc.footer;
-    if (!hf?.editable) return;
+    if (!this.bandEl(el)?.editable) return;
+    // 同一棵编辑树里浏览器只把焦点给最外面那一个宿主：纸盒还开着 contenteditable 时，`el.focus()` 是空操作。
+    // 改带子的时候正文那一格把宿主让出来——WPS 进页眉页脚也是这个形状（正文灰掉、打不进去），收笔再还回去。
+    if (this.page) this.page.contentEditable = "false";
     el.contentEditable = "true";
     el.spellcheck = false;
+    // 把手只在开着的那一枚上亮出来（`render.ts` 把停着的那一排收着）：它占的是编辑时屏幕上的一行，不是纸上的一行。
+    el.querySelector<HTMLElement>(".hf-bar")?.style.setProperty("display", "flex");
     this.hfEditing = el;
     el.focus();
-    el.addEventListener(
-      "blur",
-      () => {
-        el.contentEditable = "false";
-        if (this.hfEditing === el) this.hfEditing = null;
-        this.commitHF(el, which);
-      },
-      { once: true },
-    );
+    el.addEventListener("blur", () => this.closeHF(el), { once: true });
+  }
+
+  /**
+   * 收笔：带子锁回 resting 态（把手跟着收回去，纸上那一截的高度由文件说，不由编辑器的把手说）、正文那一条编辑
+   * 宿主还回去、字交回模型。`blur` 与存盘那一路（`commit`）走同一个
+   * 出口——壳里窗口不在前台时 blur 事件根本不来，只挂在 blur 上就等于把编辑状态和正文的可编辑一起悬在那儿。
+   */
+  private closeHF(el: HTMLElement): void {
+    el.contentEditable = "false";
+    el.querySelector<HTMLElement>(".hf-bar")?.style.setProperty("display", "none");
+    if (this.hfEditing === el) this.hfEditing = null;
+    if (this.page) this.page.contentEditable = "true";
+    this.commitHF(el, el.dataset.hf === "footer" ? "footer" : "header");
   }
 
   /**
@@ -602,8 +781,8 @@ export class DocEditor {
    * page shows, with a field coming back by its key rather than by the label drawn for it. The label is for
    * reading; the field's bytes are for the file, and the number it cached is neither.
    */
-  private readHF(el: HTMLElement, which: "header" | "footer"): { segs: HfSegment[][]; caret: number } {
-    const held = (which === "header" ? this.doc.header : this.doc.footer)?.segments ?? [];
+  private readHF(el: HTMLElement): { segs: HfSegment[][]; caret: number } {
+    const held = this.bandEl(el)?.segments ?? [];
     const atoms = new Map<number, CarriedInline>();
     for (const segs of held) for (const s of segs) if (s.carry) atoms.set(s.carry.key, s.carry);
     const placed = new Set<number>();
@@ -645,11 +824,15 @@ export class DocEditor {
 
   /** Writes the band back into the model when what it holds has changed. */
   private commitHF(el: HTMLElement, which: "header" | "footer"): void {
-    const before = which === "header" ? this.doc.header : this.doc.footer;
+    const before = this.bandEl(el);
     if (!before) return;
-    const { segs } = this.readHF(el, which);
+    const { segs } = this.readHF(el);
     if (JSON.stringify(segs) === JSON.stringify(before.segments ?? before.paragraphs.map((t) => [{ text: t }]))) return;
-    if (!this.doc.setHeaderSegments(which, segs)) return;
+    if (!this.doc.setBandSegments(which, before.part, segs)) return;
+    // 纸上的复件照的就是这一份的字，改完得重画一遍：不然改动只落在纸里那一份原件上，第一张纸上挂的还是
+    // 改动前那一版（WPS 里改页眉，每一张的页眉一起变）。这里只重画缝与复件，不整篇重排——刚收笔的是带子，
+    // 把正文重排一遍会把光标扔到手够不着的地方。
+    this.applySheets();
     this.hooks.changed();
   }
 
@@ -658,16 +841,18 @@ export class DocEditor {
    * afterwards and the band opened, because the field is one thing the caret cannot be put inside of.
    */
   private insertPageNumber(which: "header" | "footer"): void {
-    const el = this.host.querySelector<HTMLElement>(`.hf-${which}`);
+    const el = this.host.querySelector<HTMLElement>(`:scope .hf-${which}:not(.${BAND_CLONE_CLASS})`);
     if (!el) return;
-    const { caret } = this.readHF(el, which);
+    const part = el.dataset.hfPart;
+    if (!part) return;
+    const { caret } = this.readHF(el);
     this.commitHF(el, which);
-    if (!this.doc.insertPageNumber(which, caret)) {
+    if (!this.doc.insertPageNumber(which, caret, undefined, part)) {
       this.render();
       return;
     }
     this.render();
-    const again = this.host.querySelector<HTMLElement>(`.hf-${which}`);
+    const again = this.host.querySelector<HTMLElement>(`:scope .hf-${which}:not(.${BAND_CLONE_CLASS})`);
     if (again) this.editHF(again);
   }
 
@@ -679,7 +864,7 @@ export class DocEditor {
       if (!made) return;
       this.render();
     }
-    const el = this.host.querySelector<HTMLElement>(`.hf-${which}`);
+    const el = this.host.querySelector<HTMLElement>(`:scope .hf-${which}:not(.${BAND_CLONE_CLASS})`);
     if (el) {
       this.editHF(el);
       el.focus();
@@ -692,8 +877,8 @@ export class DocEditor {
   setZoom(z: number): void {
     this.zoomLevel = z;
     this.page?.style.setProperty("zoom", String(z));
-    // A strip's `top` is written in paper pixels, and `zoom` scales those with the paper. Re-measure under
-    // the new scale, or the band keeps the old number and drifts away from the seam it was pinned to.
+    // 条带与复件的 `top` 写的是纸的像素，`zoom` 把纸连同缝一起放大：换了比例得重量重画，
+    // 不然带子还守着旧坐标，跟它钉的那道缝错开。
     this.applySheets();
   }
 
@@ -769,25 +954,30 @@ export class DocEditor {
   private wire(): void {
     const page = this.page;
     if (!page) return;
-    page.addEventListener("compositionstart", () => {
+    // 每一句都先问「这一事件是不是打开着的那一枚带子里冒上来的」：带子与正文同住一个纸盒，冒泡挡不住，
+    // 但认领的人只有一个——带子由 `editHF`/`commitHF` 负责，正文这一路的 `sync()` 按模型重画会把字吃掉。
+    page.addEventListener("compositionstart", (e) => {
+      if (this.inBand(e.target)) return;
       this.composing = true;
       this.snapshot(this.caretPath());
     });
-    page.addEventListener("compositionend", () => {
+    page.addEventListener("compositionend", (e) => {
+      if (this.inBand(e.target)) return;
       this.composing = false;
       this.mutated();
     });
     page.addEventListener("beforeinput", (e) => {
-      if (this.composing) return;
+      if (this.inBand(e.target) || this.composing) return;
       const type = e.inputType;
       if (type === "insertText" || type === "insertFromPaste" || type === "insertFromDrop") this.mark();
       else if (type.startsWith("delete") || type === "insertParagraph" || type === "insertLineBreak") this.snapshot(this.caretPath());
     });
     page.addEventListener("input", (e) => {
-      if (this.composing || (e as InputEvent).isComposing) return;
+      if (this.inBand(e.target) || this.composing || (e as InputEvent).isComposing) return;
       this.mutated();
     });
     page.addEventListener("paste", (e) => {
+      if (this.inBand(e.target)) return;
       // Pasted HTML brings foreign styles and whole page layouts; a Word body wants the text.
       const text = (e as ClipboardEvent).clipboardData?.getData("text/plain");
       e.preventDefault();
@@ -796,7 +986,7 @@ export class DocEditor {
       document.execCommand("insertText", false, text);
     });
     page.addEventListener("keydown", (e) => {
-      if (e.isComposing || this.composing || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (this.inBand(e.target) || e.isComposing || this.composing || e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key !== "Tab") return;
       const dir = e.shiftKey ? -1 : 1;
       // 列表项里 Tab 那一族说的是层级：普通 Tab 只在段落开头降一级（多缩一层），Shift+Tab 随时升一级。
@@ -844,16 +1034,19 @@ export class DocEditor {
     }
     const ends = this.rangeEnds();
     if (!ends) return;
+    const painted = this.paintedCells;
+    // 命令点亮的那一组格子还没被用户动过：页面里的那一条选区不能把命令算出的矩形缩回一个格。
+    if (!(painted && this.picked(painted, ends.start) && this.picked(painted, ends.end))) {
+      this.paintedCells = null;
+      this.clearPaint();
+      this.pageSelection = ends;
+    }
     // The ribbon reads the caret, so it is told whenever the caret moves inside the page — selecting is not an
     // edit and does not go through `changed()`, and a ribbon that only refreshes after an edit keeps showing
     // the state of the last click rather than of the run the reader is pointing at.
+    // 报信要放在记账之后：ribbon 里那一格「边框」按 `pageSelection` 决定落点是段落、表还是格，先报后记就是把
+    // 上一条选区的话说给这一条听（用户选了整张表，那一格还在说单元格）。
     this.hooks.moved?.();
-    const painted = this.paintedCells;
-    // 命令点亮的那一组格子还没被用户动过：页面里的那一条选区不能把命令算出的矩形缩回一个格。
-    if (painted && this.picked(painted, ends.start) && this.picked(painted, ends.end)) return;
-    this.paintedCells = null;
-    this.clearPaint();
-    this.pageSelection = ends;
   }
 
   /** Whether a path lands on one of the cells a selection command lit up. */
@@ -866,12 +1059,15 @@ export class DocEditor {
    * The CSS the pending format stands in for, in the shape `styleOf` reads back off the page. 高亮 needs both faces:
    * the background for the names CSS can carry, `data-hl` for the ones it cannot (§17.17.64 has 17 members, CSS
    * cannot name `blue`). 字号 needs only the size, and the writer spells the pair the file keeps (`w:sz`/`w:szCs`)
-   * off the one field. A key this model has no place for holds nothing.
+   * off the one field. 字体 的 CSS 只用来预览，读回来的是 `armPending` 自己钉的两个属性——页面那串栈里有渲染器
+   * 借的族名。A key this model has no place for holds nothing.
    */
-  private pendingStyle(patch: StylePatch): string {
+  private pendingStyle(patch: WidePatch): string {
     const parts: string[] = [];
     if (patch.highlight !== undefined) parts.push(`background:${highlightColor(patch.highlight || "none")};`);
     if (patch.sizePt !== undefined && Number.isFinite(patch.sizePt)) parts.push(`font-size:${patch.sizePt}pt;`);
+    // 预览用渲染器那一份拼法：占位 span 与它左边那段穿同一对脸，`solo-ea-` 那个借名才不会被当成文档说过的字。
+    if (patch.font) parts.push(`font-family:${fontStack({ font: patch.font, fontEastAsia: patch.fontEastAsia })};`);
     return parts.join("");
   }
 
@@ -886,7 +1082,12 @@ export class DocEditor {
    * steps over an empty one and lands the character in the text node to the left.
    */
   private armPending(patch: StylePatch): void {
-    const next: StylePatch = { ...this.pendingFormatPatch, ...patch };
+    // 挑脸在悬光标处同样要先问「汉字那一槽归不归我管」，问的是光标所在的那个 run：占位 span 里接下来打进去的字
+    // 继承的就是它（`keepRunIdentity` 认的原点），不是屏幕上新长出来的那一段。摊开的写法与选区那一下共用同一个
+    // 主人（`applyFacePick`）。
+    const underCaret = this.caretRun();
+    const widened: WidePatch = patch.font ? { ...patch, ...applyFacePick(underCaret ?? { text: "" }, patch.font) } : patch;
+    const next: WidePatch = { ...this.pendingFormatPatch, ...widened };
     const style = this.pendingStyle(next);
     this.settlePending();
     if (!style) return;
@@ -897,6 +1098,8 @@ export class DocEditor {
     at.collapse(true);
     const span = document.createElement("span");
     if (next.highlight !== undefined) span.setAttribute("data-hl", next.highlight || "none");
+    if (next.font) span.setAttribute("data-pick-face", next.font);
+    if (next.fontEastAsia) span.setAttribute("data-pick-face-ea", next.fontEastAsia);
     span.setAttribute("style", style);
     const holder = document.createTextNode(ZWSP);
     span.append(holder);
@@ -987,8 +1190,10 @@ export class DocEditor {
       // A page border is drawn into the paper box rather than written on it. It holds no text and is not a
       // block, so reading it back would turn the file's `w:pgBorders` into an empty paragraph in the body.
       if (el.classList.contains(PAGE_BORDER_CLASS)) continue;
-      // Same for a sheet strip: a decoration over the seam, not a block.
-      if (el.classList.contains(SHEET_STRIP_CLASS)) continue;
+      // Same for a sheet strip and for a header/footer band copy: decorations over the paper, not blocks.
+      // The two clickable band originals (`render.ts` 的 `.solo-hf-master`) 现在也排在纸盒**里面**（#157：
+      // 带子要贴上纸），它们的字是带子的正文，不是正文的一块——漏掉这一条，保存回来就多两段没写过的段落。
+      if (el.classList.contains(SHEET_STRIP_CLASS) || el.classList.contains(BAND_CLONE_CLASS) || el.classList.contains(BAND_MASTER_CLASS)) continue;
       if (el.tagName === "TABLE") {
         const known = this.ownedAt(el);
         next.push(this.tableOf(el as HTMLTableElement, known?.kind === "table" ? known : undefined));
@@ -1224,7 +1429,11 @@ export class DocEditor {
    */
   private pathOfPageEdge(offset: number): DocPath | null {
     if (!this.page) return null;
-    const blocks = [...this.page.children];
+    // 纸盒里的装饰（页面边框、条带、页眉页脚复件）不是块：数块的时候把它们剔掉，「最后一块之后」才真落在
+    // 正文末块上——它们排在末尾，前面的下标不动，唯独这一处按总数取末位会被它们顶掉。
+    const blocks = [...this.page.children].filter(
+      (el) => !el.classList.contains(PAGE_BORDER_CLASS) && !el.classList.contains(SHEET_STRIP_CLASS) && !el.classList.contains(BAND_CLONE_CLASS) && !el.classList.contains(BAND_MASTER_CLASS),
+    );
     if (!blocks.length) return null;
     // 下标 k（k < 块数）指「第 k 块之前」，下标等于块数才指「最后一块之后」。
     const atEnd = offset >= blocks.length;
@@ -1245,7 +1454,7 @@ export class DocEditor {
     return this.pathOf(sel.anchorNode, sel.anchorOffset);
   }
 
-  private rangeEnds(): { start: DocPath; end: DocPath } | null {
+  private rangeEnds(): CaretMark | null {
     const sel = document.getSelection();
     if (!sel || sel.rangeCount === 0) return null;
     const range = sel.getRangeAt(0);
@@ -1281,14 +1490,47 @@ export class DocEditor {
 
   setCaret(caret: DocPath): void {
     const el = this.elementAt(caret.path);
-    if (!el) return;
-    const spots = positions(el);
-    const spot = spots[Math.min(caret.offset, spots.length - 1)];
-    if (!spot) return;
+    const spot = this.spotOf(caret);
+    if (!el || !spot) return;
     const range = document.createRange();
     range.setStart(spot.node, spot.offset);
     range.collapse(true);
     this.select(range, el);
+  }
+
+  /**
+   * 撤销/重做还回**整条选区**，不是还回一个点。两端相同就折回那一点（与 `setCaret` 同一处取材），
+   * 不同就照原样铺一条跨格 Range——ribbon 那一格「边框」在 `trackSelection` 里按这条选区决定落点是段落、表还是格，
+   * 折回一格就是把用户选中的整张表说成了一格。
+   */
+  private restoreCaret(mark: CaretMark): void {
+    const start = this.clamp(mark.start);
+    const from = this.spotOf(start);
+    const to = this.spotOf(this.clamp(mark.end));
+    const el = this.elementAt(start.path);
+    if (!from || !to || !el) {
+      this.setCaret(start);
+      return;
+    }
+    const range = document.createRange();
+    range.setStart(from.node, from.offset);
+    range.setEnd(to.node, to.offset);
+    this.select(range, el);
+  }
+
+  /** 页面为这条路径画的那一枚元素里的第 offset 个落点；元素不在或落点数不出来就是没有落点。 */
+  private spotOf(caret: DocPath): { node: Node; offset: number } | null {
+    const el = this.elementAt(caret.path);
+    if (!el) return null;
+    const spots = positions(el);
+    return spots[Math.min(caret.offset, spots.length - 1)] ?? null;
+  }
+
+  /** 记账时读者所在的位置：页面里有选区就按两端记（跨格的那种折不成一个点），没有就按传进来的那一点记。 */
+  private caretMark(at: DocPath | null): CaretMark | null {
+    const live = this.rangeEnds();
+    if (live) return live;
+    return at ? { start: at, end: at } : null;
   }
 
   private select(range: Range, focus: Element): void {
@@ -1335,7 +1577,7 @@ export class DocEditor {
     this.undoStack.push({
       blocks: structuredClone(this.doc.blocks),
       comments: structuredClone(this.doc.comments),
-      caret: at,
+      caret: this.caretMark(at),
       page: this.doc.pageGeometryState(),
     });
     if (this.undoStack.length > 80) this.undoStack.shift();
@@ -1353,12 +1595,12 @@ export class DocEditor {
   undo(): boolean {
     const step = this.undoStack.pop();
     if (!step) return false;
-    this.redoStack.push({ blocks: structuredClone(this.doc.blocks), comments: structuredClone(this.doc.comments), caret: this.caretPath(), page: this.doc.pageGeometryState() });
+    this.redoStack.push({ blocks: structuredClone(this.doc.blocks), comments: structuredClone(this.doc.comments), caret: this.caretMark(this.caretPath()), page: this.doc.pageGeometryState() });
     this.doc.blocks = step.blocks;
     this.doc.comments = step.comments;
     this.doc.restorePageGeometry(step.page);
     this.render();
-    if (step.caret) this.setCaret(this.clamp(step.caret));
+    if (step.caret) this.restoreCaret(step.caret);
     this.hooks.changed();
     return true;
   }
@@ -1366,12 +1608,12 @@ export class DocEditor {
   redo(): boolean {
     const step = this.redoStack.pop();
     if (!step) return false;
-    this.undoStack.push({ blocks: structuredClone(this.doc.blocks), comments: structuredClone(this.doc.comments), caret: this.caretPath(), page: this.doc.pageGeometryState() });
+    this.undoStack.push({ blocks: structuredClone(this.doc.blocks), comments: structuredClone(this.doc.comments), caret: this.caretMark(this.caretPath()), page: this.doc.pageGeometryState() });
     this.doc.blocks = step.blocks;
     this.doc.comments = step.comments;
     this.doc.restorePageGeometry(step.page);
     this.render();
-    if (step.caret) this.setCaret(this.clamp(step.caret));
+    if (step.caret) this.restoreCaret(step.caret);
     this.hooks.changed();
     return true;
   }
@@ -1590,10 +1832,12 @@ export class DocEditor {
    * 正文里的书签，按文档顺序：`w:bookmarkStart` 是随 run/段落携带的结构（`CarriedInline`），这里只收
    * `forEachInline` 那一趟能走到的地方——正文块与表内（含嵌套表）。**页眉页脚的书签不进列表**：那是另一
    * 个 story，Word 的「定位」列的是正文书签（真机**未取证**）。含 `_` 前缀的机器书签（`_Toc`／`_GoBack`）
-   * 不过滤：WPS 的「隐藏书签」开关真机**未取证**，而 /tmp 那批 86 份 WPS 写的件里 86/86 都带这类名字，
-   * 过滤掉等于把列表做成空的。同名取第一枚（Word 自己不许同名；这 86 份里 0 处重复，真机遇重名落哪一枚
+   * 不过滤：WPS 的「隐藏书签」开关真机**未取证**，而授权口径那 46 份 WPS 写的件里 43 份带这类名字（381 枚），
+   * 过滤掉等于把列表做成空的。同名取第一枚（Word 自己不许同名；这 46 份里 0 件有重名，真机遇重名落哪一枚
    * **未取证**）。表格行与行之间的 `w:bookmarkStart`（`betweenRows`）不在这一趟里——纸上没有它的元素
-   * （见 `goToBookmark` 同一条），语料那 86 份实测该位置只出现过 `w:bookmarkEnd`。
+   * （见 `goToBookmark` 同一条）。那一处该收什么形状**未取证**：授权口径里行与行之间（`</w:tr>` 到下一枚 `<w:tr>`）
+   * 与 `w:pPr` 块里，`bookmarkStart`/`bookmarkEnd` 都是 0 枚（书签只挂在 run 那一层），所以旧稿那句「实测只出现过
+   * `w:bookmarkEnd`」在这批件里没有依据（`.scratch/corpus-recheck2.mjs`、`.scratch/oneoff-gap.mjs`）。
    */
   bookmarks(): { name: string; key: number }[] {
     const out: { name: string; key: number }[] = [];
@@ -2411,7 +2655,8 @@ export class DocEditor {
   /**
    * WPS 的 `InsertColumnBreak`（快捷键表 `key="Ctrl+Shift+Return"`，ribbon id 在插入页与页面布局页各一枚）：
    * `w:br w:type="column"`。命令声明行（aid、按钮文案）没在 `wpscommon.kuip` 里找到，所以这一条按**快捷键表 +
-   * ribbon 挂载**接，文案沿用 WPS 家族里已经取证的「断行」说法；语料 86 份里 `column` 0 枚，形状是规范给的。
+   * ribbon 挂载**接，文案沿用 WPS 家族里已经取证的「断行」说法；授权口径里 `w:br w:type="column"` 与任何 `<w:type>`
+   * 元素都 0 枚（`.scratch/oneoff-gap.mjs`），形状是规范给的。
    */
   insertColumnBreak(): void {
     this.insertBreakAtCaret('<w:br w:type="column"/>');
@@ -2425,6 +2670,31 @@ export class DocEditor {
   }
 
   /**
+   * 光标所在的那个 run——把段里的 run 在光标处切开，左边最后一段（或在段首时右边第一段）就是它。字体框回显与
+   * 「这次挑的脸管不管得到汉字槽」问的都是这一个 run，不是整段：一段里两张脸并存是件里常态。
+   */
+  private caretRun(): Inline | undefined {
+    const at = this.caretPath();
+    const paragraph = at && this.paragraphAt(at.path);
+    if (!paragraph || !at) return undefined;
+    const [head, rest] = splitAt(paragraph.inlines, at.offset);
+    return head[head.length - 1] ?? rest[0];
+  }
+
+  /**
+   * 这份文件自己用过的脸：正文与表格里每个 run 解析出的两张名字去重。字体框的下拉只列这些——Electron 没有「本机
+   * 装了哪些字体」的接口可问，WPS 那份装机字体清单在此仍未取证，所以把文档说过的名字递给用户，不替它编一张表。
+   */
+  faces(): string[] {
+    const out = new Set<string>();
+    forEachInline(this.doc.blocks, (inline) => {
+      if (inline.font) out.add(inline.font);
+      if (inline.fontEastAsia) out.add(inline.fontEastAsia);
+    });
+    return [...out].sort((a, b) => a.localeCompare(b, "zh-Hans-CN"));
+  }
+
+  /**
    * What the caret's run and paragraph currently look like, so the toolbar can show its state.
    *
    * `highlight` keeps the three states #88 separated, because they are three different sentences the file
@@ -2432,7 +2702,7 @@ export class DocEditor {
    * colour name is a background. A control that shows 「没提过」 the same way as 「说了没有」 answers the reader
    * with a silence where the document spoke.
    */
-  markState(): { bold: boolean; italic: boolean; underline: boolean; strike: boolean; sizePt?: number; highlight?: string; align?: string; list?: "bullet" | "number"; line?: number; lineRule?: LineSpacingRule } {
+  markState(): { bold: boolean; italic: boolean; underline: boolean; strike: boolean; sizePt?: number; highlight?: string; font?: string; align?: string; list?: "bullet" | "number"; line?: number; lineRule?: LineSpacingRule } {
     const sel = document.getSelection();
     let el: Element | null = null;
     if (sel?.rangeCount) {
@@ -2460,6 +2730,8 @@ export class DocEditor {
       strike: carried.strike ?? false,
       sizePt: carried.sizePt,
       highlight: carried.highlight,
+      // 待用的那一张脸还没进模型（占位 span 上才算数），它得盖在回显上，否则工具栏说的是光标原来穿的脸。
+      font: this.pendingFormatPatch.font ?? faceShown(this.caretRun()),
       align: paragraph?.align,
       list,
       line: paragraph?.lineSpacing,
@@ -2468,6 +2740,15 @@ export class DocEditor {
   }
 
   applyStyle(patch: StylePatch): void {
+    // 焦点从正文移进 ribbon 的一条文本框（字体框）时，Blink 交回来的那条选区不再是正文里的那句话：实测 `{font:"Arial"}`
+    // 那一次 `rangeCount` 仍是 1，可范围被折成一个点、容器也搬到了正文之外，`rangeEnds()` 读不出路径，而 `pageSelection`
+    // 还好好留着 0→7。按钮与下拉不夺选区，所以只有走文本框的这条命令死在这里——用户在字体框里打完名字按回车，看到的
+    // 是一次彻底的静默。页面里最后一次选区在 `trackSelection` 就记下了（那句注释写明它是为 ribbon 的点击记的），
+    // `newComment` 与表格命令也信这一份：手上的这条读不出正文里的位置，就先把它放回页面再走原路。`selectRange` 顺带把
+    // 焦点还给正文，Blink 的 `execCommand` 要正文有焦点才落得下去。
+    if (!this.rangeEnds() && this.pageSelection) {
+      this.selectRange(this.pageSelection.start, this.pageSelection.end);
+    }
     const sel = document.getSelection();
     if (!sel || sel.rangeCount === 0) return;
     if (sel.getRangeAt(0).collapsed) {
@@ -2481,9 +2762,10 @@ export class DocEditor {
       };
       const key = Object.keys(patch)[0];
       const value = patch[key as keyof StylePatch];
-      // 高亮与字号这两族的待用格式由编辑器自己举（`armPending`）：Blink 交不出「无」，也没有写得出磅数的命令。
-      // 余下的（粗体/斜体/下划线/删除线/墨色）实测待用有效，仍交给它。
-      if (key === "highlight" || key === "sizePt") this.armPending(patch);
+      // 高亮、字号与字体这三族的待用格式由编辑器自己举（`armPending`）：Blink 交不出「无」，也没有写得出磅数的
+      // 命令；`fontFamily` 那条命令交给页面的是 CSS 的栈，而这一页的栈带着渲染器借的族名，读回来就是给件里没写过
+      // 的名字盖章。余下的（粗体/斜体/下划线/删除线/墨色）实测待用有效，仍交给它。
+      if (key === "highlight" || key === "sizePt" || key === "font") this.armPending(patch);
       else {
         document.execCommand("styleWithCSS", false, "true");
         document.execCommand(command[key]!, false, typeof value === "string" ? value : undefined);
@@ -2544,8 +2826,9 @@ export class DocEditor {
       if (patch.align !== undefined) paragraph.align = patch.align || undefined;
       if (patch.list !== undefined) {
         if (patch.list === "none") {
-          // 取消编号是文件自己写的形状：语料里 517 段带着 `w:numPr` 而 `w:numId w:val="0"`。清空字段在这里不够，
-          // 因为编号现在会从样式链上借来（48 段就是这么进列表的）——只有写下那个 0 才盖得住样式的那一条。
+          // 取消编号是文件自己写的形状：授权口径 298 段带着 `w:numPr`，其中 52 段写 `w:numId w:val="0"`
+          // （`.scratch/corpus-recheck2.mjs`；298 枚 `w:numPr` 里没有一枚漏写 `w:numId`）。清空字段在这里不够，
+          // 因为编号现在会从样式链上借来——只有写下那个 0 才盖得住样式的那一条。
           // 本来就不在列表里的段落什么都不写。
           if (paragraph.numPr && paragraph.numPr.numId !== 0) paragraph.numPr = { numId: 0, ilvl: paragraph.numPr.ilvl };
         } else if (numId !== undefined) {
@@ -2671,7 +2954,8 @@ export class DocEditor {
   /**
    * ribbon 行距下拉与「段落」对话框共用的落笔处。**只写用户动过的那一句**：四个键都不在补丁里就整击作废，
    * 连撤销栈都不进——与 `shiftParagraphIndent` 已经在边上时同一个判定。`w:line` 与 `w:lineRule` 必须同进同出
-   * （201 份的 7,810 枚里 0 枚只写一边），所以补丁交了 `line` 就一定带着规则；只交一半会被读成上一份的规则，
+   * （授权口径那 3,948 枚——`word/document.xml` 3,924 + `word/footnotes.xml` 12 + `word/endnotes.xml` 12，
+   * `.scratch/spacing-part-scope.py`——里 0 枚只写一边），所以补丁交了 `line` 就一定带着规则；只交一半会被读成上一份的规则，
    * 那正是 #132 钉住过的那类漂移。
    */
   setParagraphSpacing(patch: ParaSpacingPatch): boolean {
@@ -2702,6 +2986,244 @@ export class DocEditor {
     if (caret) this.setCaret(this.clamp(caret));
     this.hooks.changed();
     return true;
+  }
+
+  /**
+   * 「边框与底纹」的**读数**：选区里那几段共同说出的框（含样式链借来的那一份——对话框该说的是页面上正在画的东西，
+   * 口径与 `paraSpacingState` 同一句）与共同的那枚地，加一颗 `mixed`。比与摆都只看对话框摆得出的那四条边
+   * （`w:pBdr` 还容得下 `between`/`bar`，这一层没有那一行）：逐段比，只有各处一致的那条边才摆得出来，
+   * 不一致的留空，所以「原样确定」在任何选区下都不改内容；「不一致」由那行小字说出来。
+   */
+  paraBoxState(): ParaBoxState | undefined {
+    const targets = this.selectionParagraphs();
+    if (!targets.length) return undefined;
+    const projected = targets.map((p) => projectBox(PARA_BOX_SIDES, p.borders));
+    const state: ParaBoxState = { sides: agreedBox(PARA_BOX_SIDES, projected) };
+    const ground = agreedValue(targets.map((p) => p.shading));
+    if (ground !== undefined) state.shading = ground;
+    state.mixed =
+      targets.length > 1 &&
+      !targets.every((p, i) => samePropValue(projected[i], projected[0]!) && p.shading === targets[0]!.shading);
+    return state;
+  }
+
+  /** ribbon 边框下拉最后那一条腿：开「边框与底纹」，改完交给 `setParagraphBox`。 */
+  openParaBorder(): void {
+    const state = this.paraBoxState();
+    if (!state) return;
+    showParaBorderDialog(state, (patch) => this.setParagraphBox(patch));
+  }
+
+  /**
+   * 表那一层的读数：`w:tblBorders` 里**这一张表自己**说过的六条边，加上它自己那一枚 `w:tblPr/w:shd` 的地。
+   * 表不像段落有一条样式链可借（`w:tblStyle` 那一份的框在渲染时按另一条口径上身），所以这里摆的就是件里那一句；
+   * 没说的边留空，留空在对话框里是「不改」。地是三态的：`auto` 是「这张表说不要自己的地」，摆得出也写得回。
+   */
+  tableBoxState(): BoxState<TableBoxSide> | undefined {
+    const target = this.tableAt(this.caretPath());
+    if (!target) return undefined;
+    const state: BoxState<TableBoxSide> = { sides: projectBox(TABLE_BOX_SIDES, target.table.borders) };
+    if (target.table.shading !== undefined) state.shading = target.table.shading;
+    return state;
+  }
+
+  /**
+   * 格那一层的读数：选区里**几格共同说出的**那四条边与共同的那枚地。比与摆都按对话框摆得出的四条投影——
+   * `w:tcBorders` 还容得下 `tl2br/tr2bl`（这一层没摆那一行），拿整本账比会把四行一样的格子说成不一致。
+   * 不一致的边与地一律留空（留空=不算说话），所以「原样确定」替其余格子改写它没说过的东西这种事在这一层做不出来。
+   */
+  cellBoxState(): BoxState<CellBoxSide> | undefined {
+    const target = this.tableAt(this.caretPath());
+    if (!target) return undefined;
+    const cells = this.selectionCells(target)
+      .map((where) => target.table.rows[where.row]?.[where.col])
+      .filter((cell): cell is TableCell => !!cell);
+    if (!cells.length) return undefined;
+    const projected = cells.map((cell) => projectBox(CELL_BOX_SIDES, cell.borders));
+    const ground = agreedValue(cells.map((cell) => cell.shading));
+    return {
+      sides: agreedBox(CELL_BOX_SIDES, projected),
+      ...(ground !== undefined ? { shading: ground } : {}),
+      mixed:
+        cells.length > 1 &&
+        !cells.every((cell, i) => samePropValue(projected[i], projected[0]!) && cell.shading === cells[0]!.shading),
+    };
+  }
+
+  /**
+   * 「边框与底纹」那一条入口按选区派发——与 ribbon 那十条腿问的是同一个 `borderScope`：段落四条加底纹、
+   * 表六条（多内部横竖）加地、格四条加地。三层各说各的槽（`w:pBdr`/`w:shd`、`w:tblBorders`/`w:tblPr 的 shd`、
+   * `w:tcBorders`/`w:tcPr 的 shd`），所以对话框把「应用于」那一层写在顶上；三层的底纹都写得回去（#145、#152）。
+   */
+  openBorderDialog(): void {
+    const scope = this.borderScope();
+    if (scope === "table") {
+      const state = this.tableBoxState();
+      if (state) showTableBoxDialog(state, (patch) => this.setTableBox(patch));
+      return;
+    }
+    if (scope === "cells") {
+      const state = this.cellBoxState();
+      if (state) showCellBoxDialog(state, (patch) => this.setCellBox(patch));
+      return;
+    }
+    this.openParaBorder();
+  }
+
+  /**
+   * ribbon 那几条腿与「边框与底纹」对话框共用的落笔处。**逐边**落到段落的框上，只写这一击点名的那几边
+   * （`applyBoxPatch` 换掉整个物件，样式链借来的那一份不被往里改），底纹跟着 `patch.shading` 走。
+   * 一个字节都不动时（原样确定、或那一段本来就这么说）这一击不进撤销栈、也不把文档标脏——与
+   * `shiftParagraphIndent` 已经在边上时、`setParagraphSpacing` 四个键全空时同一条判定。
+   *
+   * `borders`/`shading` 不在 `PARA_STYLE_KEYS` 里，`paraStyleOf` 那本账看不出它们动了，所以修订的判定必须
+   * 直接比这两项自己（与 `snapToGrid` 在 `setParagraphSpacing` 里的特例同一条理由）。
+   */
+  setParagraphBox(patch: ParaBoxPatch): boolean {
+    const targets = this.selectionParagraphs();
+    if (!targets.length) return false;
+    if (!patch.sides && patch.shading === undefined) return false;
+    // 先问每一段「这一击会不会说出一句新话」，再决定进不进撤销栈：干跑一次 `applyBoxPatch` 不碰字段，
+    // 纯函数所以比改完再回滚便宜，也比「快照了却发现没改」干净。
+    const moves = targets.map((p) =>
+      (patch.sides !== undefined && !samePropValue(p.borders, applyBoxPatch(p.borders, patch)))
+      || (patch.shading !== undefined && p.shading !== patch.shading));
+    if (!moves.some(Boolean)) return false;
+    this.snapshot(this.caretPath());
+    for (const [at, paragraph] of targets.entries()) {
+      if (!moves[at]) continue;
+      const was = paraStyleOf(paragraph);
+      const wasSlots = paragraph.pPrSlots;
+      const wasBorders = paragraph.borders;
+      const wasShading = paragraph.shading;
+      if (patch.sides) paragraph.borders = applyBoxPatch(paragraph.borders, patch);
+      if (patch.shading !== undefined) paragraph.shading = patch.shading;
+      syncParaSlots(paragraph);
+      if (this.trackRevisions && (!samePropValue(wasBorders, paragraph.borders) || wasShading !== paragraph.shading)) {
+        paragraph.revFormat = this.signParagraphRevision(paragraph, was, wasSlots);
+      }
+    }
+    this.repaintWithSelection(this.caretPath());
+    return true;
+  }
+
+  /**
+   * 边框那一格在三种选区里问的是三层：段落自己那一圈 `w:pBdr`、表那一圈 `w:tblBorders`、每格自己的
+   * `w:tcBorders`。WPS 的 `RbTableOutsideBorder` 是**一枚按选区派发的控件**（`CT_Home.kuip:272-287` 那十条腿，
+   * 表格工具那侧的边框命令绑的是同一条 `ksoCmd`），所以这里定的不是三个命令，而是同一条命令落在哪一层：
+   * 选区铺满整张表算「表」，其余落点（裸光标与没铺满的格选区）算「格」。内部横竖那三条只有表说得出
+   * （`CT_TcBorders` 没有那个槽），派发去向表——见 `tableLegPatch`。
+   */
+  borderScope(): "para" | "table" | "cells" {
+    const target = this.tableAt(this.caretPath());
+    if (!target) return "para";
+    return this.coversWholeTable(target.table, this.selectionCells(target)) ? "table" : "cells";
+  }
+
+  /**
+   * 表级那一腿：只把**这一击动过的边**写回表自己的 `w:tblPr`。表没有段落那样的读快照，参照是件里带回来的那一份，
+   * 所以一条没动的边一个字节也不动；`w:tblLook`、`w:tblCellMar`、没裁决的 `w:tblPrChange` 连同孩子与孩子之间的
+   * 文字继续按原件走（`syncTableBox`）。表若没有 `tblPrXml`（编辑器自己造的表），写出本来就按字段拼这一枚孩子。
+   *
+   * 开着修订时这一击留下一枚 `w:tblPrChange`（`signTableRevision`）：记的是**改之前表自己说过**的那一整套，
+   * 文字挂进 `w:tblPr`、字段留作「拒绝」的参照。同一个人已经记过就不再重签，也不多发一个号——一条 `w:id` 只裁一次，
+   * 两击得一起退。WPS 开着修订改表格线时怎么写仍未取证，这一枚按 §17.13.5 的套法写（与段落那条同形）。
+   */
+  setTableBox(patch: BoxPatch<TableBoxSide>): boolean {
+    const caret = this.caretPath();
+    const target = this.tableAt(caret);
+    if (!target) return false;
+    const table = target.table;
+    const after = patch.sides ? applyBoxPatch(table.borders, patch, TABLE_EDGE_SHAPE) : table.borders;
+    const changes = patch.sides ? borderDelta(table.borders, after) : {};
+    const ground = patch.shading !== undefined && patch.shading !== table.shading ? patch.shading : undefined;
+    if (!Object.keys(changes).length && ground === undefined) return false;
+    const wasShape = tableShapeOf(table);
+    const wasXml = table.tblPrXml;
+    this.snapshot(caret);
+    table.borders = after;
+    if (ground !== undefined) table.shading = ground;
+    syncTableBox(table, changes, ground);
+    if (this.trackRevisions && table.revFormat?.author !== this.authorName) {
+      this.revSeq += 1;
+      signTableRevision(table, { id: this.revSeq, author: this.authorName, date: stampNow() }, wasShape, wasXml);
+    }
+    this.repaintWithSelection(caret);
+    return true;
+  }
+
+  /**
+   * 格级那一腿：逐格比、逐格写，所以本来就这么说的那一格一个字节不动，其余格照常落。
+   * 开着修订时逐格签一枚 `w:tcPrChange`（与表那一腿同两分：文字挂进这一格的 `w:tcPr`，字段留给「拒绝」）；
+   * `CT_TcPr` 只容一枚这一族的孩子，所以新签的把上一枚顶掉，同一格上同一个人的两击共用一个号。
+   */
+  setCellBox(patch: BoxPatch<CellBoxSide>): boolean {
+    const caret = this.caretPath();
+    const target = this.tableAt(caret);
+    if (!target) return false;
+    const edits: { cell: TableCell; after: BorderSet | undefined; changes: BorderSet; ground?: string; wasShape: CellStyle; wasXml?: string }[] = [];
+    for (const where of this.selectionCells(target)) {
+      const cell = target.table.rows[where.row]?.[where.col];
+      if (!cell) continue;
+      const after = patch.sides ? applyBoxPatch(cell.borders, patch, TABLE_EDGE_SHAPE) : cell.borders;
+      const changes = patch.sides ? borderDelta(cell.borders, after) : {};
+      const ground = patch.shading !== undefined && patch.shading !== cell.shading ? patch.shading : undefined;
+      if (Object.keys(changes).length || ground !== undefined)
+        edits.push({ cell, after, changes, ground, wasShape: cellShapeOf(cell), wasXml: cell.tcPrXml });
+    }
+    if (!edits.length) return false;
+    this.snapshot(caret);
+    for (const edit of edits) {
+      edit.cell.borders = edit.after;
+      if (edit.ground !== undefined) edit.cell.shading = edit.ground;
+      syncCellBox(edit.cell, edit.changes, edit.ground);
+      if (this.trackRevisions && !(edit.cell.revs ?? []).some((r) => r.tag === "tcPrChange" && r.author === this.authorName)) {
+        this.revSeq += 1;
+        signCellRevision(edit.cell, { id: this.revSeq, author: this.authorName, date: stampNow() }, edit.wasShape, edit.wasXml);
+      }
+    }
+    this.repaintWithSelection(caret);
+    return true;
+  }
+
+  /** 这一击要落的格子：跨格选区里的每一格（竖合并的一带只算它起头那一格），没有跨格选区时就光标自己那一格。 */
+  private selectionCells(target: { prefix: number[]; table: Table; where: CellWhere }): CellWhere[] {
+    const span = this.tableSpan();
+    if (!span || span.prefix.join() !== target.prefix.join()) return [target.where];
+    const cells = cellsInRect(span.table, { from: span.from, to: span.to });
+    return cells.length ? cells : [target.where];
+  }
+
+  /** 选区是否铺满整张表：`cellRect` 的右下两条是排他的，所以比的是行高与网格宽本身。 */
+  private coversWholeTable(table: Table, cells: CellWhere[]): boolean {
+    if (cells.length < 2) return false;
+    let r0 = Infinity;
+    let c0 = Infinity;
+    let r1 = -1;
+    let c1 = -1;
+    for (const where of cells) {
+      const rect = cellRect(table, where);
+      if (!rect) continue;
+      r0 = Math.min(r0, rect.r0);
+      c0 = Math.min(c0, rect.c0);
+      r1 = Math.max(r1, rect.r1);
+      c1 = Math.max(c1, rect.c1);
+    }
+    return r0 === 0 && c0 === 0 && r1 === table.rows.length && c1 === gridColumns(table);
+  }
+
+  /**
+   * 重画之后把**选区**放回原处，而不是折成一个点。边框这一族的落点是按选区算的（`borderScope`：铺满整张表才算
+   * 「表」），命令自己把那条跨格选区缩掉，下一击就问的是别的层——用户连着点「下框线」「无框线」，第二击落到
+   * 光标那一格上去了。选区本来就只是一个点时按原路放回光标。
+   */
+  private repaintWithSelection(caret: DocPath | null): void {
+    const span = this.pageSelection;
+    const wide = !!span && (span.start.path.join() !== span.end.path.join() || span.start.offset !== span.end.offset);
+    this.render();
+    if (wide && span) this.selectRange(span.start, span.end);
+    else if (caret) this.setCaret(this.clamp(caret));
+    this.hooks.changed();
   }
 
   // -------------------------------------------------------------- revisions
@@ -3533,7 +4055,13 @@ export class DocEditor {
 
   /** Fold pending DOM text into the model before a save reads it. */
   commit(): void {
-    this.hfEditing?.blur();
+    // 正在编辑的那一份自己交回模型，不等 `blur` 那一个事件：窗口没在前台、或程序直接存盘时事件不会来，
+    // 页眉里刚打进去的字就这么静默丢了（`editHF` 的 blur 是 `once`，错过一次就再也没人补）。收笔那一套
+    // （锁回带子、把正文的编辑宿主还回去）也归这一个出口，不然事件没来时就只悬着半套状态。
+    // `commitHF` 在没改动时本来就空过，所以随后那一句 `blur` 走到同一个出口也不会重复记一次改动。
+    const editing = this.hfEditing;
+    if (editing) this.closeHF(editing);
+    editing?.blur();
     this.sync();
   }
 
@@ -3587,37 +4115,64 @@ export class DocEditor {
 }
 
 /**
+ * 只取「对话框摆得出的那几条边」那一本账：回显按它摆，`mixed` 也按它比。整圈 `borders` 里可能还有这一层
+ * 没说出口、对话框也没那一行的边（`w:tcBorders` 容得下 `tl2br/tr2bl`），拿整本账比会把四行一样的格子说成不一致。
+ */
+function projectBox<S extends keyof BorderSet>(sides: readonly S[], borders: BorderSet | undefined): Partial<Record<S, TableBorder>> {
+  const out: Partial<Record<S, TableBorder>> = {};
+  for (const side of sides) {
+    const edge = borders?.[side];
+    if (edge) out[side] = edge;
+  }
+  return out;
+}
+
+/**
+ * 多选时回显只摆**各处共同的那一个答案**：把第一处那句话摆进格子，「原样确定」就成了替其余各处改写它没说过的
+ * 东西——那行小字承诺的正是「不改内容」。不一致的那条边留空，留空在这里是「不算说话」，所以谁也不动；
+ * `mixed` 仍按整本账报，小字才有得说。地与边同一条口径。
+ */
+function agreedBox<S extends keyof BorderSet>(sides: readonly S[], sets: readonly (BorderSet | undefined)[]): Partial<Record<S, TableBorder>> {
+  const out: Partial<Record<S, TableBorder>> = {};
+  for (const side of sides) {
+    const first = sets[0]?.[side];
+    if (first && sets.every((set) => samePropValue(set?.[side], first))) out[side] = first;
+  }
+  return out;
+}
+
+/** 一处一个值的物件（`w:shd` 那一枚的地）：各处说法一致才摆得出来，`auto` 与「没说」是两句话，都参与比对。 */
+function agreedValue<T>(values: readonly T[]): T | undefined {
+  const first = values[0];
+  return values.every((value) => value === first) ? first : undefined;
+}
+
+/**
  * Paragraphs inherit the shape of the one before them — Word's rule for Enter mid-document.
  *
  * Passing `doc` is what makes it an Enter: only a paragraph the page just split asks the previous paragraph's
  * style for its §17.7.2.24 next style, and that switch is the model's own rule (`WordDocument.nextSplit`). A
  * paragraph that comes back because a break's deletion is still waiting to be decided takes the shape it had, not
  * a new style, so that caller leaves `doc` out.
+ *
+ * 「上一段是什么形状就带什么形状」这一套由 `carriedShape` 从模型的字段自己拼，不在这里手数——手数的版本漏过
+ * `w:leftChars` 与槽位族那四项（不吸网格、三条保持规则），带过来的段就少说这几句，画出来与写回去都少一截
+ * （`w:pBdr`/`w:shd` 加进模型是同一族缺口的最后一次）。
  */
 function fresh(previous: Paragraph | undefined, doc?: WordDocument): Paragraph {
   if (!previous) return { kind: "paragraph", inlines: [] };
   const split = doc?.nextSplit(previous);
   if (split) return split;
   const empty = previous.inlines.every((i) => i.text.trim() === "" && !isMark(i));
+  const carried = carriedShape(previous);
+  // 「这一段之前必须断一页」说的不是版式，是断点：跟着走每按一次回车多一页，与 `nextSplit` 同一条理由。
+  delete carried.pageBreakBefore;
+  if (empty) delete carried.numPr;
   return {
     kind: "paragraph",
-    styleId: previous.styleId,
+    ...carried,
+    // The name travels with the id because the model holds both and the 样式 pane reads the one the file gave.
     styleName: previous.styleName,
-    align: previous.align,
-    numPr: empty ? undefined : previous.numPr,
-    indentLeft: previous.indentLeft,
-    indentRight: previous.indentRight,
-    indentFirstLine: previous.indentFirstLine,
-    indentFirstLineChars: previous.indentFirstLineChars,
-    indentHanging: previous.indentHanging,
-    spacingBefore: previous.spacingBefore,
-    spacingAfter: previous.spacingAfter,
-    lineSpacing: previous.lineSpacing,
-    lineSpacingRule: previous.lineSpacingRule,
-    // The level travels with the style for the same reason the style does, and it has to: a paragraph this
-    // editor makes has no `w:pPr` slots to fall back on, so a heading split in two whose new half states no
-    // level would save as body text.
-    outlineLevel: previous.outlineLevel,
     inlines: [],
   };
 }
@@ -3778,21 +4333,19 @@ function splitAt(inlines: Inline[], at: number): [Inline[], Inline[]] {
   return [left, right];
 }
 
-function patched(inline: Inline, patch: StylePatch): Inline {
-  const out: Inline = { ...inline };
-  for (const [key, value] of Object.entries(patch) as [keyof StylePatch, RunStyle[keyof RunStyle]][]) {
-    if (value === undefined) continue;
-    if (typeof value === "string" && value === "") delete out[key];
-    else (out as unknown as Record<string, unknown>)[key] = value;
-  }
-  return out;
-}
+/** 字体框上该显示的那一张脸：一段带东亚字的 run 先说它的中文脸——那一槽才是这段字真正穿的；纯拉丁的那段说拉丁的，
+ *  只说了另一槽的 run 退回到那一张。两槽各写一张名的语料形状（授权口径 46 份里 `w:rFonts` 同写 `w:ascii` 与
+ *  `w:eastAsia` 4,475 枚，其中两张名**不同**的 161 枚，`.scratch/corpus-recheck.mjs`）要的正是这个：
+ *  光标停在汉字上就给汉字那张，不给一串拼接。 */
+const faceShown = (run: Inline | undefined): string | undefined =>
+  run === undefined ? undefined : EAST_ASIAN_TEXT.test(run.text) ? run.fontEastAsia ?? run.font : run.font ?? run.fontEastAsia;
 
+/** 选区里被点到的那一段 run 逐个按命令改，改完才判要不要留痕（`sameRunProps`）。 */
 function restyle(inlines: Inline[], from: number, to: number, patch: StylePatch, sign?: (before: Inline) => FormatRevision | undefined): Inline[] {
   const [head, rest] = splitAt(inlines, from);
   const [middle, tail] = splitAt(rest, to === Infinity ? Infinity : to - from);
   const changed = middle.map((i) => {
-    const next = patched(i, patch);
+    const next = applyRunPatch(i, patch);
     // Nothing actually changed, so nothing gets signed: a toolbar toggle that lands on the formatting
     // the run already has must not leave a revision nobody asked for.
     if (!sign || sameRunProps(i, next)) return next;
@@ -3824,6 +4377,9 @@ function pickTextStyle(inline: Inline): Partial<Inline> {
     if (value !== undefined) (style as Record<string, unknown>)[key] = value;
   }
   if (inline.rPrSlots) style.rPrSlots = inline.rPrSlots;
+  // 「这一枚 run 说的是中文」也一起继承：断行与打的字落在哪枚 run 里，就该跟着它一起被挑脸问到。少了这一句，
+  // 插在汉字段里的分页符在改字体时不补 `w:eastAsia`，同源的两半各写一份性质（#142 并回、#143 问法）。
+  if (inline.runText) style.runText = inline.runText;
   // The read snapshot travels with the set it was taken against. A run whose bold came from the paragraph's
   // style shows bold here, and the new run has to know it did not state it — otherwise the first save after
   // typing writes a `w:b` into a run whose file never had one, and the text stops following its style.

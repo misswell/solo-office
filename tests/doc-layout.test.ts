@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  bandYieldPx,
   lineCharges,
   packPages,
   placementsAcrossSections,
@@ -378,5 +379,44 @@ describe("lineCharges：一枚行盒占多高，问它在纸上推进了多少",
     expect(lineCharges([{ top: 205, bottom: 225 }], PITCH, 206, 226.8)[0]).toBeCloseTo(20.8, 10);
     // 行高比推进大时（`exact` 那一族反过来）地板是行高本身。
     expect(lineCharges([{ top: 205, bottom: 210 }], 30, 206, 211)).toEqual([30]);
+  });
+});
+
+/**
+ * 带子从正文里占走的那一截（#157）。真机取到的口径是「带子贴在页边距之内、正文从它下沿起排」：夹具
+ * `/tmp/tall-header.docx`（A4、四边 1440 缇、`w:header` 720 缇、页眉 10 行）里 WPS 的正文上沿 ≈3445 缇，
+ * 自家改此前恒为 1440 缇——差的 2005 缇 = 133.67px 正是这一式子该算出来的数。
+ *
+ * 这一式子只认三个数：节说的距离、带子量出来的高、它坐在哪一条边距里。距离没说 → 贴纸沿（0）；
+ * 带子整个在边距线以内 → 让 0，那一截空白本来就是纸的边距，不是从正文里借的。
+ */
+describe("bandYieldPx：带子越过边距线的那一截", () => {
+  const TWIPS = (px: number): number => px * 15;
+
+  it("带子坐在边距线以内时一分都不让", () => {
+    // 距离 720 缇（48px）加带子 40px = 88px，还在 1440 缇（96px）的边距里。
+    expect(bandYieldPx(720, 40, 1440)).toBe(0);
+  });
+
+  it("越过边距线的那一截才从正文里占走", () => {
+    expect(bandYieldPx(720, 60, 1440)).toBeCloseTo(12, 10);
+  });
+
+  it("节没说距离就带子贴纸沿", () => {
+    // 发明了 Word 的 docDefaults（720 缇）会把一个没人写过的数算进让位里。
+    expect(bandYieldPx(undefined, 108, 1440)).toBeCloseTo(12, 10);
+    expect(bandYieldPx(undefined, 108, 1440)).toBeCloseTo(bandYieldPx(0, 108, 1440), 10);
+  });
+
+  it("真机那一次差的就是这一截：181.67px 的页眉在 1440 缇的边距上让出 2005 缇", () => {
+    const over = bandYieldPx(720, 181.66666666666666, 1440);
+    expect(TWIPS(over)).toBeCloseTo(2005, 6);
+    // 正文上沿 = 边距 + 让位 = 3445 缇，与真机量到的那个数同一格。
+    expect(TWIPS(96 + over)).toBeCloseTo(3445, 6);
+  });
+
+  it("距离本身写在边距线之外时，带子空着也让出那一截", () => {
+    // `w:header="2160"` 落在 1440 缇的边距之外：摆位在纸上是 144px，正文得从它下面起排。
+    expect(bandYieldPx(2160, 0, 1440)).toBeCloseTo(48, 10);
   });
 });

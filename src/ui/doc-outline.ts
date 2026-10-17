@@ -5,9 +5,11 @@ import type { DocEditor } from "./doc-edit.js";
  * one indented by its level and each a way to jump to the paragraph it stands for.
  *
  * What the list is made of is the file's own statement, not a guess at its names: `w:outlineLvl`
- * (§17.3.2.26) resolved through the paragraph's style chain, which is how 785 of the 86 WPS-written documents'
- * 46,417 paragraphs say they are headings (`.scratch/outline-census.ts`). A paragraph whose text merely *looks*
- * like a heading is not in this list, because nothing in the part says so.
+ * (§17.3.2.26) resolved through the paragraph's style chain. Authorized 语料 46 份 WPS 自带模板的读数（口径分两档，
+ * 别混用）：正文层 **7,430 段**（xmllint `//w:p`；配对正则只数到 7,393，少的 37 枚是自闭合的空段）里有
+ * **202 段自己写 `w:outlineLvl`**（`.scratch/authorized-families2.mjs`，xmllint 对拍同为 202），走样式链解析之后是
+ * **408 段**（`.scratch/authorized-families.mjs` 的解析层口径）。旧句「785 段 / 46,417 段」是已作废的 86 份清单。
+ * A paragraph whose text merely *looks* like a heading is not in this list, because nothing in the part says so.
  *
  * Mounted by `DocEditor` for the same reason the review pane is — the editor owns the page and replaces
  * `host.innerHTML` on every render, so a docked pane has to be re-docked there too, and its stylesheet is

@@ -74,16 +74,15 @@ describe("docx 页面边框（w:pgBorders）：读、画、按原件带回", () 
   it("hangs the decoration off the end of the body, so a block keeps the position the editor addresses it by", () => {
     const html = renderWord(WordDocument.openBytes(makePageSetupDocx(WPS_PAGE_BORDER_SECTION)));
     expect(html.indexOf("doc-page-border")).toBeGreaterThan(html.indexOf("正文"));
-    // The paper box has to be the positioned ancestor, and only when something is positioned inside it.
+    // 纸上的装饰都要有一个定位祖先：页面边框如此，#157 之后贴在纸内的两份带子原件也如此，所以这一格不再看条件。
     expect(pageStyle(html)).toContain("position:relative");
-    expect(pageStyle(renderWord(WordDocument.openBytes(makePageSetupDocx(WPS_SECTION))))).not.toContain("position:relative");
+    expect(pageStyle(renderWord(WordDocument.openBytes(makePageSetupDocx(WPS_SECTION))))).toContain("position:relative");
     expect(renderWord(WordDocument.openBytes(makePageSetupDocx(WPS_SECTION)))).not.toContain("doc-page-border");
   });
 
   it("draws nothing for the only page-border shape WPS' own files show: four sides that each say none", () => {
-    // 24 of the 115 corpus sections carry `w:pgBorders`, and all 96 of their sides state `w:val="none"`. So this,
-    // not a framed page, is the shape the field has to be right about: read those sections as a border set the
-    // file wrote, keep its bytes, and put no line on the paper.
+    // 授权 46 份里 `w:pgBorders` 是 **0 枚**（`.scratch/oneoff-gap.mjs`）：这份夹具画的不是眼下有受众的形状，
+    // 钉的是「文件写了边框就按原件读回来、写了 none 就不画线」那两条规则本身。
     const doc = WordDocument.openBytes(makePageSetupDocx(WPS_CLEARED_BORDER_SECTION));
     expect(doc.sections[0]!.pageBorders).toEqual({
       offsetFrom: "page",
@@ -96,7 +95,7 @@ describe("docx 页面边框（w:pgBorders）：读、画、按原件带回", () 
     });
     const html = renderWord(doc);
     expect(html).not.toContain("doc-page-border");
-    expect(pageStyle(html)).not.toContain("position:relative");
+    // 纸盒是不是定位祖先已经是常量（上一条），清空的边框不再往这里加东西。
     // A cleared border is still the file's statement. Dropping it would be this model editing the page.
     const xml = bodyXml(writeDocx(doc));
     expect(spanOf(xml, "pgBorders")).toBe('<w:pgBorders><w:top w:val="none" w:sz="0" w:space="0"/><w:left w:val="none" w:sz="0" w:space="0"/><w:bottom w:val="none" w:sz="0" w:space="0"/><w:right w:val="none" w:sz="0" w:space="0"/></w:pgBorders>');

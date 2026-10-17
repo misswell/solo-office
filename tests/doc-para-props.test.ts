@@ -3,7 +3,8 @@ import type { Paragraph } from "../src/core/docx.js";
 import { syncParaSlots, WordDocument } from "../src/core/docx.js";
 import { writeDocx } from "../src/core/write-docx.js";
 import { childSpans, elementContent, OpcPackage, text } from "../src/core/opc.js";
-import { makeParaPropsDocx } from "./helpers/make-paragraph.js";
+import { makeChainDocx, makeParaPropsDocx } from "./helpers/make-paragraph.js";
+import { renderWord } from "../src/core/render.js";
 
 const part = (bytes: Uint8Array): string => text(OpcPackage.from(bytes).bytes("word/document.xml")!);
 const open = (bytes: Uint8Array): WordDocument => WordDocument.openBytes(bytes);
@@ -29,14 +30,26 @@ const pPrOf = (xml: string, needle: string): string => {
 
 /**
  * A paragraph says more about itself than this model has fields for, and the page is rebuilt from the model.
- * The shapes these tests transcribe were measured, not invented: `.scratch/wps-ppr-names.ts` over 86
- * WPS-written documents counted 45949 paragraphs whose `w:pPr` children run `rPr` 45402, `ind` 29011,
- * `spacing` 24877, `jc` 22340, `widowControl` 8625, `shd` 7836, `textAlignment` 7696, `pStyle` 7324,
- * `keepNext` and `keepLines` 6440 each, `suppressLineNumbers` 5221, `wordWrap` 5045, `snapToGrid` 2531,
- * `bidi` 2144, `tabs` 2058, `pageBreakBefore` and `adjustRightInd` 1297 each, `numPr` 981, `outlineLvl` 264,
- * `framePr` 80, `sectPr` 29 and `pBdr` 4, and the same probe lists a paragraph mark's `w:rPr` children as
- * `rFonts` 44968, `szCs` 42429, `sz` 41083, `color` 26168, `rStyle` 9342, `lang` 8185, `kern` 7688,
- * `spacing` 5833, `highlight` 1939, `textFill` 1442, `ligatures` 1089, `vertAlign` 1159, `u` 330, `shd` 142.
+ * The shapes these tests transcribe were measured, not invented — on the authorized 46 份
+ * (`/tmp/wps-authorized.txt`, 9 `.docx` + 34 `.dotm` + 3 `.dotx`; `.scratch/ppr-children-authorized.ts` walks a tag
+ * stack, so a `w:pPr` counts only when its parent really is a `w:p`: 7,357 of them in `word/document.xml`, and no
+ * `w:pPr` is self-closed). Its direct children run `rPr` 7199, `spacing` 3924, `jc` 2548, `ind` 2278, `pStyle` 1518,
+ * `snapToGrid` 406, `adjustRightInd` 334, `numPr` 298, `bidi` 294, `widowControl` 246, `tabs` 230, `outlineLvl` 202,
+ * then `keepNext`, `keepLines`, `pageBreakBefore`, `kinsoku`, `wordWrap`, `overflowPunct`, `topLinePunct`,
+ * `autoSpaceDE`, `autoSpaceDN` and `textAlignment` 200 each, `shd` 30 and `sectPr` 12 — and that list is exhaustive,
+ * which is what the two halves below are for: `suppressLineNumbers`, `framePr` and `pBdr` are written 0 times by a
+ * body paragraph (the bands write `framePr` 6 and `pBdr` 2).
+ * The paragraph mark's own `w:rPr` children are `rFonts` 7177, `sz` 6648, `szCs` 2066, `b` 1422, `color` 1324,
+ * `bCs` 412, `u` 335, `kern` 324, `lang` 231, `i` 114, `iCs` 78, and nothing else — no `rStyle`, no `highlight`,
+ * no `w:rStyle`, no `highlight`, no `textFill`, no `ligatures`, no `vertAlign`, and no character `spacing` on a
+ * paragraph mark (the 14 `w:rPr/w:spacing` the part writes are all on runs). `contextualSpacing` is 0 in every
+ * `w:pPr` this walk reaches. The walk is proven not to lose any: counting the part loosely gives `word/document.xml`
+ * 3,938 `w:spacing` = the 3,924 above plus those 14, `word/styles.xml` 264, `word/footnotes.xml` 12 and
+ * `word/endnotes.xml` 12 (`.scratch/spacing-loose.ts`). That is also the reconciliation of the 3,948 the §105-era
+ * comments cite: it is the same `w:pPr` count over **three** body-side parts — 3,924 + 12 + 12 — not this part's,
+ * so name the parts whenever the number is quoted.
+ * These are the authorized 46 份 only: the 86-file cohort these numbers used to come from was built from the
+ * owner's personal documents and is void — see `.scratch/HANDOFF.md`.
  */
 describe("docx paragraph property fidelity", () => {
   it("reads a paragraph's whole w:pPr child by child and keeps the record as a decision", () => {
@@ -51,6 +64,39 @@ describe("docx paragraph property fidelity", () => {
     expect(p.pageBreakBefore).toBe(true);
     expect(p.spacingBefore).toBe(120);
     expect(p.indentLeft).toBe(420);
+  });
+
+  it("reads a written 不断页 as the switch it is and gives the page no break", () => {
+    // 授权 46 份的正文写 200 枚 `<w:pageBreakBefore w:val="0"/>`，0 枚说「要」(`.scratch/pbb-spellings.ts`)，且 200 枚
+    // 全是 `w:val="0"` 一种拼法（`.scratch/ppr-ladder-referee.ts` 按偏移数，18 份 `.dotm`＝9 个模板名各挂 zh_CN/zh_HK
+    // 两份，`.scratch/pbb-ext-split.ts`；`.docx`/`.dotx` 一枚都不写），而样式部件一枚都不写，所以这一格没有「从链上
+    // 借来」的一段（`.scratch/toggle-lent-chain.ts`）。把元素的存在读成要求，就等于给说了「不断页」的段各插一页——
+    // 200 枚里 180 枚是模型段落，修之前 `page-break-before:always` 画的正是这 180 枚（另 20 枚在 `w:sdt` 里按字节
+    // 带走，本来就不由这一格摆页）；装好的壳对 `office rental contract.dotm`（一件 21 枚）现在数到 0
+    // （`.scratch/pbb-dom-count.js`）。
+    const bytes = makeChainDocx(
+      [{ id: "Normal", isDefault: true }],
+      [
+        { pPr: '<w:pageBreakBefore w:val="0"/>', text: "说了不断页" },
+        { pPr: "<w:pageBreakBefore/>", text: "说了要断页" },
+        { text: "什么都没说" },
+      ],
+    );
+    const doc = open(bytes);
+    const byText = (needle: string): Paragraph => paragraphs(doc).find((x) => textOf(x) === needle)!;
+    expect(byText("说了不断页").pageBreakBefore).toBe(false);
+    expect(byText("说了要断页").pageBreakBefore).toBe(true);
+    expect(byText("什么都没说").pageBreakBefore).toBe(false);
+    expect(renderWord(doc)).toContain("page-break-before:always");
+    expect([...renderWord(doc).matchAll(/page-break-before:always/g)]).toHaveLength(1);
+    // 认领一次不改动它：那一句是文件自己说的，既不升级成裸元素，也不整枚消失。
+    const off = byText("说了不断页");
+    syncParaSlots(off);
+    expect(off.pPrSlots?.find((s) => s.tag === "pageBreakBefore")?.xml).toBe('<w:pageBreakBefore w:val="0"/>');
+    const after = part(writeDocx(doc));
+    expect(paraXml(after, "说了不断页")).toContain('<w:pageBreakBefore w:val="0"/>');
+    expect(paraXml(after, "说了要断页")).toContain("<w:pageBreakBefore/>");
+    expect(paraXml(after, "什么都没说")).not.toContain("pageBreakBefore");
   });
 
   it("costs a paragraph nothing when a character changes somewhere else in the document", () => {

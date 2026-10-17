@@ -147,7 +147,11 @@
       button.rb:hover { background: #353b45; }
       button.rb:disabled { opacity: .35; cursor: default; }
       button.rb.on { background: var(--accent); border-color: #5aa0e8; color: #fff; }
-      select.pick {
+      /* 字体框与字号框在 WPS 里同挂 `RB_Font` 的 `font_info_pair`（`KxWpsFontComboBoxCommand idMso="Font"` 写
+         `minimumWidth="130"`、`layoutOnLeft="true"`，字号紧跟其后），所以这一对必须是同一只盒子：高度在这里写死，
+         不靠 `<select>` 的 UA 默认值——`<input>` 自己量出来是 20，两格并排就错开 1px 顶边。宽度才各自说。 */
+      select.pick,
+      input.facebox {
         font: inherit;
         font-size: 12px;
         color: var(--ink);
@@ -155,7 +159,9 @@
         border: 1px solid #3a404a;
         border-radius: 5px;
         padding: 2px 4px;
+        height: 22px;
       }
+      input.facebox { width: 130px; }
       input.swatch { width: 24px; height: 22px; padding: 0; border: 1px solid #3a404a; border-radius: 5px; background: #262b33; }
 
       /* ---- main split ---- */
@@ -335,7 +341,10 @@
         background: #fff;
         width: var(--page-w, 794px);
         margin: 26px auto 60px;
-        padding: var(--pad-t, 96px) var(--pad-r, 96px) var(--pad-b, 96px) var(--pad-l, 96px);
+        /* 上内边距 = 节说的上边距 + 页眉带越过边距线的那一截（`applyBandYield` 量回来写的，#157：真机上
+           带子贴在纸内、正文从它下沿起排）。带子不占高时那一句是 0px，摆位与没带子的件都照旧。 */
+        padding: calc(var(--pad-t, 96px) + var(--band-yield-t, 0px)) var(--pad-r, 96px)
+          calc(var(--pad-b, 96px) + var(--band-yield-b, 0px)) var(--pad-l, 96px);
         min-height: 1000px;
         box-shadow: 0 2px 18px #0002;
         font-family: var(--font-doc);
@@ -345,12 +354,13 @@
       }
       /* An empty paragraph holds a whole line, not one em of it: `1lh` is the line height the file asked for, so
          a blank line on a 312 缇 grid is 20.8px tall like the line under it rather than the stylesheet's 16px.
-         No paragraph margin: over the 201 WPS-written documents, 11,977 of their 13,426 root paragraphs still say
-         nothing about 段前/段后 after the style chain is resolved, and 0 of the 201 spell `w:spacing` in
-         `w:pPrDefault` or `w:docDefaults` — there is no document-wide gap for a file to have meant. The 8px this
-         sheet used to add was the App's own: it made a 20.8px grid cell advance 28.8px and cut a page from 44
-         lines to 31 (`.scratch/para-gap-dom.ts`). 117 of the 201 do put `w:spacing` on named styles (327 of their
-         1,893 styles), and that space arrives from `render.ts` as an inline margin — the only route. */
+         No paragraph margin: on the authorized 46 份 a file's own statement of a vertical gap is rare — of its 7,455
+         `w:pPr` blocks only 78 state 段前 and 244 state 段后 (`.scratch/corpus-recheck2.mjs`), so the overwhelming
+         majority say nothing. Whether `w:pPrDefault` or `w:docDefaults` spells one on the authorized set is 待重证
+         (the "0 of 201" reading came from the quarantined cohort), and so is the 117-of-201 named-style count — but
+         the route is not in question: a style's space arrives from `render.ts` as an inline margin, the only route.
+         The 8px this sheet used to add was the App's own: it made a 20.8px grid cell advance 28.8px and cut a page
+         from 44 lines to 31 (`.scratch/para-gap-dom.ts`). */
       .page .para { margin: 0; min-height: 1lh; white-space: pre-wrap; }
       .page[contenteditable="true"] { outline: none; }
       .page[contenteditable="true"] .bullet { user-select: none; }
@@ -360,10 +370,11 @@
          `h3` 13pt, all in the UI face at line-height 1.25, plus `.s-Title` 26pt/600 with a 4px gap and
          `.s-Subtitle` 14pt with an 18px one. Measured (`.scratch/title-css-dom.html`): a heading that states
          nothing drew a 32.66px line box over the 25.92px its neighbours draw — a quarter taller, and none of it
-         asked for by the file. The audience is tiny either way: of the 201 WPS-written documents' 13,426 root
-         paragraphs, 489 are reached by those selectors, 486 of those carry their own size inline, and 0 are named
-         `Title` or `Subtitle` — WPS signs 「标题 1」, and the class comes from `w:name`
-         (`.scratch/title-css-audience.ts`). What WPS itself draws for a heading whose style states nothing is
+         asked for by the file. The audience is tiny either way — but that audience was counted on the quarantined
+         cohort: 489 of its 13,426 root paragraphs are reached by those selectors, 486 of those carry their own size
+         inline, and 0 are named `Title` or `Subtitle`, and the same three numbers are 待重证 on the authorized 46 份
+         (`.scratch/title-css-audience.ts` over `/tmp/wps-grid201.txt`). What is not a corpus count is the shape:
+         WPS signs 「标题 1」, and the class comes from `w:name`. What WPS itself draws for a heading whose style states nothing is
          未取证: the installed bundle ships no Writer template (`office6/templates` holds only two `.et` files), so
          there is nothing here to copy, and the App must not guess a line box.
          `font: inherit` is not a no-op: measured, an `h1` the sheet does not reach draws 32px/700 with a 21.44px

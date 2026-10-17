@@ -80,10 +80,10 @@
  *   真机点开的种子**未取证**。
  *
  * - **光标那行离纸沿多远**（状态栏「纵向位置」，`KxWpsPagePositionInfoCommand`，kuip 452 行）走
- *   `pagePositionAt()`：与「第 X 页」同一条中线先定页，纸沿 = **本页第一枚内容的上沿 − 这一节的上边距**
- *   （第 1 页那张与 `render.ts` 的 `--pad-t` 同源，第 2 页起在流里没有 DOM，但每页内容都从纸沿下
- *   padTop 处起排，所以反推得出），光标行顶走 行/列 那一趟的**字符盒**上沿。真机量到哪条线、什么单位、
- *   几位小数**未取证**。
+ *   `pagePositionAt()`：与「第 X 页」同一条中线先定页，纸沿 = **本页第一枚内容的块沿 − 这一节的上边距 − 让位**
+ *   （块沿与单位自己报的行盒顶之间那一截走 `blockInsetAbove`，与切纸推距同一支；第 1 页那张与 `render.ts` 的
+ *   `--pad-t` 同源，第 2 页起在流里没有 DOM，但每页内容都从纸沿下「边距 + 让位」处起排，所以反推得出），
+ *   光标行顶走 行/列 那一趟的**字符盒**上沿。真机量到哪条线、什么单位、几位小数**未取证**。
  *
  * 因此这两行报的是「**本程序按画出来的行盒量出来的**页数/行数」。它与 WPS 自己的排版引擎不会逐页相同
  * （字体度量、行盒取整、页眉占位、孤行控制都不一样，这些也都**未取证**），所以这里不写「与 WPS 一致」。
@@ -955,8 +955,10 @@ export function rowColumnAt(page: HTMLElement, doc: WordDocument, caret: { mid: 
  * 光标那行离**纸沿**的纵向距离，px——状态栏「纵向位置」那一格（WPS 的 `KxWpsPagePositionInfoCommand`，
  * kuip 452 行，detail「@Vertical Page Position. Click to Open "Go To" dialog.」）。纸沿是这一页纸的上沿：
  * 第 1 页在纸上画得出来（`contentTopOf`），第 2 页起在流里没有 DOM——但模型里每一页的内容都从纸沿下
- * padTop 处起排（第 1 节与 `render.ts` 的 `--pad-t` 同源，其余各节按节自己的 `w:pgMar@w:top`），
- * 所以反推得出来：纸沿 = **本页第一枚内容的上沿 − 这一节的上边距**。
+ * 「上边距 + 让位」处起排（第 1 节与 `render.ts` 的 `--pad-t` 同源，其余各节按节自己的 `w:pgMar@w:top`，
+ * 而 #157 之后开始线还要加上这一节为页眉让出的那一截），所以反推得出来：
+ * 纸沿 = **本页第一枚内容的块沿 − 上边距 − 让位**。块沿与单位自己报的行/字符盒顶之间那一截走
+ * `blockInsetAbove`——与 `applySheetGaps` 的推距同一支，两条路必须压在同一个口径上（少这一截读数就少 3.5px）。
  * 光标行顶走 行/列 那一趟取点（折叠 Range 自己那枚矩形）；页的归属与「第 X 页」同一条中线（`unitIndexAt`）。
  * 纸上没有内容、或光标行量不出矩形时不猜，`undefined`。取的是**字符盒**的上沿（不是行盒），与 行/列 的
  * 列同一口径；WPS 真机从纸沿量到哪条线、什么单位、几位小数**都未取证**。
@@ -965,17 +967,49 @@ export function pagePositionAt(page: HTMLElement, doc: WordDocument, caret: { mi
   const plan = planOf(page, doc);
   if (!plan) return undefined;
   if (!plan.units.length) return undefined;
+  const zoom = zoomOf(page);
+  const origin = page.getBoundingClientRect().top;
+  const local = (viewportTop: number): number => (viewportTop - origin) / zoom;
   const idx = unitIndexAt(plan.units, caret.mid);
-  const first = plan.places.indexOf(plan.places[idx]!);
+  let first = plan.places.indexOf(plan.places[idx]!);
+  // 零高度的单位不算内容（与推距那一趟同一档防呆）：它压在开始线上但不占地方，拿它反推纸沿会少算整截。
+  while (first + 1 < plan.units.length && plan.units[first]!.height <= 0) first++;
   const top = topAtPoint(caret.node, caret.offset);
   if (top === undefined) return undefined;
   const sections = doc.sections.length ? doc.sections : [DEFAULT_SECTION];
   const sec = sections[plan.unitSections[first]!];
   if (!sec) return undefined;
   // 交出去的是**纸的像素**里那一截长度（状态栏按厘米显示）：分子是量回来的视口读数相减，缩放过的纸要除回
-  // zoom 才与节说的数同在一个空间里相加。相加的那一段是「上边距 + 这一节为页眉让出的那一截」——正文开始线
-  // 现在确实比边距低（#157），只加边距会把带子占走的那一截漏掉，纸沿因此比画出来的高。
-  return (top - plan.units[first]!.top) / zoomOf(page) + twipsToPx(sec.margins.top) + (bandYieldsOf(page, BAND_YIELD_TOP)[plan.unitSections[first]!] ?? 0);
+  // zoom 才与节说的数同在一个空间里相加。相加的那一段有两截：一截是「上边距 + 这一节为页眉让出的那一截」——
+  // 正文开始线现在确实比边距低（#157），只加边距会把带子占走的那一截漏掉；另一截是 `blockInsetAbove`，因为
+  // 单位自己报的是行/字符盒的顶，而开始线上压着的是**块沿**（#167 的推距按的就是块沿）。少了这一截，纸沿
+  // 会被反推得比画出来的低一枚半行距余量，读数跟着少 3.5px（= 52.5 缇）。
+  return (
+    (top - plan.units[first]!.top) / zoom +
+    blockInsetAbove(plan.blocks, plan.units, first, local) +
+    twipsToPx(sec.margins.top) +
+    (bandYieldsOf(page, BAND_YIELD_TOP)[plan.unitSections[first]!] ?? 0)
+  );
+}
+
+/**
+ * 第 `content` 枚单位自己的顶，到它所在那一块**块沿**之间的那一截（同一个原点下的纸的像素）：块沿以下一枚
+ * 半行距余量才是第一行的行/字符盒顶（12pt 配 1.62 行距实测 3.5px）。`applySheetGaps` 把块沿按到开始线上，
+ * `pagePositionAt` 从开始线反推纸沿，两处问的必须是同一截——分开写就会出现「同一张纸的两条测量路对不上」。
+ * 同一块里的续行与首行同一档字面，所以拿块的第一枚量到的就是这一档的余量；表行那一支本来就是行自己的盒子，
+ * 量出来 ≈0，不用另开。块找不到、或量出负数（负边距、上标把行盒提到块沿以上）都按 0——与「量不出就不给」
+ * 同一条守则。
+ */
+function blockInsetAbove(
+  blocks: readonly { el: HTMLElement; units: PlacedUnit[] }[],
+  units: readonly PlacedUnit[],
+  content: number,
+  local: (viewportTop: number) => number,
+): number {
+  const where = locateUnit(blocks, content);
+  const firstOfBlock = where ? units[content - where.seg] : undefined;
+  if (!where || !firstOfBlock) return 0;
+  return Math.max(0, local(firstOfBlock.top) - local(where.el.getBoundingClientRect().top));
 }
 
 /** 块里第一枚真文字的起点；一枚文字都没有（空段落）时退回块自己的开头——那里同样落得进光标。 */
@@ -1461,16 +1495,10 @@ export function applySheetGaps(page: HTMLElement, doc: WordDocument): SheetLayou
     if (!where) continue;
     const target = sheetBottom + SHEET_GAP_PX + padTopOf(unitSections[content] ?? 0);
     // 目标说的是**块的上沿**该落在哪一条开始线上（第一张纸就是画出来的纸盒上内边距），而 `units[].top` 报的是
-    // **行盒**的顶（见 `lineBoxesOf` 末尾那一句）。两者差一枚「半行距余量」：12pt 的字配 1.62 的行距，块沿以下
-    // 3.5px 才是第一行的行盒。拿行盒顶当块顶推，第二张往后的正文就比第一张高这一截——真机实测：第一张的块沿
-    // 正好压在开始线上（差 0），往后的张上是行盒压在开始线、块沿差 **−3.5px = −52.5 缇**（夹具
-    // `/tmp/tall-header-2sheet.docx`，`.scratch/sheet-2yield-probe.js`）。按块自己那一枚的第一行来补：同一块
-    // 里的续行与首行同一档字面，量首行与块沿的差就是这一档的余量；表行的第一枚本来就是表行的盒子，量出来 ≈0，
-    // 不用另开一支。量出负数（负边距、上标之类把行盒提到块沿以上）就当 0——与「量不出就不给」同一条守则。
-    const firstOfBlock = units[content - where.seg];
-    const above = firstOfBlock
-      ? Math.max(0, localTopOf(firstOfBlock.top) - localTopOf(where.el.getBoundingClientRect().top))
-      : 0;
+    // **行盒**的顶，中间那一截由 `blockInsetAbove` 量（真机实测：第一张的块沿正好压在开始线上差 0，往后的张上
+    // 是行盒压在开始线、块沿差 **−3.5px = −52.5 缇**；夹具 `/tmp/tall-header-2sheet.docx`，
+    // `.scratch/sheet-2yield-probe.js`）。不补这一截，第二张往后的正文就比第一张高它。
+    const above = blockInsetAbove(blocks, units, content, localTopOf);
     const h = target - localTopOf(units[content]!.top) + above - lifted;
     if (!(h > 0)) continue;
     if (where.seg > 0) {

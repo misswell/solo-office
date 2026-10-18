@@ -574,7 +574,7 @@ export class DocEditor {
   constructor(
     private readonly host: HTMLElement,
     private readonly doc: WordDocument,
-    private readonly hooks: { changed(): void; moved?(): void },
+    private readonly hooks: { changed(): void; moved?(): void; relayout?(): void },
   ) {
     for (const id of anchorIdsIn(this.doc.blocks)) this.bodyAnchored.add(id);
     this.revSeq = this.doc.maxRevisionId();
@@ -3455,6 +3455,11 @@ export class DocEditor {
     // 决定，纸面上行内样式的唯一来源就是这一趟——补上去的样式下一次 `render()` 就没了，而 run 的行内样式会被
     // `styleOf` 读回模型，等于把改前那套写进了 run。
     this.render();
+    // 重铺之后纸上的数变了（藏起来的那几截不再占行盒，纸少了、缝也少了），但**文件一个字节没动**：所以既不是
+    // `changed`（那是「内容动了、脏了」），也不是 `moved`（那是光标在纸上挪）。这条只报「铺排重算过了」，
+    // 让状态栏那五格跟着当档的脸重读——装机件里那一格原本一直挂着换档前那句「共 7 页」（`renderer.ts` 的
+    // `relayout`）。
+    this.hooks.relayout?.();
   }
 
   /** Ribbon toggle for 审阅窗格; with no argument it flips whatever the reader is looking at. */

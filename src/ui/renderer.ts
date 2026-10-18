@@ -1559,6 +1559,11 @@ function mountDoc(app: Extract<Opened, { kind: "docx" }>): void {
       syncDocRibbon();
       docStatus?.refresh();
     },
+    // 换修订视图那一趟：纸重铺了（藏起来的字不再占行盒，页数与页缝都跟着变），文件却一个字节没动，
+    // 所以既不到 `changed` 也不到 `moved`。状态栏那五格是从铺排现读的，没人报这一趟它就挂着换档前的数。
+    relayout: () => {
+      docStatus?.refresh();
+    },
   });
   docStatus = new DocStatusBar(editor);
   // The ribbon reads the editor, so it is built after one exists.

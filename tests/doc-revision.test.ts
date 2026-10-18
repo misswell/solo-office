@@ -4,7 +4,7 @@ import { WordDocument as Doc } from "../src/core/docx.js";
 import { writeDocx } from "../src/core/write-docx.js";
 import { OpcPackage } from "../src/core/opc.js";
 import { renderWord } from "../src/core/render.js";
-import { makeBreakableDocx, makeRevisedDocx, makeNestedRevisionDocx, makeMovedDocx, makeParaMarkDocx, makeStraddleDocx, makeMoveMarkDocx, makeLowIdDocx, makeTableRowDocx, makeLastRowDeletedDocx, makeFormatViewDocx, makeFormatViewPagedDocx, makeFormatViewBreakDocx } from "./helpers/make-revisions.js";
+import { makeBreakableDocx, makeRevisedDocx, makeNestedRevisionDocx, makeMovedDocx, makeParaMarkDocx, makeStraddleDocx, makeMoveMarkDocx, makeLowIdDocx, makeTableRowDocx, makeLastRowDeletedDocx, makeFormatViewDocx, makeFormatViewPagedDocx, makeFormatViewBreakDocx, makeFacePagedDocx } from "./helpers/make-revisions.js";
 import { makeCommentedDocx } from "./helpers/make-comments.js";
 import { unstamped } from "./helpers/unstamp.js";
 
@@ -990,5 +990,23 @@ describe("修订视图：属性改动在「显示原文」里摆回改前那一�
     expect(renderWord(brk, "original")).toContain("page-break-before:always");
     expect(renderWord(brk, "marks")).not.toContain("page-break-before");
     expect(second.pageBreakBefore).toBe(false);
+  });
+
+  it("文字那一族的「在场」只由 CSS 管：三档写出的 HTML 一个字节不差，字都留在纸上", () => {
+    const doc = open(makeFacePagedDocx());
+    const html = { marks: renderWord(doc, "marks"), final: renderWord(doc, "final"), original: renderWord(doc, "original") };
+    // 内容修订没有「另一套属性」可摆：三档的 HTML 逐字节相同，藏哪一族全凭 `.page.rev-final .rev-del`
+    // /`.page.rev-original .rev-ins` 那两句 display:none。所以读纸的那几趟（行盒、行首二分、页缝落笔、
+    // 「列」）不能照文本节点数——藏起来的字在纸上摆不出盒子，量不到上沿。
+    expect(html.final).toBe(html.marks);
+    expect(html.original).toBe(html.marks);
+    expect(html.marks).toContain('class="rev rev-ins"');
+    expect(html.marks).toContain('class="rev rev-del"');
+    // 看不是决定：两头各 4,000 字加钉住的八个字，一档不少，写回的字节也不动。
+    const p = paragraphs(doc)[0]!;
+    expect(textOf(p)).toHaveLength(8004);
+    const bytes = body(doc);
+    for (const v of ["final", "original", "marks"] as const) expect(renderWord(doc, v)).toBe(html.marks);
+    expect(body(doc)).toBe(bytes);
   });
 });

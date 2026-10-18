@@ -275,3 +275,20 @@ export function makeFormatViewBreakDocx(): Uint8Array {
 </w:document>`;
   return pack(SKELETON(document));
 }
+
+/**
+ * 文字那一族的「在场」要长到跨纸才量得出来：同一段里先塞一枚 4,000 字的插入，再塞一枚 4,000 字的删除，
+ * 两头各钉四个字（纸首/纸尾）好让光标有处可放。「所有标记」看得见 8,000 字，另外两档各只看得见 4,000 字，
+ * 所以张数与条带数必须跟着这两份长度走，而不是跟着记录的种类走。受众与其余修订夹具同一句话：授权 46 件里
+ * 修订记录 0 枚，靶子只有自家写出的修订件。
+ */
+export function makeFacePagedDocx(): Uint8Array {
+  const ins = "插入的长文".repeat(800);
+  const del = "删掉的长文".repeat(800);
+  const document = `<w:document xmlns:w="${NS_W}" xmlns:r="${NS_R}">
+<w:body>
+<w:p><w:r><w:t>纸首</w:t></w:r><w:ins ${REV(92, "顾峰")}><w:r><w:t xml:space="preserve">${ins}</w:t></w:r></w:ins><w:del ${REV(93, "林晓")}><w:r><w:delText xml:space="preserve">${del}</w:delText></w:r></w:del><w:r><w:t>纸尾</w:t></w:r></w:p>
+</w:body>
+</w:document>`;
+  return pack(SKELETON(document));
+}

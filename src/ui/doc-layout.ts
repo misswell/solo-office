@@ -872,12 +872,28 @@ export function rowInPage(places: readonly number[], units: readonly LayoutUnit[
 /** 块里拉平的文字与每个文字节点的起点（按文档顺序）。列要在这条串上**按字符**量行盒。 */
 type FlatText = { len: number; starts: { node: Text; start: number }[] };
 
+/** 这一枚文字在纸上摆得出盒子吗：`display:none` 的那一族（修订两档藏起来的字）量不到任何矩形。 */
+function onPaper(node: Text): boolean {
+  const range = document.createRange();
+  range.selectNode(node);
+  return range.getClientRects().length > 0;
+}
+
+/**
+ * 只数**纸上摆得出盒子**的字。藏起来的那一族在纸上没有位置：既不成行盒（`lineBoxesOf` 只收 `height>0`
+ * 的矩形），也不落在任何一行里。数进来对二分是要命的——`firstAtUnit` 靠「字符上沿单调不减」二分，
+ * 量不到矩形的那一位把整趟取点判成 `undefined`（`.scratch/view-face-dom.ts`：同一段 8,000 字，
+ * 最终状态三道页缝全数消失（条带 0 而对上一张数报 4），原始状态切得出来——两档只差藏起来那一截
+ * 落在串的前头还是后头，第一刀二分正好落在它身上）。落笔点、行首、「列」三处共用这一条串，
+ * 口径定一次，三处跟着对。
+ */
 function flattenText(el: HTMLElement): FlatText {
   const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
   const starts: { node: Text; start: number }[] = [];
   let len = 0;
   for (let n = walker.nextNode(); n; n = walker.nextNode()) {
     const node = n as Text;
+    if (!node.data.length || !onPaper(node)) continue;
     starts.push({ node, start: len });
     len += node.data.length;
   }
@@ -938,17 +954,28 @@ function topAtChar(flat: FlatText, at: number): number | undefined {
   return a ? caretCharTop(a.node, a.offset) : undefined;
 }
 
-/** 光标在拉平串里的位置（0..len）。光标落在元素边界上（空段落、或两枚节点之间）也算得出。 */
-function flatOfCaret(block: HTMLElement, node: Node, offset: number): number | undefined {
+/**
+ * 光标在拉平串里的位置（0..len）。光标落在元素边界上（空段落、或两枚节点之间）也算得出。
+ * 数的是 `flattenText` 那一条串（纸上摆得出盒子的字），不是 `Range.toString()`：按后者数会把藏起来的
+ * 字也算进来，同一行里的「行首」却在那条串上——两个空间相减，列能推出整段字数。
+ */
+function flatOfCaret(flat: FlatText, block: HTMLElement, node: Node, offset: number): number | undefined {
   if (!block.contains(node)) return undefined;
-  const range = document.createRange();
+  const probe = document.createRange();
   try {
-    range.setStart(block, 0);
-    range.setEnd(node, offset);
+    probe.setStart(node, offset);
+    probe.collapse(true);
   } catch {
     return undefined;
   }
-  return range.toString().length;
+  let at = 0;
+  for (const s of flat.starts) {
+    if (s.node === node) return s.start + Math.min(offset, s.node.data.length);
+    // 起点还在光标之前的才算；正好从光标那处开始的节点一个字不数（与 `Range.toString()` 同一取舍）。
+    if (probe.comparePoint(s.node, 0) < 0) at = s.start + s.node.data.length;
+    else break;
+  }
+  return at;
 }
 
 /**
@@ -956,6 +983,8 @@ function flatOfCaret(block: HTMLElement, node: Node, offset: number): number | u
  * 上沿排出来（那个字自己的矩形，口径写在 `topAtChar`），同一行上各处上沿相同，折行处整行高地下落一次，
  * 所以上沿对位置单调不减，二分找「上沿 ≥ 行盒顶 − 半行高」的第一个位置。容差取半行高：行内因字号不一
  * 差几像素的不管，跨行至少差一整行高。
+ * 单调不减这条只在**纸上摆得出盒子**的那一条串上成立：藏起来的字没有上沿，混进串里第一刀就量不到、
+ * 整趟判 `undefined`（撇它在外的是 `flattenText`，不是这里）。
  * 「列」（`columnOf`）与「第 N 行在哪里」（`lineCaretAnchor`）共用这一趟——行首与列底数必须是同一个位置。
  */
 function firstAtUnit(flat: FlatText, unit: PlacedUnit): number | undefined {
@@ -1002,7 +1031,7 @@ function lineColumnInPlan(plan: PagePlan, caret: { mid: number; node: Node; offs
   const where = locateUnit(blocks, idx);
   if (!where || where.el.tagName === "TABLE" || where.el.classList.contains(CARRY_CLASS)) return { row };
   const flat = flattenText(where.el);
-  const at = flatOfCaret(where.el, caret.node, caret.offset);
+  const at = flatOfCaret(flat, where.el, caret.node, caret.offset);
   if (at === undefined || at > flat.len) return { row };
   const column = columnOf(flat, units[idx]!, at);
   return column === undefined ? { row } : { row, column };

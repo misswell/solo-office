@@ -346,6 +346,8 @@ function buildRibbon(kind: "xlsx" | "docx" | "pptx"): void {
   if (ribbon.dataset.built === kind) return;
   ribbon.dataset.built = kind;
   ribbon.innerHTML = "";
+  // 只有文字那一页是分 tab 的（见 `buildDocRibbon`）；表与演示仍是一条行。
+  ribbon.classList.toggle("tabbed", kind === "docx");
   for (const key of Object.keys(ctl)) delete ctl[key];
   if (kind === "xlsx") buildSheetRibbon();
   else if (kind === "docx") buildDocRibbon();
@@ -496,12 +498,57 @@ function fillFaceList(): void {
   );
 }
 
+/** WPS 自己声明的那条 tab 条（`res/wpsongmani.kui:113-162`，`<KRbTabWidgetCommand>` 的孩子按序排）。 */
+const DOC_RIBBON_TABS: [string, string][] = [
+  ["home", "开始"],
+  ["insert", "插入"],
+  ["layout", "页面布局"],
+  ["review", "审阅"],
+  ["view", "视图"],
+];
+
 /** Word-style formatting: run styling over the selection, paragraph shape for the whole paragraph. */
 function buildDocRibbon(): void {
-  const group = (): HTMLElement => {
+  // WPS 把文档命令分在几页上：`res/wpsongmani.kui:114-122` 在 `<KRbTabWidgetCommand id="tabwidget">` 里按序声明
+  // CT_Home → CT_Insert → CT_PageLayout → CT_References → CT_Review → CT_View，每支 `CT_*.kuip` 只列自己那页的组。
+  // 自家这 11 组横着排到头，装机件里量到的是内容 2,664 px 对可视 1,280 px——「页面设置」往后的那几枚根本点不到。
+  // 所以同一种分法：一条 tab 条 + 每页一行组。组归哪页按 WPS 那份组清单（`CT_View.kuip` 的 `RB_Show`/`RB_Zoom`
+  // 挂着 `sp_ShowDocumentMap` 与 `ZoomToolBar`，导航窗格和缩放就归视图页）。引用页没挂：家里还没有它的命令。
+  // 页名用自家的话——`.kuip` 只给英文 source（`text="@Home"`），中文界面字面在读不出来的 `.qm` 里，仍**未取证**。
+  const strip = document.createElement("div");
+  strip.className = "rtabs";
+  ribbon.append(strip);
+  const bars: Record<string, HTMLElement> = {};
+  const tabs: Record<string, HTMLButtonElement> = {};
+  let shown = "home";
+  const showTab = (key: string): void => {
+    shown = key;
+    for (const [k] of DOC_RIBBON_TABS) {
+      bars[k].hidden = k !== key;
+      tabs[k].classList.toggle("on", k === key);
+      tabs[k].setAttribute("aria-selected", k === key ? "true" : "false");
+    }
+  };
+  for (const [key, label] of DOC_RIBBON_TABS) {
+    const bar = document.createElement("div");
+    bar.className = "rbar";
+    bar.dataset.tab = key;
+    bar.hidden = true;
+    bars[key] = bar;
+    ribbon.append(bar);
+    const t = document.createElement("button");
+    t.className = "rtab";
+    t.textContent = label;
+    t.title = `${label}：这一页的命令`;
+    t.onclick = () => showTab(key);
+    tabs[key] = t;
+    strip.append(t);
+  }
+  showTab(shown);
+  const group = (tab: string): HTMLElement => {
     const g = document.createElement("div");
     g.className = "grp";
-    ribbon.append(g);
+    bars[tab].append(g);
     return g;
   };
   const button = (g: HTMLElement, key: string, label: string, tip: string, run: () => void): void => {
@@ -542,12 +589,12 @@ function buildDocRibbon(): void {
     syncDocRibbon();
   };
 
-  const nav = group();
+  const nav = group("home");
   button(nav, "undo", "↶", "撤销 ⌘Z", () => undo());
   button(nav, "redo", "↷", "重做 ⌘⇧Z", () => redo());
   button(nav, "", "全选", "选中整篇", () => selectAllDoc());
 
-  const font = group();
+  const font = group("home");
   button(font, "bold", "粗", "加粗 ⌘B", () => style({ bold: !editor?.markState().bold }));
   button(font, "italic", "斜", "斜体 ⌘I", () => style({ italic: !editor?.markState().italic }));
   button(font, "under", "线", "下划线 ⌘U", () => style({ underline: !editor?.markState().underline }));
@@ -586,7 +633,7 @@ function buildDocRibbon(): void {
     },
   );
 
-  const align = group();
+  const align = group("home");
   button(align, "left", "左", "左对齐", () => editor?.setParagraph({ align: "" }));
   button(align, "center", "中", "居中", () => editor?.setParagraph({ align: "center" }));
   button(align, "right", "右", "右对齐", () => editor?.setParagraph({ align: "right" }));
@@ -650,12 +697,12 @@ function buildDocRibbon(): void {
     },
   );
 
-  const lists = group();
+  const lists = group("home");
   button(lists, "bullet", "• 符号", "项目符号", () => editor?.setParagraph({ list: "bullet" }));
   button(lists, "number", "1. 编号", "编号列表", () => editor?.setParagraph({ list: "number" }));
   button(lists, "nolist", "取消列表", "变回普通段落", () => editor?.setParagraph({ list: "none" }));
 
-  const insert = group();
+  const insert = group("insert");
   button(insert, "table", "表格", "插入表格", openTablePicker);
   button(insert, "picture", "图片", "插入本地图片", () => void pickPicture((url, name) => void editor?.insertPicture(url, name)));
   // WPS 把三条断命令挂在同一个下拉里（`wpsentries.kuip`：`CT_Insert.RB_Pages.InsertBreaks.*` 与
@@ -673,13 +720,13 @@ function buildDocRibbon(): void {
   // 不是印象：WPS 的批注簇在修订簇**之前**，接受/拒绝单独成一组，字数统计挂在校对那一组里（`WordCountToolBar`，
   // 同一支文件 :56）。组的中文名仍是**未取证**——`.kuip` 只给英文 source（`@Proofing` / `@Comments` /
   // `@Track Changes` / `@Change`），`mui/zh_CN/*.qm` 是压缩字典，读不出字面。所以标签用自家的话，顺序按它的。
-  const proofing = group();
+  const proofing = group("review");
   button(proofing, "wordCount", "字数统计", "字数统计：报出段落数、字数与字符数", () => editor?.showWordCount());
 
   // 批注: the panel used to be reachable only by clicking a mark on the paper — so a document whose comments were
   // scrolled off screen, or a reader who wanted to annotate the selection without hunting for a mark first, had
   // no way in (`showComments` / `newCommentFromPanel` / `stepComment` had zero callers in `src`).
-  const comments = group();
+  const comments = group("review");
   button(comments, "cmtNew", "新建批注", "给选中的文字加一条批注，接着在面板里写正文", () => {
     editor?.newCommentFromPanel();
     syncDocRibbon();
@@ -699,7 +746,7 @@ function buildDocRibbon(): void {
 
   // 修订: what a reader needs to work through somebody else's changes — the toggle, the list of pending ones,
   // stepping through them, and which version of the document the paper shows.
-  const review = group();
+  const review = group("review");
   button(review, "track", "修订", "修订：开启后编辑记为待判修订，而不是直接落定", () => {
     if (editor) editor.setTrackChanges(!editor.trackingChanges);
     syncDocRibbon();
@@ -732,7 +779,7 @@ function buildDocRibbon(): void {
   );
 
   // 更改: WPS keeps deciding the changes in their own group, right after the ones that track and show them.
-  const changes = group();
+  const changes = group("review");
   button(changes, "revAccept", "接受全部", "接受修订：插入的留下，删除的生效", () => {
     editor?.acceptRevisions();
     syncDocRibbon();
@@ -742,17 +789,20 @@ function buildDocRibbon(): void {
     syncDocRibbon();
   });
 
-  // 布局: the page itself rather than the text on it. WPS keeps these on a 「页面」 tab; this ribbon is one row,
-  // so the page's own settings get a group at the end, before the zoom control. The 导航窗格 belongs with them:
-  // WPS puts it on the 视图 tab, and what it changes is the workspace around the page, not the text on it.
-  const layout = group();
+  // 页面布局页只管纸本身：WPS 那一页声明的组是 `RB_Page_Setup` → `RB_EditTheme` → `RB_PageLayoutHeaderAndFooter`
+  // （`CT_PageLayout.kuip` 的 `<subcommand id="CT_PageLayout">` 序），页面设置归第一组。
+  const layout = group("layout");
   button(layout, "pageSetup", "页面设置", "纸张大小与方向、页边距、页眉页脚距离、装订线", () => editor?.openPageSetup());
-  button(layout, "navPane", "导航窗格", "按大纲级别列出各级标题，点一行跳到那一处", () => {
+
+  // 视图页改的是纸周围的工作台，不是纸上的字：`CT_View.kuip` 声明的组序 `RB_Document_View` → `RB_Show` → `RB_Zoom`
+  // 里，`sp_ShowDocumentMap` 挂在 `RB_Show`、`ZoomToolBar` 挂在 `RB_Zoom`——所以导航窗格与缩放同在一页。
+  const view = group("view");
+  button(view, "navPane", "导航窗格", "按大纲级别列出各级标题，点一行跳到那一处", () => {
     editor?.showOutlinePane();
     syncDocRibbon();
   });
-
-  ribbon.append(zoomGroup());
+  // 缩放另起一组，不塞进导航窗格那一组里：WPS 那一页把 `ZoomToolBar` 单挂在 `RB_Zoom`。
+  bars["view"].append(zoomGroup());
 }
 
 function syncDocRibbon(): void {

@@ -133,6 +133,35 @@
       .ribbon.on { display: flex; }
       .grp { display: flex; align-items: center; gap: 3px; padding: 0 9px; border-right: 1px solid var(--chrome-line); }
       .grp:last-child { border-right: 0; }
+      /* 文字那一页把命令分在几档上（WPS 自己声明的 tab 条：`office6/res/wpsongmani.kui:114-122` 里
+         `CT_Home → CT_Insert → CT_PageLayout → CT_References → CT_Review → CT_View`）。一条行装不下 11 组——
+         装机件量到内容 2,664 px 对可视 1,280 px，「页面设置」往后的那几枚点不到。所以：上档名、下一行只放当前档的组。
+         表与演示那两页不分行，仍是原来那一条 38 px。 */
+      .ribbon.tabbed { flex-direction: column; align-items: stretch; height: auto; overflow: hidden; }
+      .rtabs {
+        display: flex;
+        align-items: flex-end;
+        gap: 2px;
+        padding: 2px 4px 0;
+        background: #1b1f25;
+        border-bottom: 1px solid #0e1013;
+        flex: none;
+      }
+      .rtabs button {
+        font: inherit;
+        font-size: 12px;
+        color: #99a3b1;
+        background: none;
+        border: 1px solid transparent;
+        border-bottom: 0;
+        border-radius: 5px 5px 0 0;
+        padding: 1px 10px 2px;
+        cursor: pointer;
+      }
+      .rtabs button:hover { color: var(--ink); }
+      .rtabs button.on { color: var(--ink); background: #2c313a; border-color: #3a404a; }
+      .rbar { display: flex; align-items: center; height: 38px; padding: 0 4px; overflow-x: auto; flex: none; }
+      .rbar[hidden] { display: none; }
       button.rb {
         font: inherit;
         font-size: 12px;

@@ -3997,16 +3997,6 @@ export class DocEditor {
     return this.newComment("");
   }
 
-  /** Replaces a comment's body. A rich one the model cannot rebuild refuses, and says so. */
-  setComment(id: number, text: string): boolean {
-    const found = this.doc.comments.find((c) => c.id === id);
-    if (!found || !found.editable) return false;
-    const body = text.replace(/\r\n?/g, "\n");
-    if (body === commentTexts(found).join("\n")) return false;
-    this.snapshot(this.caretPath());
-    return this.doc.setCommentBody(id, body);
-  }
-
   /**
    * Replaces a comment's body with the runs the panel's field holds, marks included: a comment
    * written in bold stays bold when its text is edited, and a change of formatting alone counts
@@ -4018,7 +4008,12 @@ export class DocEditor {
     if (!found || !found.editable) return false;
     if (bodyShape(paragraphs) === bodyShape(found.paragraphs)) return false;
     this.snapshot(this.caretPath());
-    return this.doc.setCommentRuns(id, paragraphs);
+    const done = this.doc.setCommentRuns(id, paragraphs);
+    // 件里的 `word/comments.xml` 从此不一样了，这一步就得自己报「改了」。等面板那趟 `refresh()` 或
+    // 保存前那趟顺带报不可靠——量到的：打字 + 只加粗两趟都是 `{changed:0}` 而件里真换了字，于是
+    // 改完不 ●、关窗口不提示，刚敲的那句批注整个丢（§120「插页码不 ●」同一个形状，落在打字路上）。
+    if (done) this.hooks.changed();
+    return done;
   }
 
   /**

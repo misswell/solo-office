@@ -587,15 +587,17 @@ export class DocEditor {
   }
 
   render(): void {
+    // 纸盒要重建：先把开着那一枚**还在纸上时**的字交回模型，再解除它那句「失焦就收笔」。
+    // 顺序反了就出事：`innerHTML` 一换，浏览器照样给摘下来的旧元素发 blur，那份旧 DOM 不认识刚写进件里的
+    // 东西——实测点「插入页码」，纸上是 chip，件里的 `w:instrText` 被这一下抹回空段。
+    this.commitBand();
     this.host.innerHTML = renderWord(this.doc, this.revisionView);
     this.page = this.host.querySelector<HTMLElement>(".page");
     this.panel?.mount();
     this.review?.mount();
     this.outline?.mount();
     if (!this.page) return;
-    // 纸盒重建一趟，旧的那一枚带子已经不在页里，它那句「失焦就收笔」永远不会再来：认领关系先清掉，
-    // `contenteditable` 由下面这一句交还给正文，编辑开着的那一枚由 `insertPageNumber` 重新点开。
-    this.hfEditing = null;
+    // 认领关系已在上面清掉；`contenteditable` 由下面这一句交还给正文，编辑开着的那一枚由 `insertPageNumber` 重新点开。
     this.setBodyEditable();
     this.page.spellcheck = false;
     if (this.zoomLevel !== 1) this.page.style.zoom = String(this.zoomLevel);
@@ -802,16 +804,43 @@ export class DocEditor {
   }
 
   /**
+   * 结束当前那一枚带子的编辑认领：锁回 resting 态、把手收回去、认领关系清掉。旧元素随后补发的那一次 blur
+   * 就不再被认领（`closeHF` 第一句），因为纸盒一换、它那份 DOM 不再是模型的代表。
+   * 交回不交回分两档（`commitBand` / `discardBandClaim`）。
+   */
+  private releaseBand(): HTMLElement | null {
+    const el = this.hfEditing;
+    this.hfEditing = null;
+    if (!el) return null;
+    el.contentEditable = "false";
+    el.querySelector<HTMLElement>(".hf-bar")?.style.setProperty("display", "none");
+    return el;
+  }
+
+  /** 把开着那一枚**还在纸上时**的字交回模型并结束认领：`render()` 换纸盒前、`closeHF` 都走这里。 */
+  private commitBand(): void {
+    const el = this.releaseBand();
+    if (el) this.commitHF(el, el.dataset.hf === "footer" ? "footer" : "header");
+  }
+
+  /**
+   * 命令已经替这一枚带子交过回、又往件里写了东西（`insertPageNumber`）：只结束认领，**不再交回**——
+   * 那份 DOM 不认识刚写进去的域，交回去就是把 `w:instrText` 抹成空段。
+   */
+  private discardBandClaim(): void {
+    this.releaseBand();
+  }
+
+  /**
    * 收笔：带子锁回 resting 态（把手跟着收回去，纸上那一截的高度由文件说，不由编辑器的把手说）、正文那一条编辑
    * 宿主还回去、字交回模型。`blur` 与存盘那一路（`commit`）走同一个
    * 出口——壳里窗口不在前台时 blur 事件根本不来，只挂在 blur 上就等于把编辑状态和正文的可编辑一起悬在那儿。
    */
   private closeHF(el: HTMLElement): void {
-    el.contentEditable = "false";
-    el.querySelector<HTMLElement>(".hf-bar")?.style.setProperty("display", "none");
-    if (this.hfEditing === el) this.hfEditing = null;
+    // 只收还认它的那一笔：结束认领之后旧元素的 blur 会迟到，那份 DOM 不再是模型的代表。
+    if (this.hfEditing !== el) return;
+    this.commitBand();
     this.setBodyEditable();
-    this.commitHF(el, el.dataset.hf === "footer" ? "footer" : "header");
   }
 
   /**
@@ -891,6 +920,9 @@ export class DocEditor {
       this.render();
       return;
     }
+    // 域已写进件，而这一枚带子的字在上面那步就交回过了：旧元素那份 DOM 里没有那枚 chip，重铺时它补发的那次
+    // blur 若再交一回，就把刚写进去的 `w:instrText` 抹成空段（实测）。所以先结束认领，再重铺、再重新点开。
+    this.discardBandClaim();
     this.render();
     const again = this.host.querySelector<HTMLElement>(`:scope .hf-${which}:not(.${BAND_CLONE_CLASS})`);
     if (again) this.editHF(again);

@@ -167,20 +167,22 @@ export class DocStatusBar {
   }
 
   refresh(): void {
-    const at = this.editor.caretPage();
+    // 一次量完：页码／页数／纵向位置／行／列五格出自同一趟铺排（`caretStatusOf` 为什么要合起来量写在那一支上）。
+    const st = this.editor.caretStatus();
+    const at = st.placement;
     if (at) this.lastPage = at.page;
-    // 光标不在纸面上时 `caretPage()`／`caretLine()` 不给数，但总页数不跟着光标走：现量一遍，量不出来才留空。
-    const total = at?.pages ?? this.editor.layout()?.pages;
+    // 光标不在纸面上时几何那几格不给数，但总页数不跟着光标走：那一趟里已经现量过，量不出来才留空。
+    const total = at?.pages ?? st.pages;
     this.pageItem.textContent = total === undefined ? "" : `第 ${this.lastPage} 页`;
     this.pagesItem.textContent = total === undefined ? "" : `共 ${total} 页`;
     const cs = this.editor.caretSection();
     if (cs) this.lastSection = cs.section;
     this.sectionItem.textContent = total === undefined ? "" : `第 ${this.lastSection} 节`;
-    const pp = this.editor.caretPosition();
+    const pp = st.positionPx;
     if (pp !== undefined) this.lastPos = pp;
     this.posItem.textContent =
       total === undefined || this.lastPos === undefined ? "" : `纵向位置 ${formatLength(this.lastPos)}`;
-    const rc = this.editor.caretLine();
+    const rc = st.line;
     if (rc) {
       this.lastRow = rc.row;
       if (rc.column !== undefined) this.lastCol = rc.column;

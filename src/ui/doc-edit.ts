@@ -8,7 +8,7 @@ import { IMAGE_EXT_BY_MIME } from "../core/media.js";
 import { BAND_SOURCE_CLASS, CARRY_CLASS, CARRY_STYLE, BAND_MASTER_CLASS, PAGE_BORDER_CLASS, RUN_CARRY_CLASS, fontStack, highlightColor, renderWord } from "../core/render.js";
 import { flatOf, inlineLength, isMark, keepRunIdentity } from "../core/run-identity.js";
 import { CommentPanel } from "./doc-comments.js";
-import { applyBandYield, applySheetGaps, applyTabStops, BAND_CLONE_CLASS, caretCharTop, lineCaretAnchor, lineNumberAt, measurePageLayout, pageAtCaret, pageCaretAnchor, pagePositionAt, rowColumnAt, sectionCaretAnchor, SHEET_GAP_ROW_CLASS, SHEET_STRIP_CLASS, type CaretLine, type PageAnchor, type PageMeasure, type PagePlacement, type SheetStrip } from "./doc-layout.js";
+import { applyBandYield, applySheetGaps, applyTabStops, BAND_CLONE_CLASS, caretCharTop, caretStatusOf, lineCaretAnchor, lineNumberAt, measurePageLayout, pageAtCaret, pageCaretAnchor, pagePositionAt, rowColumnAt, sectionCaretAnchor, SHEET_GAP_ROW_CLASS, SHEET_STRIP_CLASS, type CaretLine, type CaretStatus, type PageAnchor, type PageMeasure, type PagePlacement, type SheetStrip } from "./doc-layout.js";
 import { ReviewPanel } from "./doc-review.js";
 import { OutlinePanel } from "./doc-outline.js";
 import { openPageSetup as showPageSetupDialog } from "./doc-page-setup.js";
@@ -1658,6 +1658,24 @@ export class DocEditor {
     const mid = caretMidOf(node, sel!.focusOffset);
     if (mid === undefined) return undefined;
     return pageAtCaret(this.page, this.doc, mid);
+  }
+
+  /**
+   * 状态栏那一排格子**一次量完**（页码／页数／纵向位置／行／列）：五格出自同一趟铺排，来路与理由写在
+   * `doc-layout.ts` 的 `caretStatusOf`。取点、判「光标在不在纸面上」与 `caretPage()` 同一条；光标不在纸面上
+   * 时几何那三格不给数，但「共几页」不跟着光标走——那一趟只量纸（`measurePageLayout`）。
+   */
+  caretStatus(): CaretStatus {
+    const sel = document.getSelection();
+    const node = sel?.focusNode ?? null;
+    const offset = sel?.focusOffset ?? 0;
+    const mid = this.page && node && this.page.contains(node) ? caretMidOf(node, offset) : undefined;
+    if (this.page && node && mid !== undefined) {
+      const at = caretStatusOf(this.page, this.doc, { mid, node, offset });
+      if (at) return at;
+    }
+    const m = this.page ? measurePageLayout(this.page, this.doc) : undefined;
+    return { pages: m?.pages };
   }
 
   /**

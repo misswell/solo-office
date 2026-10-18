@@ -844,6 +844,10 @@ function unitIndexAt(units: readonly PlacedUnit[], caretMid: number): number {
 export function pageAtCaret(page: HTMLElement, doc: WordDocument, caretMid: number): PagePlacement | undefined {
   const plan = planOf(page, doc);
   if (!plan) return undefined;
+  return placementInPlan(plan, caretMid);
+}
+
+function placementInPlan(plan: PagePlan, caretMid: number): PagePlacement {
   if (!plan.units.length) return { page: 1, pages: 1 };
   const idx = unitIndexAt(plan.units, caretMid);
   return { page: plan.places[idx]!, pages: plan.pages };
@@ -986,6 +990,10 @@ function columnOf(flat: FlatText, unit: PlacedUnit, at: number): number | undefi
 export function rowColumnAt(page: HTMLElement, doc: WordDocument, caret: { mid: number; node: Node; offset: number }): CaretLine | undefined {
   const plan = planOf(page, doc);
   if (!plan) return undefined;
+  return lineColumnInPlan(plan, caret);
+}
+
+function lineColumnInPlan(plan: PagePlan, caret: { mid: number; node: Node; offset: number }): CaretLine | undefined {
   const { blocks, units } = plan;
   if (!units.length) return { row: 1 };
   const idx = unitIndexAt(units, caret.mid);
@@ -1014,6 +1022,10 @@ export function rowColumnAt(page: HTMLElement, doc: WordDocument, caret: { mid: 
 export function pagePositionAt(page: HTMLElement, doc: WordDocument, caret: { mid: number; node: Node; offset: number }): number | undefined {
   const plan = planOf(page, doc);
   if (!plan) return undefined;
+  return positionInPlan(plan, page, doc, caret);
+}
+
+function positionInPlan(plan: PagePlan, page: HTMLElement, doc: WordDocument, caret: { mid: number; node: Node; offset: number }): number | undefined {
   if (!plan.units.length) return undefined;
   const zoom = zoomOf(page);
   const origin = page.getBoundingClientRect().top;
@@ -1038,6 +1050,51 @@ export function pagePositionAt(page: HTMLElement, doc: WordDocument, caret: { mi
     twipsToPx(sec.margins.top) +
     (bandYieldsOf(page, BAND_YIELD_TOP)[plan.unitSections[first]!] ?? 0)
   );
+}
+
+/** 状态栏一次刷新的全部几何读数（「第 X 页 / 共 Y 页 / 纵向位置 / 行 / 列」）——都出自同一趟铺排。 */
+export type CaretStatus = {
+  pages: number | undefined;
+  placement?: PagePlacement;
+  line?: CaretLine;
+  positionPx?: number;
+};
+
+/**
+ * 状态栏那一排格子**一次量完**：`第 X 页`、`共 Y 页`、`纵向位置`、`行`、`列` 五格各自都能单量（`pageAtCaret`
+ * ／`measurePageLayout`／`pagePositionAt`／`rowColumnAt`），但逐格量意味着逐格重跑一趟铺排——一次刷新四趟。
+ * 铺排自己会读每一枚行盒（#170 之后在 `zoom ≠ 1` 还要多摆一次档量 100% 那一份高），所以逐格量在换档时贵。
+ * `.scratch/packcost-dom.ts`（600 段 × A4，同一件同一 DOM 只换档，每档 15 次取均）量到：
+ *
+ * | 档 | 一趟铺排 | 逐格量四趟 | 合并一趟 |
+ * |---|---|---|---|
+ * | 100% | 1.88ms | 5.42ms | 1.70ms |
+ * | 150% | 8.08ms | **24.32ms** | 8.43ms |
+ * | 200% | 8.39ms | 24.01ms | 8.07ms |
+ *
+ * 打字每敲一下都刷一次，所以这一趟只铺排一次、五格从同一份 `PagePlan` 里取；合并后每一档都落在「一趟铺排」
+ * 那一列的量级上。**150% 那一列多出来的不是合并这条路造成的**：把 #170 的第二趟重量关掉（同探针、代码摆回旧算法）
+ * 再量一次，150% 档三列各是 1.70 / 4.96 / 1.92ms——多出的六倍全在 #170 那一趟上，合并只是把「四趟各重一次」
+ * 收成「重一次」。
+ *
+ * 取出来的数与逐格量**必须是同一份**（各格共用一支 `unitIndexAt` 与同一个 plan），这也正是这几格的要求：
+ * 「第 X 页」与「行 Y」「纵向位置」说的得是同一处光标、同一次铺排。纸没画上或页高量不出来时整排不给数
+ * （`undefined`），与 `measurePageLayout` 同一条守则。
+ *
+ * 这一句由 `.scratch/pos-blockedge-dom.ts` 第 5 节钉住（100%/150%/缩回 100% 三档逐字段比）：它的反向对照是
+ * **把这一趟缓存起来**（模块级记忆 `planOf` 的结果），150% 档「行/列」与「纵向位置」各红一条——旧 plan 的 `units`
+ * 带着 100% 空间的 `mid`，与现量在 150% 视口里的 `caret.mid` 不在同一个空间，于是选错枚。所以**这一趟不能缓存**：
+ * #170 之后铺排的结果是按档位的，纸缝与 `mid` 都只在那一次测量里成框。
+ */
+export function caretStatusOf(page: HTMLElement, doc: WordDocument, caret: { mid: number; node: Node; offset: number }): CaretStatus | undefined {
+  const plan = planOf(page, doc);
+  if (!plan) return undefined;
+  return {
+    pages: plan.pages,
+    placement: placementInPlan(plan, caret.mid),
+    line: lineColumnInPlan(plan, caret),
+    positionPx: positionInPlan(plan, page, doc, caret),
+  };
 }
 
 /**

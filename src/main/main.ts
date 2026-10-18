@@ -1069,6 +1069,17 @@ function smoke(): void {
           docBands,
           zoomBands,
           seamSplit,
+          // #174：文件里那句「字距 82 缇」在装机件里也得把墨推开。逐枚 span 量计算样式——「normal」是「这句没说」，
+          // 其余每一枚都得是那一句换算出来的像素（96dpi 下 1pt = 4/3px，所以 82 缇 = 5.46667px、-6 缇 = -0.4px；
+          // 说了「w:val=0」的那一枚 Blink 交回 normal，.scratch/char-spacing-dom.ts 的 zero_ruler 自己量过）。
+          // 夹具 /tmp/char-spacing-smoke.docx（.scratch/make-char-spacing-smoke.ts）里该画上的是五枚：自己说过
+          // 的三枚 + 样式借来的两枚。DOM 闸门量的是同一份夹具的墨宽差，这一腿只问装出去的盒子里画没画。
+          charSpacing: (() => {
+            const painted = [...document.querySelectorAll("#view .page span")]
+              .map((s) => getComputedStyle(s).letterSpacing)
+              .filter((v) => v !== "normal" && v !== "");
+            return { painted: painted.length, values: [...new Set(painted)].join(",") };
+          })(),
         };
 
         // 导航窗格: the page leaves one [data-outline] mark per paragraph whose outline level resolves, and the

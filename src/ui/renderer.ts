@@ -521,6 +521,27 @@ function buildDocRibbon(): void {
   const bars: Record<string, HTMLElement> = {};
   const tabs: Record<string, HTMLButtonElement> = {};
   let shown = "home";
+  // 装不下的那一档要给一枚看得见的箭头：WPS 自己的 ribbon 也带这一枚（`res/wpsongmani.kui` 那条
+  // `CommonLogicGroupShowArrow`）。不给，用户看到的是一枚被切一半的按钮，说不出「这一行右边还有东西、能滚」。
+  // 滚到最右那一枚自己退场——最后一组整个进来了，留着只会挡字。
+  const more = document.createElement("button");
+  more.className = "rover";
+  more.textContent = "›";
+  more.title = "这一档右边还有命令，点一下滚过去";
+  const syncOverflow = (): void => {
+    const bar = bars[shown];
+    const room = bar.scrollWidth - bar.clientWidth;
+    more.hidden = room <= 1 || bar.scrollLeft >= room - 1;
+  };
+  more.onclick = () => {
+    const bar = bars[shown];
+    bar.scrollLeft += Math.max(120, Math.floor(bar.clientWidth * 0.8));
+    syncOverflow();
+  };
+  // 这一枚是随重建生成的：`buildRibbon()` 每趟先 `innerHTML = ""`，监听不跟着收就会一次切档多留一个。
+  overflowAbort?.abort();
+  overflowAbort = new AbortController();
+  window.addEventListener("resize", syncOverflow, { signal: overflowAbort.signal });
   const showTab = (key: string): void => {
     shown = key;
     for (const [k] of DOC_RIBBON_TABS) {
@@ -528,6 +549,8 @@ function buildDocRibbon(): void {
       tabs[k].classList.toggle("on", k === key);
       tabs[k].setAttribute("aria-selected", k === key ? "true" : "false");
     }
+    bars[key].scrollLeft = 0;
+    syncOverflow();
   };
   for (const [key, label] of DOC_RIBBON_TABS) {
     const bar = document.createElement("div");
@@ -702,18 +725,50 @@ function buildDocRibbon(): void {
   button(lists, "number", "1. 编号", "编号列表", () => editor?.setParagraph({ list: "number" }));
   button(lists, "nolist", "取消列表", "变回普通段落", () => editor?.setParagraph({ list: "none" }));
 
-  const insert = group("insert");
-  button(insert, "table", "表格", "插入表格", openTablePicker);
-  button(insert, "picture", "图片", "插入本地图片", () => void pickPicture((url, name) => void editor?.insertPicture(url, name)));
+  // 开始页最后一组是 `RB_Editing`（`CT_Home.kuip:441`，`groupTip="FindGroup"` `idMso="GroupEditing"`），
+  // 它在 `CT_Home.kuip:585-600` 那条 idQ 序里排在 `RB_Style` 之后——正是「最后一组」这个位置。
+  // 组成员里家里有命令的是 `sp_Find`（:415 `hotKey="FD" shortcutHint="Ctrl+F" text="@Find and &#10;Replace"`，
+  // 下拉里 `FindRainbow → ReplaceRainbow → GoTo`）：查找与替换在家里同在一个面板上（`openFind` 那格既有「查找」也有
+  // 「替换／全部替换」），所以摆两枚——查找替换、定位（`⌘G` 已是 `editor.showGoTo()`）。
+  // 拼写检查族（`CheckSpellToolBarList_Home`）与翻译族家里没有命令面，不摆空命令；§122 下一步② 那条同因。
+  const editing = group("home");
+  button(editing, "", "查找替换", "查找与替换 ⌘F", openFind);
+  button(editing, "", "定位", "跳到页 / 节 / 行 / 书签 / 批注 / 表格 / 图形 / 标题 ⌘G", () => editor?.showGoTo());
+
+  // 插入页按 WPS 自己的**组归属**与**显示序**拆。显示序实据是 `CT_Insert.kuip:256-270` 那一段 `<subcommand id="CT_Insert">`：
+  // `RB_Pages` →(sep)→ `RB_Illustrations` →(sep)→ `RB_Symbol` →(sep)→ `RB_InsertComments` →(sep)→ `RB_Links` → `RB_Text` →
+  // `RB_ComplexObj` → `RB_Media`。家里只有头两档与批注那一档有命令，所以摆三组、不摆空组。
+  // 页眉页脚的归属是这一片纠正出来的：`CT_Insert.kuip:139-150` 里 `RB_HeaderAndFooter` 是 **`embedHint="1"` 内嵌在 `RB_Pages` 里**
+  // 的一枚子清单（孩子 `PageNumbers`→`m_InsertPageNumbers`、`HeaderAndFooter`→`HeaderAndFooterInInsertTab`），
+  // 而 `CT_PageLayout.kuip:86-91` 那一页也有自己的一组 `RB_PageLayoutHeaderAndFooter`（`m_HeaderAndFooter`）——
+  // **两处都摆**是 WPS 的形状，不是我们重复。断行族同挂 `RB_Pages`（`InsertBreaks`，在 `RB_HeaderAndFooter` 之前）。
+  // 页码那一枚家里先不给入口：`insertPageNumber` 是私有方法，只由带子上那枚 chip 触发（`doc-edit.ts:776`），
+  // ribbon 上按下去说不出该往哪一条带子插。
+  const pages = group("insert");
   // WPS 把三条断命令挂在同一个下拉里（`wpsentries.kuip`：`CT_Insert.RB_Pages.InsertBreaks.*` 与
   // `CT_PageLayout.RB_Page_Setup.m_Breaks.*`、`InsertMenu.InsertBreakMenu.*`）。按钮文案只有分页符取到过证据
   // （`InsertPageBreak`），换行符那条 kuip 里写的是 `text="@Text Wrapping Break"` 这个待译占位，中文措辞在 `.qm`
   // 里读不出，所以「换行符／分栏符」两个词是按 WPS 家族习惯的**推断措辞**，不是取到的字面量。
-  button(insert, "pagebreak", "分页符", "从这里另起一页", () => editor?.insertPageBreak());
-  button(insert, "linebreak", "换行符", "在这里软换行，不另起段落", () => editor?.insertLineBreak());
-  button(insert, "columnbreak", "分栏符", "从这里另起一栏", () => editor?.insertColumnBreak());
-  button(insert, "header", "页眉", "编辑页眉（无则新建）", () => editor?.openHF("header"));
-  button(insert, "footer", "页脚", "编辑页脚（无则新建）", () => editor?.openHF("footer"));
+  button(pages, "pagebreak", "分页符", "从这里另起一页", () => editor?.insertPageBreak());
+  button(pages, "linebreak", "换行符", "在这里软换行，不另起段落", () => editor?.insertLineBreak());
+  button(pages, "columnbreak", "分栏符", "从这里另起一栏", () => editor?.insertColumnBreak());
+  button(pages, "header", "页眉", "编辑页眉（无则新建）", () => editor?.openHF("header"));
+  button(pages, "footer", "页脚", "编辑页脚（无则新建）", () => editor?.openHF("footer"));
+
+  // 表格在 WPS 那边不归「表」而归插图那一组：`CT_Insert.kuip:157` 的 `RB_Illustrations`（`groupTip="CommonObjectGroup"`）
+  // 孩子第一个是 `Table`，接着 `m_rInsertPicture`。
+  const illus = group("insert");
+  button(illus, "table", "表格", "插入表格", openTablePicker);
+  button(illus, "picture", "图片", "插入本地图片", () => void pickPicture((url, name) => void editor?.insertPicture(url, name)));
+
+  // `CT_Insert.kuip:111-114` 的 `RB_InsertComments`（`groupTip="InsertCommentGroup"`）里是 `m_InsertCommentInToolBar`：
+  // 「新建批注」在插入那一页还有一个入口，与审阅那一页那条同一个动作。键表是单值的（一枚 `ctl` 键只能挂一个元素，
+  // 回显才不会挂错），所以这一枚不占 `cmtNew` 那格——它是命令的入口，不是状态。
+  const insertCmt = group("insert");
+  button(insertCmt, "", "新建批注", "给选中的文字加一条批注，接着在面板里写正文", () => {
+    editor?.newCommentFromPanel();
+    syncDocRibbon();
+  });
 
   // 审阅那一簇按 WPS 自己声明的组序排（`office6/res/commands/wps/ongmani/CT_Review.kuip:199-207`：
   // `RB_Proofing` → `RB_Comments` → `RB_Review` → `RB_Changes`，组与组之间是 `<separator/>`）。这一条是实据，
@@ -789,10 +844,19 @@ function buildDocRibbon(): void {
     syncDocRibbon();
   });
 
-  // 页面布局页只管纸本身：WPS 那一页声明的组是 `RB_Page_Setup` → `RB_EditTheme` → `RB_PageLayoutHeaderAndFooter`
-  // （`CT_PageLayout.kuip` 的 `<subcommand id="CT_PageLayout">` 序），页面设置归第一组。
+  // 页面布局页只管纸本身：`CT_PageLayout.kuip:196-203` 那条 `<subcommand id="CT_PageLayout">` 的显示序是
+  // `RB_Page_Setup` →(sep)→ `RB_EditTheme` →(sep)→ `RB_Genko_Setting` →(sep)→ `RB_PageLayoutHeaderAndFooter`
+  // →（后面那两行是门控的「展开」按钮，`idKey="LogicGroupShowExtensionButton"`）。页面设置归第一组。
+  // 第二、三组（效果 / 结构：页眉底纹、页面边框、水印、行号、分栏、删除分节符…）家里还没有命令面，不摆空组。
   const layout = group("layout");
   button(layout, "pageSetup", "页面设置", "纸张大小与方向、页边距、页眉页脚距离、装订线", () => editor?.openPageSetup());
+
+  // 最后一组 `RB_PageLayoutHeaderAndFooter`（:86-91，`groupTip="HeaderFooterGroup"`）里是
+  // `PageLayout_InsertPageNumbers` + `m_HeaderAndFooter`。页眉页脚在插入那一页也有一份（上面 `RB_Pages` 里那两枚），
+  // WPS 两处都摆——所以这里不是重复，是那两页各自的入口。这一组的按钮不占 `ctl` 键：`header` / `footer` 那格已给插入页那两枚。
+  const layoutHF = group("layout");
+  button(layoutHF, "", "页眉", "编辑页眉（无则新建）", () => editor?.openHF("header"));
+  button(layoutHF, "", "页脚", "编辑页脚（无则新建）", () => editor?.openHF("footer"));
 
   // 视图页改的是纸周围的工作台，不是纸上的字：`CT_View.kuip` 声明的组序 `RB_Document_View` → `RB_Show` → `RB_Zoom`
   // 里，`sp_ShowDocumentMap` 挂在 `RB_Show`、`ZoomToolBar` 挂在 `RB_Zoom`——所以导航窗格与缩放同在一页。
@@ -803,7 +867,15 @@ function buildDocRibbon(): void {
   });
   // 缩放另起一组，不塞进导航窗格那一组里：WPS 那一页把 `ZoomToolBar` 单挂在 `RB_Zoom`。
   bars["view"].append(zoomGroup());
+
+  // 箭头排在各档之后（它自己不在 `.rbar` 里，所以不占任何一组的控件数），每一行滚起来都要刷它的隐现。
+  ribbon.append(more);
+  for (const bar of Object.values(bars)) bar.addEventListener("scroll", syncOverflow, { passive: true });
+  syncOverflow();
 }
+
+/** 溢出箭头的 `resize` 监听归这一枚元素自己：重建前先 `abort()`，不然每切一次文档种类就多留一个监听。 */
+let overflowAbort: AbortController | undefined;
 
 function syncDocRibbon(): void {
   const state = editor?.markState();

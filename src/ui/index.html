@@ -162,6 +162,28 @@
       .rtabs button.on { color: var(--ink); background: #2c313a; border-color: #3a404a; }
       .rbar { display: flex; align-items: center; height: 38px; padding: 0 4px; overflow-x: auto; flex: none; }
       .rbar[hidden] { display: none; }
+      /* 装不下的那一档给一枚溢出箭头——WPS 自己的 ribbon 也带这一枚（`res/wpsongmani.kui` 的 `CommonLogicGroupShowArrow`）。
+         没有它，切窄之后用户看到的是一枚被切一半的按钮，说不出「右边还有、能滚」。
+         箭头站在 `.rbar` 外面的那一条右端，所以给行留一道右垫：滚到头的最后一枚不会被它压住。 */
+      .ribbon.tabbed { position: relative; }
+      .ribbon.tabbed .rbar { padding-right: 34px; }
+      .rover {
+        position: absolute;
+        right: 7px;
+        bottom: 6px;
+        z-index: 2;
+        width: 22px;
+        height: 26px;
+        padding: 0;
+        border: 1px solid #3a404a;
+        border-radius: 3px;
+        background: #2c313a;
+        color: var(--ink);
+        font-size: 15px;
+        line-height: 1;
+        cursor: pointer;
+      }
+      .rover[hidden] { display: none; }
       button.rb {
         font: inherit;
         font-size: 12px;

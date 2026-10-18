@@ -2,7 +2,7 @@ import { OpcPackage, asArray, childSpans, children, decodeEntities, elementConte
 import { ThemeFonts, themeFontScript } from "./theme-fonts.js";
 import { isMark } from "./run-identity.js";
 import { dataUrl } from "./media.js";
-import { TABLE_RECORD_TAGS, changeRecordXml, coversWholeSet, decideSetXml, decideSlots, recordedSlots, setChildren } from "./doc-table-revisions.js";
+import { TABLE_RECORD_TAGS, changeRecordXml, coversWholeSet, decideSetXml, decideSlots, isPropertyRecord, recordedSlots, setChildren } from "./doc-table-revisions.js";
 import { cellCovering, columnStarts, deleteColumn, gridColumns, removeCell, repairMerges } from "./doc-table-ops.js";
 import {
   allocIds,
@@ -3491,7 +3491,7 @@ export class WordDocument {
           const settled: CellRevision[] = [];
           for (const rec of mine) {
             // A record of the cell's place decides whether the cell is there; one of its properties does not.
-            const properties = rec.tag === "tcPrChange" || rec.tag === "cellMerge";
+            const properties = isPropertyRecord(rec.tag);
             const goes = (rec.tag === "cellIns" && outcome === "reject") || (rec.tag === "cellDel" && outcome === "accept");
             if (goes) {
               goers.push({ t, row, cell, at: columnStarts(row)[row.indexOf(cell)] ?? 0, rec });
@@ -3729,6 +3729,40 @@ export class WordDocument {
       }
     };
     walk(this.blocks);
+  }
+
+  /**
+   * 「显示原文」那一趟摆的那张脸：把挂着属性改动记录的五族（run / 段落 / 表 / 行 / 格）各按记录里的
+   * `prev` 复制一份出来给渲染器，**模型本身一个字不动**——记录照旧挂着，写回仍写现值，接受/拒绝的
+   * 清单也照旧数得到它。摆的是「拒绝」用的同一批 `restore*`：「按记录把这一整套换掉」只许有一处说法，
+   * 视图自己再拼一遍 prev→字段，两份迟早各说各话。
+   * 复制走 `structuredClone`，与编辑器存历史快照（`doc-edit.ts` 的 `snapshot()`）同一条路；对嵌套表就是
+   * 连着格里的段落一起复制，所以递归里改的是副本。
+   */
+  originalView<T extends Block>(blocks: T[]): T[] {
+    const out = structuredClone(blocks);
+    const walk = (list: Block[]): void => {
+      for (const b of list) {
+        if (b.kind === "paragraph") {
+          // 段落这一族与「拒绝」共用 `restoreParaStyle`，所以样式链那半边的合并（`paraLent` 借的对齐、缩进、
+          // 段距）也在同一条路上重算一遍，不是把字段扣上去就完。
+          if (b.revFormat) this.restoreParaStyle(b, b.revFormat);
+          b.inlines = b.inlines.map((i) => (i.revFormat ? restoreStyle(i, i.revFormat) : i));
+        } else if (b.kind === "table") {
+          if (b.revFormat) restoreTableStyle(b, b.revFormat.prev);
+          for (const row of b.rows) {
+            const info = row[0]?.row;
+            if (info?.revFormat) restoreRowStyle(info, info.revFormat.prev);
+            for (const cell of row) {
+              for (const rec of cell.revs ?? []) if (isPropertyRecord(rec.tag)) restoreCellStyle(cell, rec.prev, coversWholeSet(rec.tag));
+              walk(cell.paragraphs);
+            }
+          }
+        }
+      }
+    };
+    walk(out);
+    return out;
   }
 
   /**

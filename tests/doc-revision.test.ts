@@ -4,7 +4,7 @@ import { WordDocument as Doc } from "../src/core/docx.js";
 import { writeDocx } from "../src/core/write-docx.js";
 import { OpcPackage } from "../src/core/opc.js";
 import { renderWord } from "../src/core/render.js";
-import { makeBreakableDocx, makeRevisedDocx, makeNestedRevisionDocx, makeMovedDocx, makeParaMarkDocx, makeStraddleDocx, makeMoveMarkDocx, makeLowIdDocx, makeTableRowDocx, makeLastRowDeletedDocx } from "./helpers/make-revisions.js";
+import { makeBreakableDocx, makeRevisedDocx, makeNestedRevisionDocx, makeMovedDocx, makeParaMarkDocx, makeStraddleDocx, makeMoveMarkDocx, makeLowIdDocx, makeTableRowDocx, makeLastRowDeletedDocx, makeFormatViewDocx } from "./helpers/make-revisions.js";
 import { makeCommentedDocx } from "./helpers/make-comments.js";
 import { unstamped } from "./helpers/unstamp.js";
 
@@ -895,5 +895,79 @@ describe("docx 修订：表格行自己的记录（w:trPr/w:ins、w:trPr/w:del�
     expect(html).toContain('<tr class="rev-row rev-del" data-row-rev="del" data-row-rev-id="31" data-row-rev-author="顾峰"');
     expect(html).toContain('<tr class="rev-row rev-ins" data-row-rev="ins" data-row-rev-id="34"');
     expect(html).not.toContain("<tr style");
+  });
+});
+
+describe("修订视图：属性改动在「显示原文」里摆回改前那一套（#160 五族同片）", () => {
+  /** 一檔一张脸：每次都从原件重新读，免得上一趟的视图残留着。 */
+  const face = (view: "marks" | "final" | "original"): string => renderWord(open(makeFormatViewDocx()), view);
+  const runStyle = (html: string): string => /<span style="([^"]*)">族一 run/.exec(html)?.[1] ?? "";
+  const paraStyle = (html: string): string => /<div[^>]*style="([^"]*)"[^>]*>[\s\S]{0,160}?族二 段落/.exec(html)?.[1] ?? "";
+  const tableStyle = (html: string): string => /<table[^>]*style="([^"]*)"/.exec(html)?.[1] ?? "";
+  const rowStyle = (html: string): string => /<tr[^>]*style="([^"]*)"/.exec(html)?.[1] ?? "";
+  const cellStyle = (html: string, word: string): string =>
+    new RegExp(`<td[^>]*style="([^"]*)"[^>]*>(?:(?!</td>)[\\s\\S]){0,200}?${word}`).exec(html)?.[1] ?? "";
+
+  it("受众：五族各一枚记录读得出来，外加一枚记「这一格在不在」的结构记录", () => {
+    const doc = open(makeFormatViewDocx());
+    const t = doc.blocks.find((b): b is Table => b.kind === "table");
+    expect(allRuns(doc).find((r) => r.text === "族一 run")?.revFormat).toMatchObject({ id: 80, prev: { italic: true } });
+    expect(paragraphs(doc).find((p) => textOf(p) === "族二 段落")?.revFormat).toMatchObject({ id: 81, prev: { align: "right" } });
+    expect(t?.revFormat).toMatchObject({ id: 82, prev: { widthTwips: 1500 } });
+    expect(t?.rows[0][0]?.row?.revFormat).toMatchObject({ id: 83, prev: { heightTwips: 300 } });
+    expect(t?.rows[0][0]?.revs).toMatchObject([{ tag: "tcPrChange", id: 84, prev: { widthTwips: 900, shading: "#00FF00" } }]);
+    expect(t?.rows[0][1]?.revs?.map((r) => r.tag)).toEqual(["cellDel"]);
+  });
+
+  it("run 那一族：原文摆斜体，另两档摆现值的粗体", () => {
+    expect(runStyle(face("original"))).toContain("italic");
+    expect(runStyle(face("original"))).not.toContain("font-weight");
+    for (const v of ["marks", "final"] as const) {
+      expect(runStyle(face(v))).toContain("font-weight:600");
+      expect(runStyle(face(v))).not.toContain("italic");
+    }
+  });
+
+  it("段落、表、行、格四族同样各摆各的：改前那一套只在原文里", () => {
+    expect(paraStyle(face("original"))).toContain("text-align:right");
+    expect(paraStyle(face("marks"))).toContain("text-align:center");
+    expect(tableStyle(face("original"))).toContain("width:100px");
+    expect(tableStyle(face("marks"))).toContain("width:200px");
+    expect(rowStyle(face("original"))).toContain("height:20px");
+    expect(rowStyle(face("marks"))).toContain("height:46.66");
+    expect(cellStyle(face("original"), "族五 格").toLowerCase()).toContain("#00ff00");
+    expect(cellStyle(face("marks"), "族五 格").toLowerCase()).toContain("#ff0000");
+  });
+
+  it("记「在不在」的那一枚不当属性套摆：它的格子照旧说自己 600 缇宽", () => {
+    for (const v of ["marks", "final", "original"] as const) expect(cellStyle(face(v), "删掉的一格")).toContain("width:40px");
+  });
+
+  it("看原文不改模型：三档各摆完，写回的字节与没摆一样，记录也照旧挂着", () => {
+    for (const v of ["marks", "final", "original"] as const) {
+      const doc = open(makeFormatViewDocx());
+      const before = body(doc);
+      renderWord(doc, v);
+      expect(body(doc), `${v} 那一档不该动文件`).toBe(before);
+      const run = allRuns(doc).find((r) => r.text === "族一 run");
+      expect(run).toMatchObject({ bold: true });
+      expect(run?.revFormat?.id).toBe(80);
+      const t = doc.blocks.find((b): b is Table => b.kind === "table");
+      expect(t?.widthTwips).toBe(3000);
+      expect(t?.revFormat?.id).toBe(82);
+    }
+  });
+
+  it("originalView() 交的是副本：模型里那一套现值一个字段没被换掉", () => {
+    const doc = open(makeFormatViewDocx());
+    const copy = doc.originalView(doc.blocks);
+    expect(copy).not.toBe(doc.blocks);
+    const shownRun = (copy[0] as Paragraph).inlines[0];
+    const modelRun = (doc.blocks[0] as Paragraph).inlines[0];
+    expect([shownRun.bold, shownRun.italic, modelRun.bold, modelRun.italic]).toEqual([undefined, true, true, undefined]);
+    // 副本换脸时把记录自己留下的字节也换成记录里那一份：`prevSlots` 说的是改前那套的写法，摆出来的 run 若还带着
+    // 现值的 `rPrSlots`，纸面与它自己说的就是一套与另一套——写回不碰副本，但读回与对拍会。
+    expect(shownRun.rPrSlots?.map((x) => x.tag)).toEqual(["i"]);
+    expect(modelRun.rPrSlots?.map((x) => x.tag)).toEqual(["b"]);
   });
 });

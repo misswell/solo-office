@@ -218,3 +218,29 @@ export function makeLastRowDeletedDocx(): Uint8Array {
 
   return pack(SKELETON(document));
 }
+
+/**
+ * 五族属性改动各一枚、外加一枚「这一格不在了」的结构记录，凑在同一件里给「显示原文」那一档当靶子：
+ * `w:rPrChange`（现值粗体、改前斜体）、`w:pPrChange`（现值居中、改前靠右）、`w:tblPrChange`（表宽 3000→1500 缇）、
+ * `w:trPrChange`（行高 700→300 缇）、`w:tcPrChange`（格的宽与地 FF0000→00FF00），以及一枚 `w:cellDel`——
+ * 它记的是格子在不在，套里没有属性可摆，视图若把它当属性套，就把这格从没说过的属性抹了。
+ * 授权 46 件里这七枚记录**一枚都没有**（`.scratch/rev-format-audience.py`），所以这一族的受众只有自家写出的
+ * 修订件；记录按 MS 的例子拼（`w:tblPrChange` 里裹 `w:tblPr`），不是照 WPS 的字面（那仍未取证）。
+ */
+export function makeFormatViewDocx(): Uint8Array {
+  const document = `<w:document xmlns:w="${NS_W}" xmlns:r="${NS_R}">
+<w:body>
+<w:p><w:r><w:rPr><w:b/><w:rPrChange ${REV(80, "顾峰")}><w:rPr><w:i/></w:rPr></w:rPrChange></w:rPr><w:t>族一 run</w:t></w:r></w:p>
+<w:p><w:pPr><w:jc w:val="center"/><w:pPrChange ${REV(81, "顾峰")}><w:pPr><w:jc w:val="right"/></w:pPr></w:pPrChange></w:pPr><w:r><w:t>族二 段落</w:t></w:r></w:p>
+<w:tbl>
+<w:tblPr><w:tblW w:w="3000" w:type="dxa"/><w:tblPrChange ${REV(82, "顾峰")}><w:tblPr><w:tblW w:w="1500" w:type="dxa"/></w:tblPr></w:tblPrChange></w:tblPr>
+<w:tblGrid><w:gridCol w:w="1500"/><w:gridCol w:w="600"/></w:tblGrid>
+<w:tr><w:trPr><w:trHeight w:val="700"/><w:trPrChange ${REV(83, "顾峰")}><w:trPr><w:trHeight w:val="300" w:hRule="atLeast"/></w:trPr></w:trPrChange></w:trPr>
+<w:tc><w:tcPr><w:tcW w:w="1200" w:type="dxa"/><w:shd w:val="clear" w:fill="FF0000"/><w:tcPrChange ${REV(84, "顾峰")}><w:tcPr><w:tcW w:w="900" w:type="dxa"/><w:shd w:val="clear" w:fill="00FF00"/></w:tcPr></w:tcPrChange></w:tcPr><w:p><w:r><w:t>族五 格</w:t></w:r></w:p></w:tc>
+<w:tc><w:tcPr><w:tcW w:w="600" w:type="dxa"/><w:cellDel ${REV(85, "林晓")}/></w:tcPr><w:p><w:r><w:t>删掉的一格</w:t></w:r></w:p></w:tc>
+</w:tr>
+</w:tbl>
+</w:body>
+</w:document>`;
+  return pack(SKELETON(document));
+}

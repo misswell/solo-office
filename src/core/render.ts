@@ -958,7 +958,22 @@ function bandParagraphsHtml(area: HeaderFooter): string {
   );
 }
 
-export function renderWord(doc: WordDocument): string {
+/**
+ * 这一页按哪一张脸画：`marks` 是「显示修订」，`final` 是「显示最终状态」，`original` 是「显示原文」。
+ * 三档只改**摆出来的**东西，模型与写回一个字都不动。
+ */
+export type RevisionView = "marks" | "final" | "original";
+
+/**
+ * 正文与表/行/格那一叠纸面。`original` 那一档不是「切完 DOM 再补样式」：`doc-edit.ts` 的 `render()` 整块
+ * 重铺 `innerHTML`，视图切换期补的任何行内样式下一次按键就没了，而 run 的行内样式又会被 `styleOf` 读回模型，
+ * 补上去的改前那套就是把 run 改了。所以视图是**渲染的入参**——原文那一档由 `doc.originalView()` 先按每条
+ * 记录的 `prev` 复制一份，再走同一条 style→CSS 映射。
+ * 页眉页脚那一叠不在这趟里：带子是按 `segments` 的**文字**画的，属性改动记录从来就没进过带子的纸面，
+ * 没有现值可换，也就没有半做。
+ */
+export function renderWord(doc: WordDocument, view: RevisionView = "marks"): string {
+  const shown = view === "original" ? doc.originalView(doc.blocks) : doc.blocks;
   const sec = doc.sections[0] ?? DEFAULT_SECTION;
   const width = twipsToPx(sec.pageWidthTwips);
   // `w:gutter` is binding width: ECMA-376 §17.3.2.13 adds it to the margin on the binding side, and a section
@@ -1037,7 +1052,7 @@ export function renderWord(doc: WordDocument): string {
   const faceRules = eastAsiaFaceRules(doc.eastAsiaFaces());
   // 装饰都排在**块之后**：编辑器按块在 `.page` 孩子里的下标寻址，任何排在前面的装饰会把每一个下标顶偏。
   // 页面边框与两份带子原件都排在正文之后（#157：带子此前排在纸盒之外，画在纸上看不到，正文也从没为它让位）。
-  return `${faceRules ? `<style>${faceRules}</style>` : ""}<div class="page" style="${style};position:relative">${renderBlocks(doc.blocks, doc, new Map(), {
+  return `${faceRules ? `<style>${faceRules}</style>` : ""}<div class="page" style="${style};position:relative">${renderBlocks(shown, doc, new Map(), {
     open: new Set(),
     numbers: new Map(doc.comments.map((c, i) => [c.id, i + 1])),
     done: new Set(doc.comments.filter((c) => c.resolved === true).map((c) => c.id)),

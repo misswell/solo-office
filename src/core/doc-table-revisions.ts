@@ -73,6 +73,13 @@ export function recordedSlots(recordXml: string, tag: string): PropSlot[] {
 export const coversWholeSet = (tag: string): boolean => tag !== "cellMerge";
 
 /**
+ * 这一枚记录说的是**属性**还是说的**这一格在不在**。`w:tcPrChange` 与 `w:cellMerge` 记的是属性套（拒绝或
+ * 「显示原文」都按 `prev` 摆）；`w:cellIns` / `w:cellDel` 记的是格子的存在，套里没有属性可摆，把它当属性套
+ * 摆回去等于抹掉一格从没说过的属性。判定只许有一处：`docx.ts` 的「拒绝」与「显示原文」两张脸问的是同一句话。
+ */
+export const isPropertyRecord = (tag: string): boolean => tag === "tcPrChange" || tag === "cellMerge";
+
+/**
  * The children a set has after one of its records is decided. Accepting lets the set as it now stands stay
  * and takes the record out; refusing puts the recorded children back — in place of the whole set when the
  * record was a `w:*PrChange`, in place of the one property it names when it was a `w:cellMerge` — and keeps

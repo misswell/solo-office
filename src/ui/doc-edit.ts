@@ -5,7 +5,7 @@ import { DEFAULT_SECTION, EAST_ASIAN_TEXT, RUN_STYLE_KEYS, applyFacePick, applyR
 import type { CellWhere, TableEdit } from "../core/doc-table-ops.js";
 import { cellRangeFor, cellRect, cellsInRect, cellsInSweep, deleteColumnHere, deleteRowHere, gridColumns, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, splitHere, splitTableAt } from "../core/doc-table-ops.js";
 import { IMAGE_EXT_BY_MIME } from "../core/media.js";
-import { BAND_SOURCE_CLASS, CARRY_CLASS, CARRY_STYLE, BAND_MASTER_CLASS, PAGE_BORDER_CLASS, RUN_CARRY_CLASS, fontStack, highlightColor, renderWord } from "../core/render.js";
+import { BAND_SOURCE_CLASS, CARRY_CLASS, CARRY_STYLE, BAND_MASTER_CLASS, PAGE_BORDER_CLASS, RUN_CARRY_CLASS, type RevisionView, fontStack, highlightColor, renderWord } from "../core/render.js";
 import { flatOf, inlineLength, isMark, keepRunIdentity } from "../core/run-identity.js";
 import { CommentPanel } from "./doc-comments.js";
 import { applyBandYield, applySheetGaps, applyTabStops, BAND_CLONE_CLASS, caretCharTop, caretStatusOf, lineCaretAnchor, lineNumberAt, measurePageLayout, pageAtCaret, pageCaretAnchor, pagePositionAt, rowColumnAt, sectionCaretAnchor, SHEET_GAP_ROW_CLASS, SHEET_STRIP_CLASS, type CaretLine, type CaretStatus, type PageAnchor, type PageMeasure, type PagePlacement, type SheetStrip } from "./doc-layout.js";
@@ -397,9 +397,6 @@ export interface CaretMark {
 /** What the four 选择 cells commands answer: whether the page can show such a range, and how many cells it lit up. */
 export type TableSelection = { ok: boolean; reason?: string; selected?: number };
 
-/** What the page shows about tracked changes: the marks, the text as if accepted, or as if refused. */
-export type RevisionView = "marks" | "final" | "original";
-
 /** The body as one character stream, plus the paragraph each span of that stream came from and the
  *  stretch of paragraphs it belongs to: neighbours inside one stretch can be joined or split, and a
  *  paragraph on the other side of a table wall never is. */
@@ -590,7 +587,7 @@ export class DocEditor {
   }
 
   render(): void {
-    this.host.innerHTML = renderWord(this.doc);
+    this.host.innerHTML = renderWord(this.doc, this.revisionView);
     this.page = this.host.querySelector<HTMLElement>(".page");
     this.panel?.mount();
     this.review?.mount();
@@ -599,7 +596,7 @@ export class DocEditor {
     // 纸盒重建一趟，旧的那一枚带子已经不在页里，它那句「失焦就收笔」永远不会再来：认领关系先清掉，
     // `contenteditable` 由下面这一句交还给正文，编辑开着的那一枚由 `insertPageNumber` 重新点开。
     this.hfEditing = null;
-    this.page.contentEditable = "true";
+    this.setBodyEditable();
     this.page.spellcheck = false;
     if (this.zoomLevel !== 1) this.page.style.zoom = String(this.zoomLevel);
     this.reindex();
@@ -813,7 +810,7 @@ export class DocEditor {
     el.contentEditable = "false";
     el.querySelector<HTMLElement>(".hf-bar")?.style.setProperty("display", "none");
     if (this.hfEditing === el) this.hfEditing = null;
-    if (this.page) this.page.contentEditable = "true";
+    this.setBodyEditable();
     this.commitHF(el, el.dataset.hf === "footer" ? "footer" : "header");
   }
 
@@ -1220,6 +1217,11 @@ export class DocEditor {
    */
   private sync(): boolean {
     if (!this.page) return false;
+    // 「显示原文」那一档纸面上穿的是每条属性改动记录里的 `prev`，不是 run 现在的属性（`render.ts` 的
+    // `renderWord(doc, "original")` 走 `doc.originalView()` 复制的那一份）。而这一句往下就是纸面→模型的读回：
+    // 让它在这儿跑，改前的那套会被当成 run 自己的属性认领回模型，存盘等于替文件撤掉那次改动。
+    // 这一档正文本来就收成只读（`setBodyEditable`），打字进不来，纸面与模型不会分叉，所以「不读回」不欠谁一次同步。
+    if (this.revisionView === "original") return false;
     wrapStrays(this.page);
     this.claimed = emptyClaims();
     this.carries = carryByKeys(this.doc.blocks);
@@ -3447,8 +3449,12 @@ export class DocEditor {
    * screen: the marks stay in the model and in the file, so looking is never deciding.
    */
   setRevisionView(view: RevisionView): void {
+    if (this.revisionView === view) return;
     this.revisionView = view;
-    this.applyRevisionView();
+    // 换档是**重铺一趟**，不是在已有的 DOM 上补样式：属性改动记录摆哪一套由 `renderWord(doc, view)` 在渲染期
+    // 决定，纸面上行内样式的唯一来源就是这一趟——补上去的样式下一次 `render()` 就没了，而 run 的行内样式会被
+    // `styleOf` 读回模型，等于把改前那套写进了 run。
+    this.render();
   }
 
   /** Ribbon toggle for 审阅窗格; with no argument it flips whatever the reader is looking at. */
@@ -3518,6 +3524,17 @@ export class DocEditor {
     if (!this.page) return;
     this.page.classList.toggle("rev-final", this.revisionView === "final");
     this.page.classList.toggle("rev-original", this.revisionView === "original");
+  }
+
+  /**
+   * 正文那一格此刻能不能打字，只有一个主人：`render()` 每趟重铺时问它一次，带子收笔时也问它一次。
+   * 「显示原文」那一档回答不能——纸上的字穿的是改前那套属性，Blink 要是能在里面敲，敲出来的字会由读回那一趟
+   * 按改前的属性认领；而 `commit()`（存盘前那一次同步）也走同一条读回，所以只锁 `contenteditable` 不够，
+   * `sync()` 那一头另有这一句。其余两档照旧可编辑。
+   */
+  private setBodyEditable(): void {
+    if (!this.page) return;
+    this.page.contentEditable = this.revisionView === "original" ? "false" : "true";
   }
 
   /** 修订 / 追踪修订: with this on, edits are recorded as tracked changes instead of applied. */

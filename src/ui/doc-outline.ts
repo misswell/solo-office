@@ -123,6 +123,7 @@ export class OutlinePanel {
     if (open) this.host.setAttribute("data-ol-open", "");
     else this.host.removeAttribute("data-ol-open");
     this.refresh();
+    this.editor.paneStateChanged();
   }
 
   isOpen(): boolean {

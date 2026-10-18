@@ -574,7 +574,7 @@ export class DocEditor {
   constructor(
     private readonly host: HTMLElement,
     private readonly doc: WordDocument,
-    private readonly hooks: { changed(): void; moved?(): void; relayout?(): void },
+    private readonly hooks: { changed(): void; moved?(): void; relayout?(): void; panesChanged?(): void },
   ) {
     for (const id of anchorIdsIn(this.doc.blocks)) this.bodyAnchored.add(id);
     this.revSeq = this.doc.maxRevisionId();
@@ -3504,6 +3504,16 @@ export class DocEditor {
     this.hooks.relayout?.();
   }
 
+  /**
+   * 窗格自己翻了开合（每一格右上角那枚「关闭」走的是面板的 `setOpen`，不经过这里那三个 `show…`）。这一趟既不
+   * 改件里的字节，也不重铺纸，要重读的只有一件事：ribbon 上那一档还挂不挂勾。量到的：不报这一趟，点了「关闭」
+   * 之后那一档还亮着（`挂勾=true 藏=true`）——亮着是说「正摆着」，用户再点它是想收起，可它按面板真实状态又开一次，
+   * 于是这一枚在用户手里只有开、没有关。
+   */
+  paneStateChanged(): void {
+    this.hooks.panesChanged?.();
+  }
+
   /** Ribbon toggle for 审阅窗格; with no argument it flips whatever the reader is looking at. */
   showReviewPane(show = !(this.review?.isOpen() ?? false)): void {
     this.review?.setOpen(show);
@@ -3949,19 +3959,37 @@ export class DocEditor {
     }));
   }
 
-  /** The comments the caret sits inside, read back from the rendered anchored ranges. */
+  /**
+   * The comments the caret sits inside, read back from the rendered anchored ranges. 光标紧贴着一枚批注号时也算
+   * 指着那一条——见下面那条「往上问不到」的分支。
+   */
   commentIdsAtCaret(): number[] {
     const sel = document.getSelection();
     if (!sel || sel.rangeCount === 0) return [];
-    const node = sel.getRangeAt(0).startContainer;
-    let el: Element | null = node instanceof Element ? node : node.parentElement;
-    for (let scan = el; scan && scan !== this.page; scan = scan.parentElement) {
-      if (scan.classList.contains("cmt-anchor")) {
-        const id = Number((scan as HTMLElement).dataset.cid);
-        return Number.isFinite(id) ? [id] : [];
+    const rng = sel.getRangeAt(0);
+    const chain = (from: Element | null): number[] => {
+      for (let scan = from; scan && scan !== this.page; scan = scan.parentElement) {
+        if (scan.classList.contains("cmt-anchor")) {
+          const id = Number((scan as HTMLElement).dataset.cid);
+          return Number.isFinite(id) ? [id] : [];
+        }
+        const cids = (scan as HTMLElement).dataset.cids;
+        if (cids) return cids.split(",").map(Number).filter(Number.isFinite);
       }
-      const cids = (scan as HTMLElement).dataset.cids;
-      if (cids) return cids.split(",").map(Number).filter(Number.isFinite);
+      return [];
+    };
+    const node = rng.startContainer;
+    const up = chain(node instanceof Element ? node : node.parentElement);
+    if (up.length) return up;
+    // 起点不一定落在那句被批注的字**里**。零长范围的批注没有字可选，`revealComment` 把光标放在批注号之后——容器
+    // 是它父亲，上面那一趟问不到那一枚。于是跳过去的那条刚在面板里点名，跟着这趟选区的 `selectionchange` 就答
+    // 「哪儿都不在」，把刚挂上的那条勾又擦掉（量到的：连点两下「下一条批注」，第二条那格不亮）。
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      const kids = (node as Element).children;
+      // 先问光标**后面**那一枚：`setStartAfter` 放的正是这个形状；再问前面那一枚（`setStartBefore` 放的形状）。
+      const behind = chain(kids[rng.startOffset - 1] ?? null);
+      if (behind.length) return behind;
+      return chain(kids[rng.startOffset] ?? null);
     }
     return [];
   }
@@ -4086,6 +4114,11 @@ export class DocEditor {
   /** Ribbon toggle for the panel; with no argument it flips whatever the reader is looking at. */
   showComments(show = !(this.panel?.isOpen() ?? false)): void {
     this.panel?.setOpen(show);
+  }
+
+  /** 批注面板此刻开着没有——ribbon 那一档挂不挂勾问的是它，而不是「文档里有没有批注」。 */
+  get commentsPaneOpen(): boolean {
+    return this.panel?.isOpen() ?? false;
   }
 
   /**

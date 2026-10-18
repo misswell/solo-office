@@ -190,6 +190,7 @@ export class CommentPanel {
   setOpen(open: boolean): void {
     this.dismissed = !open;
     this.refresh();
+    this.editor.paneStateChanged();
   }
 
   isOpen(): boolean {

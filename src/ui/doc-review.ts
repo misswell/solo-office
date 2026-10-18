@@ -194,6 +194,7 @@ export class ReviewPanel {
     this.open = open;
     this.root.hidden = !open;
     this.refresh();
+    this.editor.paneStateChanged();
   }
 
   isOpen(): boolean {

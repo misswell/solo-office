@@ -711,6 +711,27 @@ function buildDocRibbon(): void {
     },
   );
 
+  // 批注: WPS keeps these beside the revision commands on the 审阅 tab. The panel itself used to be reachable
+  // only by clicking a mark on the paper — so a document whose comments were scrolled off screen, or a reader
+  // who wanted to annotate the selection without hunting for a mark first, had no way in.
+  const comments = group();
+  button(comments, "cmtNew", "新建批注", "给选中的文字加一条批注，接着在面板里写正文", () => {
+    editor?.newCommentFromPanel();
+    syncDocRibbon();
+  });
+  button(comments, "cmtPrev", "上一条批注", "跳到上一条批注", () => {
+    editor?.stepComment(-1);
+    syncDocRibbon();
+  });
+  button(comments, "cmtNext", "下一条批注", "跳到下一条批注", () => {
+    editor?.stepComment(1);
+    syncDocRibbon();
+  });
+  button(comments, "cmtShow", "显示批注", "显示或收起批注面板", () => {
+    editor?.showComments();
+    syncDocRibbon();
+  });
+
   // 布局: the page itself rather than the text on it. WPS keeps these on a 「页面」 tab; this ribbon is one row,
   // so the page's own settings get a group at the end, before the zoom control. The 导航窗格 belongs with them:
   // WPS puts it on the 视图 tab, and what it changes is the workspace around the page, not the text on it.
@@ -783,6 +804,7 @@ function syncDocRibbon(): void {
   mark("track", editor?.trackingChanges ?? false);
   mark("revPane", editor?.reviewPaneOpen ?? false);
   mark("navPane", editor?.outlinePaneOpen ?? false);
+  mark("cmtShow", editor?.commentsPaneOpen ?? false);
   const revView = ctl.revView as HTMLSelectElement | undefined;
   if (revView && editor) revView.value = editor.revisionShown;
   const undoBtn = ctl.undo as HTMLButtonElement | undefined;
@@ -1563,6 +1585,11 @@ function mountDoc(app: Extract<Opened, { kind: "docx" }>): void {
     // 所以既不到 `changed` 也不到 `moved`。状态栏那五格是从铺排现读的，没人报这一趟它就挂着换档前的数。
     relayout: () => {
       docStatus?.refresh();
+    },
+    // 窗格开合变了：件没改字节、纸没重铺，要重读的只有 ribbon 上那三档挂不挂勾。「显示批注」挂着勾时点它是收起
+    // 还是再开一次，问的就是这个勾。
+    panesChanged: () => {
+      syncDocRibbon();
     },
   });
   docStatus = new DocStatusBar(editor);

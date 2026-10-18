@@ -1,10 +1,22 @@
-import type { Block, Carried, CarriedInline, HeaderFooter, Inline, NumberLevel, PageBorder, Paragraph, RowInfo, Section, Table, TableBorder, TableCell, WordDocument } from "./docx.js";
+import type { Block, Carried, CarriedInline, HeaderFooter, Inline, NumberLevel, PageBorder, Paragraph, PropSlot, RowInfo, Section, Table, TableBorder, TableCell, WordDocument } from "./docx.js";
 import { DEFAULT_SECTION, LINE_ONE, MARGIN_SIDES, PAGE_BORDER_SIDES, PBDR_ORDER, headingLevel, lineGridPitchTwips, twipsToPx } from "./docx.js";
 import type { CommentAnchor } from "./comments.js";
 import type { Presentation, Shape, SlideParagraph } from "./pptx.js";
 
 const esc = (s: string): string =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+/**
+ * A format record's `w:*Pr` children as the file wrote them, carried on the page beside the fields.
+ *
+ * The editor re-derives the model from the DOM on every keystroke, and a record is part of that model: with only
+ * the fields on the page, the next save rebuilds the record from them. `prev` can hold the eleven properties the
+ * model has a field for and nothing else, so the rebuild takes the record's own `w:kern`, `w:lang` and the run's
+ * `w:spacing` down with them, and a reviewer refusing the change afterwards refuses a change no document made.
+ * A record signed by this editor holds no bytes, and gets no attribute.
+ */
+const slotsAttr = (name: string, slots?: PropSlot[]): string =>
+  slots?.length ? ` ${name}="${encodeURIComponent(JSON.stringify(slots))}"` : "";
 
 /**
  * §17.3.2.26 splits a run's text by script: `w:ascii` draws the Latin, `w:eastAsia` the Chinese, Japanese and
@@ -75,6 +87,11 @@ export function renderInline(inline: Inline): string {
   const decorations = [inline.strike ? "line-through" : "", inline.underline ? "underline" : ""].filter((d) => d !== "");
   if (decorations.length) css += `text-decoration:${decorations.join(" ")};`;
   if (inline.sizePt) css += `font-size:${inline.sizePt}pt;`;
+  // `w:rPr/w:spacing` speaks twentieths of a point per character, and CSS `letter-spacing` is the same measure in
+  // points: one declaration per character, negative allowed, and it is the character advance that changes, so a
+  // line breaks where the file's spacing says. Painting the run at its unstated advance is what left WPS's own
+  // 加宽 4.1 磅 titles (14 runs saying `w:val="82"` among 授权 46 件) sitting at normal width here.
+  if (inline.charSpacingTwips !== undefined) css += `letter-spacing:${inline.charSpacingTwips / 20}pt;`;
   if (inline.color) css += `color:${inline.color};`;
   const family = fontStack(inline);
   if (family) css += `font-family:${esc(family)};`;
@@ -121,6 +138,7 @@ export function renderInline(inline: Inline): string {
       `<span class="rev-fmt" data-rev-format="${fmt.id}" data-rev-format-author="${esc(fmt.author)}"` +
       `${fmt.date ? ` data-rev-format-date="${esc(fmt.date)}"` : ""}` +
       ` data-rev-prev="${encodeURIComponent(JSON.stringify(fmt.prev))}"` +
+      slotsAttr("data-rev-prev-slots", fmt.prevSlots) +
       ` title="${esc(who)}">${html || esc(inline.text)}</span>`;
   }
   return html;
@@ -533,7 +551,8 @@ function renderParagraph(p: Paragraph, doc: WordDocument, counters: Map<string, 
       : "") +
     (fmt
       ? ` data-para-rev="${fmt.id}" data-para-rev-author="${esc(fmt.author)}"${fmt.date ? ` data-para-rev-date="${esc(fmt.date)}"` : ""}` +
-        ` data-para-prev="${encodeURIComponent(JSON.stringify(fmt.prev))}"`
+        ` data-para-prev="${encodeURIComponent(JSON.stringify(fmt.prev))}"` +
+        slotsAttr("data-para-prev-slots", fmt.prevSlots)
       : "");
   const shown = mark ? `${mark.author}${mark.date ? ` · ${mark.date.slice(0, 10)}` : ""} ${mark.move ? (mark.move === "from" ? "移出段落标记" : "移入段落标记") : mark.kind === "del" ? "删除段落标记" : "插入段落标记"}` : fmt ? `${fmt.author}${fmt.date ? ` · ${fmt.date.slice(0, 10)}` : ""} 修改段落格式` : "";
   return `<${tag} class="${classes}"${outline === undefined ? "" : ` data-outline="${outline}"`}${p.keepNext ? ` data-keep-next="1"` : ""}${p.keepLines ? ` data-keep-lines="1"` : ""}${p.widowControl === false ? ` data-widow="0"` : ""}${carried}${shown ? ` title="${esc(shown)}"` : ""}${style.length ? ` style="${style.join(";")}"` : ""}>${prefix}${body}</${tag}>`;

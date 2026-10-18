@@ -45,7 +45,9 @@ const rPrOf = (xml: string, needle: string, at = 0): string => {
  * shapes here were measured, not invented: `.scratch/wps-rpr-names.ts` over 86 WPS-written documents counted
  * 101825 run property sets holding `rFonts` 101175, `szCs` 96165, `sz` 93946, `color` 61554, `lang` 26334,
  * `kern` 18399, `rStyle` 17306, `bCs` 12233, `b` 8889, `spacing` 6666, `vertAlign` 2701, `highlight` 2666,
- * `textFill` 2214, `shd` 1454, `u` 1256, `i` 971, `iCs` 960, `caps` 274, `strike` 38.
+ * `textFill` 2214, `shd` 1454, `u` 1256, `i` 971, `iCs` 960, `caps` 274, `strike` 38. Those counts are 作废语料
+ * readings (#106) and have not been re-run on the authorized 46 件, so they are 待重证; the shapes they named are
+ * the ones the fixtures below carry.
  */
 describe("docx run property fidelity", () => {
   it("reads a run's whole w:rPr child by child and keeps the fields the page draws", () => {
@@ -69,6 +71,9 @@ describe("docx run property fidelity", () => {
       // `w:vertAlign w:val="baseline"` is in this run's set, and the run saying it sits on the line is a thing it
       // stated: the field holds the name, which is what stops the writer from answering the file with a silence.
       vertAlign: "baseline",
+      // `w:spacing w:val="20"` is the run's own 字符间距 sentence (#174 gave it a field); the `w:w` percentage
+      // beside it has none and travels as bytes.
+      charSpacingTwips: 20,
     });
   });
 

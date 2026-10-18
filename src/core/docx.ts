@@ -58,6 +58,17 @@ export interface RunStyle {
    */
   fontEastAsia?: string;
   vertAlign?: "baseline" | "superscript" | "subscript";
+  /**
+   * `w:rPr/w:spacing` (§17.3.2's character spacing): twentieths of a point added after **each** character, and it
+   * may be negative (WPS's own 字体→字符间距 加宽/紧缩 writes exactly this). It is a horizontal measure, so it moves
+   * where a line breaks — a run this app paints at its unstated advance paints a layout the file did not describe.
+   * 授权 46 件量过（`.scratch/layout-elements-audience.py`、`.scratch/layout-second-gate.py`，件按全路径计）：**32 枚
+   * 住在 8 件里，32 枚全说非缺省值**——18 枚在 `w:style/w:rPr`（枚枚 `w:type="character"`、枚枚 `w:val="-6"`，即紧缩
+   * 0.3 磅），14 枚在 `w:p/w:r/w:rPr`（枚枚 `w:val="82"`，即加宽 4.1 磅）；段落标记那一侧（`w:pPr/w:rPr`）0 枚。
+   * 元素受众与效果受众两关都过，所以这一族进模型。`undefined` 是「这句没说」，`0` 是「说了不加不减」——它也是
+   * 一句写过的话，不能与沉默混成一格。
+   */
+  charSpacingTwips?: number;
 }
 
 export interface Inline extends RunStyle {
@@ -4288,7 +4299,7 @@ const entryType = (rev: Revision): "insert" | "delete" | "move-from" | "move-to"
   rev.move === "from" ? "move-from" : rev.move === "to" ? "move-to" : rev.kind === "ins" ? "insert" : "delete";
 
 /** Every run property this model carries, so a rejected formatting change can clear the ones the record dropped. */
-export const RUN_STYLE_KEYS: (keyof RunStyle)[] = ["bold", "italic", "underline", "strike", "sizePt", "color", "highlight", "font", "fontEastAsia", "vertAlign"];
+export const RUN_STYLE_KEYS: (keyof RunStyle)[] = ["bold", "italic", "underline", "strike", "sizePt", "color", "highlight", "font", "fontEastAsia", "vertAlign", "charSpacingTwips"];
 
 /**
  * The run properties a style may lend a run — all of them, both faces included. `font` was held back while the
@@ -4988,8 +4999,10 @@ function paraSlotsOf(spans: { tag: string; xml: string }[]): PropSlot[] {
 
 /**
  * The `w:rPr` children that travel as text: everything except the record of a formatting change, which
- * `revFormat` spells so a decision can drop it. `w:rStyle`, `w:lang`, `w:kern`, `w:bCs`, `w:spacing`, `w:shd`
- * and `w:eastAsianLayout` are all in the set and all outside the model's ten fields.
+ * `revFormat` spells so a decision can drop it. `w:rStyle`, `w:lang`, `w:kern`, `w:bCs`, `w:shd` and
+ * `w:eastAsianLayout` are all in the set and all outside the model's eleven fields. `w:spacing` (字符间距) is in
+ * the set too and *inside* them since round #174: it travels as the file wrote it until the field moves, and then
+ * `carriedRunProps` drops the child and re-spells it — a field with a slot is not a field copied as bytes.
  */
 function runSlotsOf(spans: { tag: string; xml: string }[]): PropSlot[] {
   return spans.filter((s) => s.tag !== "rPrChange").map((s) => ({ tag: s.tag, xml: s.xml }));
@@ -5903,6 +5916,12 @@ function runStyle(rPr: any, theme?: ThemeFonts): RunStyle {
   if (rPr.sz) s.sizePt = Number(rPr.sz["@_val"]) / 2;
   const color = rPr.color?.["@_val"];
   if (color && color !== "auto") s.color = hex(color);
+  // `w:spacing` 的 `w:val` 是 `ST_SignedTwipsMeasure`，所以负数是合法值、`0` 是「说了不加不减」。只有数不出来
+  // 才算没说——把 `-6` 读成沉默，就是替文件撤了它自己撤掉的那 0.3 磅。
+  if (rPr.spacing !== undefined) {
+    const stated = Number(rPr.spacing["@_val"]);
+    if (Number.isFinite(stated)) s.charSpacingTwips = stated;
+  }
   // `none` is kept as the value it is, not folded into the absence above it: §17.17.64 spells its cancellation with
   // that enum name, and the quarantined 86 use it for 4,135 of the 4,605 `w:highlight` elements they state — the
   // other 470 all saying `yellow` and none leaving `w:val` off (`.scratch/highlight-counted.ts`). `w:highlight`

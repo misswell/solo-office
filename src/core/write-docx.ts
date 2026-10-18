@@ -255,20 +255,22 @@ function movedFaces(r: Inline): RunStyle {
   };
 }
 
-/** `CT_RPr` children likewise: rFonts, b, i, strike, color, sz, szCs, highlight, u, vertAlign. */
+/**
+ * `CT_RPr` children spelled from fields alone: the two places that have no bytes to carry — a run the document
+ * wrote no `w:rPr` for, and a `w:rPrChange` whose record arrived without the file's children.
+ *
+ * Derived from `RUN_PROPS`, not written out again beside it. A hand-list of the same set is a second owner of the
+ * same sentence, and the two drift: `charSpacingTwips` was registered in the table and left out here, so a run
+ * whose record had to be rebuilt from fields lost its 「字距 82」and gained a `w:szCs` the file never wrote
+ * (`.scratch/char-spacing-dom.ts` 的「改过字距的字」打字后一段两句字距变成一句).
+ */
 function runPropsInner(s: RunStyle): string {
-  const parts: string[] = [];
-  const rf = rFontsTag(s);
-  if (rf) parts.push(rf);
-  if (s.bold !== undefined) parts.push(s.bold ? "<w:b/>" : '<w:b w:val="0"/>');
-  if (s.italic !== undefined) parts.push(s.italic ? "<w:i/>" : '<w:i w:val="0"/>');
-  if (s.strike !== undefined) parts.push(s.strike ? "<w:strike/>" : '<w:strike w:val="0"/>');
-  if (s.color) parts.push(`<w:color w:val="${XML_ESC(s.color.replace(/^#/, "").toUpperCase())}"/>`);
-  if (s.sizePt) parts.push(`<w:sz w:val="${Math.round(s.sizePt * 2)}"/><w:szCs w:val="${Math.round(s.sizePt * 2)}"/>`);
-  if (s.highlight) parts.push(`<w:highlight w:val="${XML_ESC(s.highlight)}"/>`);
-  if (s.underline !== undefined) parts.push(s.underline ? '<w:u w:val="single"/>' : '<w:u w:val="none"/>');
-  if (s.vertAlign) parts.push(`<w:vertAlign w:val="${s.vertAlign}"/>`);
-  return parts.join("");
+  const r = s as unknown as Inline;
+  return RUN_PROPS.map((prop) => ({ tag: prop.tags[0]!, xml: prop.spell(r, "w", "") }))
+    .filter((p) => p.xml !== "")
+    .sort((a, b) => rprRank(a.tag) - rprRank(b.tag))
+    .map((p) => p.xml)
+    .join("");
 }
 
 const runProps = (s: RunStyle): string => {
@@ -293,7 +295,9 @@ const rprRank = (tag: string): number => {
  * field's two children: the size button writes both, so a size change moves the complex-script size with the
  * Latin one rather than leaving the run at two sizes. `w:rFonts` is the reverse — one element, two fields — so it
  * lists both faces under `keys` and re-spells whichever moved. Everything not in this list has no field and keeps
- * the text the file wrote for it — `w:rStyle`, `w:kern`, `w:lang`, `w:bCs`, `w:spacing`, `w:shd`, `w:eastAsianLayout`.
+ * the text the file wrote for it — `w:rStyle`, `w:kern`, `w:lang`, `w:bCs`, `w:shd`, `w:eastAsianLayout`.
+ * `w:spacing` (字符间距) left that set in round #174: 授权 46 件里 32 枚、枚枚非缺省（18 枚字符样式写 `-6`、14 枚 run
+ * 写 `82`），所以它有字段、有 CSS、也有下面 `RUN_PROPS` 里的一条写法。
  */
 const RUN_PROPS: {
   key: keyof RunStyle;
@@ -376,6 +380,14 @@ const RUN_PROPS: {
       r.underline === undefined ? "" : r.underline ? `<${prefix}:u w:val="single"/>` : `<${prefix}:u w:val="none"/>`,
   },
   { key: "vertAlign", tags: ["vertAlign"], spell: (r, prefix) => (r.vertAlign ? `<${prefix}:vertAlign w:val="${r.vertAlign}"/>` : "") },
+  {
+    key: "charSpacingTwips",
+    tags: ["spacing"],
+    // `0` is a value the run wrote (`ST_SignedTwipsMeasure`), so the field is tested for absence, not truthiness:
+    // a run that said 「不加不减」 keeps saying it, and a run that never stated spacing gains no element.
+    spell: (r, prefix) =>
+      r.charSpacingTwips === undefined ? "" : `<${prefix}:spacing w:val="${Math.round(r.charSpacingTwips)}"/>`,
+  },
 ];
 
 /**

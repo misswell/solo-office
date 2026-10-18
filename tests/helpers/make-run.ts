@@ -268,3 +268,31 @@ export function makeHanFaceDocx(): Uint8Array {
 <w:p><w:r>${SET}<w:tab/><w:t>文件里就带 tab 的一句</w:t></w:r></w:p>`;
   return pack(document);
 }
+
+/**
+ * #174 用的夹具：`w:rPr/w:spacing`（字符间距，`ST_SignedTwipsMeasure`＝每枚字之后加多少**缇**，可负）。
+ *
+ * 形状照授权 46 件量到的那两种来（`.scratch/layout-elements-audience.py`、`.scratch/layout-second-gate.py`，
+ * 件按全路径计）：**32 枚住在 8 件里，32 枚枚枚非缺省**——18 枚在 `w:style/w:rPr`（枚枚 `w:type="character"`、
+ * 枚枚 `w:val="-6"`＝紧缩 0.3 磅），14 枚在 `w:p/w:r/w:rPr`（枚枚 `w:val="82"`＝加宽 4.1 磅），`w:pPr/w:rPr`
+ * 那一侧 0 枚（所以这一段没有段落标记的形状）。`82` 与 `-6` 是文件自己写的字面量，不是本夹具发明的数。
+ *
+ * 三态里只有两态有语料：`82`（加宽）与 `-6`（紧缩）。**`w:val="0"` 授权口径 0 枚**——它按 §17.3.2 是
+ * `ST_SignedTwipsMeasure` 的合法值，也是「说了不加不减」与「什么都没说」分开的那一格，所以这一例是
+ * 自家构造的形状，买到的是「不许把说过的 0 抵成沉默」。借样式那一例同理：授权口径的 18 枚字符样式确实写了
+ * `-6`，但**这批件里借得到的一枚也没量过**（样式与 run 同处一件不等于有 run 点名它，#174 未复测），
+ * 所以 `WideTitle` 是照那 18 枚的形状造的梯级。
+ */
+export function makeCharSpacingDocx(): Uint8Array {
+  const SPACING_STYLES =
+    `<w:styles xmlns:w="${NS_W}"><w:style w:type="character" w:styleId="Hyperlink"><w:name w:val="Hyperlink"/></w:style>` +
+    `<w:style w:type="character" w:styleId="WideTitle"><w:name w:val="宽字"/><w:rPr><w:spacing w:val="-6"/></w:rPr></w:style></w:styles>`;
+  const document = `<w:p><w:r><w:rPr><w:spacing w:val="82"/></w:rPr><w:t>加宽的字</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:spacing w:val="-6"/></w:rPr><w:t>紧缩的字</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:spacing w:val="0"/></w:rPr><w:t>说了不加不减</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t>什么都没说</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:rStyle w:val="WideTitle"/></w:rPr><w:t>借来的字距</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:rStyle w:val="WideTitle"/><w:spacing w:val="82"/></w:rPr><w:t>自己说过借来的</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:spacing w:val="-6"/><w:rPrChange ${REV(31, "顾峰")}><w:rPr><w:spacing w:val="82"/><w:sz w:val="24"/></w:rPr></w:rPrChange></w:rPr><w:t>改过字距的字</w:t></w:r></w:p>`;
+  return pack(document, SPACING_STYLES);
+}

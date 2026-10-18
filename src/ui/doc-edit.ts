@@ -78,6 +78,18 @@ const boldWeight = (weight: string): boolean | undefined => {
   return Number.isFinite(n) ? n >= 600 : undefined;
 };
 
+/**
+ * CSS 长度回缇。渲染器把字距写成 `pt`，而 Blink 在别处会把同一个声明交回 `px`（96dpi 下 1px = 1440/96 = 15 缇）。
+ * 认不出的单位当「没说」：把读不回来的数值抵成 0，就是替文件撤掉它自己写过的字距。
+ */
+const cssToTwips = (value: string): number | undefined => {
+  const n = Number.parseFloat(value);
+  if (!Number.isFinite(n)) return undefined;
+  if (value.endsWith("pt")) return Math.round(n * 20);
+  if (value.endsWith("px")) return Math.round(n * 15);
+  return undefined;
+};
+
 /** The run style a DOM element contributes on top of its ancestors'. */
 function styleOf(el: Element): RunStyle {
   const tag = el.tagName.toLowerCase();
@@ -96,6 +108,14 @@ function styleOf(el: Element): RunStyle {
   if (deco.includes("underline")) s.underline = true;
   if (deco.includes("line-through")) s.strike = true;
   if (inline.fontSize.endsWith("pt")) s.sizePt = Number.parseFloat(inline.fontSize);
+  // 字距跟着字号读回：打字会把一枚 run 切成几段，切开的每一段都从自己那格 span 的 style 重新认领属性。渲染器
+  // 写的 `letter-spacing` 不读回来，光标落在加宽 4.1 磅的那行里敲一个字，敲出来的就是没加宽的字，而重写 rPr
+  // 时那句 `w:spacing` 也会被当成「这枚 run 从没说过」。
+  const spacing = inline.letterSpacing;
+  if (spacing && spacing !== "normal") {
+    const twips = cssToTwips(spacing);
+    if (twips !== undefined) s.charSpacingTwips = twips;
+  }
   if (inline.color) s.color = hexOf(inline.color);
   // Which of the two the page hands back is the fresher claim: the colour we can name out of the inline style is
   // the one Blink wrote *this time*, while `data-hl` is an attribute it copies along when it splits a span. At a
@@ -195,6 +215,24 @@ const moveOf = (el: Element, attr: string): "from" | "to" | undefined => {
   return move === "from" || move === "to" ? move : undefined;
 };
 
+/**
+ * The children a format record came in with, as the page carried them back. A record rebuilt from the `prev`
+ * fields alone loses every property the model has no field for, so the bytes are what makes a refusal refuse the
+ * change the document actually recorded.
+ */
+function prevSlotsOf(el: Element, attr: string): PropSlot[] | undefined {
+  const raw = el.getAttribute(attr);
+  if (raw === null) return undefined;
+  try {
+    const slots = JSON.parse(decodeURIComponent(raw)) as PropSlot[];
+    return Array.isArray(slots) && slots.length ? slots : undefined;
+  } catch {
+    // Unreadable bytes fall back to the fields the record does carry, which is the shape before this attribute
+    // existed: lossy, but a record nobody can decide is worse than a record missing a child.
+    return undefined;
+  }
+}
+
 /** The formatting revision a marked span carries back to us: its signature and the properties from before. */
 function formatChangeOf(el: Element): FormatRevision | undefined {
   const raw = el.classList.contains("rev-fmt") ? el.getAttribute("data-rev-format") : null;
@@ -208,12 +246,14 @@ function formatChangeOf(el: Element): FormatRevision | undefined {
     // is ordinary text either way, so dropping the record loses nothing but the phantom mark.
     return undefined;
   }
+  const prevSlots = prevSlotsOf(el, "data-rev-prev-slots");
   return {
     kind: "format",
     id: Number(raw) || 0,
     author: el.getAttribute("data-rev-format-author") ?? "",
     date: el.getAttribute("data-rev-format-date") ?? undefined,
     prev,
+    ...(prevSlots ? { prevSlots } : {}),
   };
 }
 
@@ -242,12 +282,14 @@ function readParagraphRevisions(el: Element, p: Paragraph): void {
     return;
   }
   try {
+    const prevSlots = prevSlotsOf(el, "data-para-prev-slots");
     p.revFormat = {
       kind: "format",
       id: Number(raw) || 0,
       author: el.getAttribute("data-para-rev-author") ?? "",
       date: el.getAttribute("data-para-rev-date") ?? undefined,
       prev: JSON.parse(decodeURIComponent(el.getAttribute("data-para-prev") ?? "{}")) as ParaStyle,
+      ...(prevSlots ? { prevSlots } : {}),
     };
   } catch {
     // A record whose properties cannot be read is not one anybody can decide; the paragraph's own text

@@ -1,5 +1,5 @@
 import { Spreadsheet } from "../core/xlsx.js";
-import { LINE_ONE, WordDocument } from "../core/docx.js";
+import { LINE_ONE, WordDocument, type PageSetup, type Section } from "../core/docx.js";
 import { Presentation } from "../core/pptx.js";
 import { OpcPackage } from "../core/opc.js";
 import { writeXlsx } from "../core/write.js";
@@ -12,6 +12,8 @@ import { DocEditor, type DocPath } from "./doc-edit.js";
 import type { RevisionView } from "../core/render.js";
 import { type BorderLeg, type CellLeg, cellLegPatch, legPatch, tableLegPatch, type TableLeg } from "./doc-para-border.js";
 import { DocStatusBar } from "./doc-status-bar.js";
+import { CUSTOM, PAPER, paperEdges, paperOf } from "./doc-page-setup.js";
+import { currentUnit, onUnitChange, twipText, twipsFromUnit } from "./doc-units.js";
 import { DeckEditor, type PresetGeometry } from "./deck-edit.js";
 import { DeckShow } from "./deck-show.js";
 import { dataUrl, IMAGE_MIME_BY_EXT } from "../core/media.js";
@@ -507,6 +509,41 @@ const DOC_RIBBON_TABS: [string, string][] = [
   ["view", "视图"],
 ];
 
+/**
+ * `CT_PageLayout.kuip:153-166` 那一组（`RB_Page_Setup`，`needsinglerowmorebutton="true"`）里 `m_Margins` 之后
+ * 连排的四枚 `KxWpsPageMarginSingleSpinCommand`：`component` 依次 2 / 0 / 3 / 1，也就是显示序 上 → 左 → 下 → 右，
+ * 每枚 `fixedSpinBoxWidth="84"`、`singlerowfold="1"`，字面 `text="@Top"/"@Left"/"@Bottom"/"@Right"`。
+ * 所以页边距在 ribbon 上是**四格填数**，不是预设菜单。第三列是节里读的那条边，第四列是写回时改的那一项。
+ */
+const PAGE_MARGIN_SPINS: [string, string, "top" | "left" | "bottom" | "right", "topTwips" | "leftTwips" | "bottomTwips" | "rightTwips"][] = [
+  ["marginTop", "上", "top", "topTwips"],
+  ["marginLeft", "左", "left", "leftTwips"],
+  ["marginBottom", "下", "bottom", "bottomTwips"],
+  ["marginRight", "右", "right", "rightTwips"],
+];
+
+/** 纸张方向那一格的两档；WPS 只声明了 `PageOrientation` 这一枚命令，它的Widget 是下拉还是开关**未取证**，这里按可回显的两档摆。 */
+const PAGE_ORIENTATIONS: [string, string][] = [
+  ["portrait", "纵向"],
+  ["landscape", "横向"],
+];
+
+/**
+ * 一节现在的整份几何摊成一份 `PageSetup`，再只换调用方要改的那一两项：页边距那一格不该顺手改纸，
+ * 换方向也不该顺手把两条边写成另一对（`paperTwips` 不给就是「纸还是那张，只是转方向」）。
+ */
+const pageSetupOf = (s: Section, patch: Partial<PageSetup>): PageSetup => ({
+  topTwips: s.margins.top,
+  rightTwips: s.margins.right,
+  bottomTwips: s.margins.bottom,
+  leftTwips: s.margins.left,
+  headerTwips: s.margins.header,
+  footerTwips: s.margins.footer,
+  gutterTwips: s.margins.gutter,
+  landscape: s.pageWidthTwips > s.pageHeightTwips,
+  ...patch,
+});
+
 /** Word-style formatting: run styling over the selection, paragraph shape for the whole paragraph. */
 function buildDocRibbon(): void {
   // WPS 把文档命令分在几页上：`res/wpsongmani.kui:114-122` 在 `<KRbTabWidgetCommand id="tabwidget">` 里按序声明
@@ -609,6 +646,26 @@ function buildDocRibbon(): void {
     i.oninput = () => run(i.value);
     ctl[key] = i;
     g.append(i);
+  };
+  /**
+   * ribbon 上的数字格：`label` 在外头，所以控件本体是 `input` 自己（`ctl` 存它，回显与「正在打的那格别动」都问它）。
+   * 算的是**落笔**那一刻（`change`：失焦或回车），不是每按一个字符——半个数就改页边距，会把件写成没人要说的尺寸。
+   */
+  const spin = (g: HTMLElement, key: string, label: string, tip: string, run: (text: string) => void): void => {
+    const box = document.createElement("label");
+    box.className = "rspin";
+    const i = document.createElement("input");
+    i.type = "text";
+    i.inputMode = "decimal";
+    i.autocomplete = "off";
+    i.title = tip;
+    i.onchange = () => run(i.value);
+    // `data-echo` 记下这一格上一趟被刷成的字面（`echoSpin` 是唯一的写手）。空格子的初始值是 `""`，两者一起立，
+    // 第一趟回显才认得出「框里还是我们那句」。
+    i.dataset.echo = "";
+    box.append(label, i);
+    ctl[key] = i;
+    g.append(box);
   };
   const style = (patch: Parameters<DocEditor["applyStyle"]>[0]): void => {
     editor?.applyStyle(patch);
@@ -853,6 +910,48 @@ function buildDocRibbon(): void {
   // 第二、三组（效果 / 结构：页眉底纹、页面边框、水印、行号、分栏、删除分节符…）家里还没有命令面，不摆空组。
   const layout = group("layout");
   button(layout, "pageSetup", "页面设置", "纸张大小与方向、页边距、页眉页脚距离、装订线", () => editor?.openPageSetup());
+  // `RB_Page_Setup` 里不止这一枚按钮：`CT_PageLayout.kuip:153-166` 把四枚页边距自旋格（上→左→下→右，每枚
+  // `fixedSpinBoxWidth="84"`）、`PageOrientation`、`m_PageSize` 平铺在同一组里。三样家里都有面——都走 `Doc.setPageSetup`
+  // 那一条，与「页面设置」对话框同一条路，不另开一套数。同组那两枚**不摆**：分栏（授权 46 份的 55 枚 `w:cols` 全是
+  // `w:num="1"`，0 受众）与文字方向（页级那一维家里没有面，`w:textDirection` 只建模到表格单元格；WPS 的页级拼法未取证）。
+  for (const [key, label, edge, slot] of PAGE_MARGIN_SPINS) {
+    spin(layout, key, label, `${label}页边距，按状态栏的测量单位填；落笔（失焦或回车）才算`, (text) => {
+      const s = editor?.pageSection();
+      if (!s) return;
+      const v = Number(text.trim());
+      // 说不出数（空的、半个、负）就不改件，也**当场**把这一格刷回件里那句：押着一个没人认的「abc」在框里，
+      // 用户看不出那是被拒了还是已经生效；而「打了还没落笔的那一格别动」那一条护的是没落笔的字，落笔这一趟它已经落笔了。
+      if (text.trim() === "" || !Number.isFinite(v) || v < 0) {
+        echoSpin(ctl[key] as HTMLInputElement, s.margins[edge]);
+        return;
+      }
+      const patch: Partial<PageSetup> = {};
+      const twips = twipsFromUnit(v, currentUnit());
+      patch[slot] = twips;
+      editor?.applyPageSetup(pageSetupOf(s, patch));
+      // 落笔这一格自己读回刚写进件里的那个数（同口径，`twipText`/`twipsFromUnit` 在这一档能精确往返）。
+      // 这一步不刷，下一趟换测量单位时会把「4」当成用户没落笔的字护住，四格里就剩它一个不换口径。
+      echoSpin(ctl[key] as HTMLInputElement, twips);
+      syncDocRibbon();
+    });
+  }
+  chooser(layout, "orient", "纸张方向：这一张纸是纵向还是横向", PAGE_ORIENTATIONS, (v) => {
+    const s = editor?.pageSection();
+    if (!s) return;
+    const want = v === "landscape";
+    if ((s.pageWidthTwips > s.pageHeightTwips) === want) return;
+    // 只给方向、不给 `paperTwips`：模型的这条意思是「纸还是那张，只是转方向」，不由界面替文件重算两条边。
+    editor?.applyPageSetup(pageSetupOf(s, { landscape: want }));
+    syncDocRibbon();
+  });
+  chooser(layout, "paper", "纸张大小：选一张标准纸，按当前方向摊开", PAPER.map((p): [string, string] => [p.name, p.name]), (name) => {
+    const s = editor?.pageSection();
+    // 名字读不出纸（那一格显示「自定义尺寸」时）就不改件：这一格说的是「换纸」，不是「把我叫不出名的那张再写一遍」。
+    const edges = s ? paperEdges(name, s.pageWidthTwips > s.pageHeightTwips) : undefined;
+    if (!s || !edges) return;
+    editor?.applyPageSetup(pageSetupOf(s, { paperTwips: edges }));
+    syncDocRibbon();
+  });
 
   // 最后一组 `RB_PageLayoutHeaderAndFooter`（:86-91，`groupTip="HeaderFooterGroup"`）里是
   // `PageLayout_InsertPageNumbers` + `m_HeaderAndFooter`。页眉页脚在插入那一页也有一份（上面 `RB_Pages` 里那两枚），
@@ -875,12 +974,23 @@ function buildDocRibbon(): void {
   ribbon.append(more);
   for (const bar of Object.values(bars)) bar.addEventListener("scroll", syncOverflow, { passive: true });
   syncOverflow();
+  // 测量单位换了，`RB_Page_Setup` 那四格的字面口径就跟着换：回显只有一条路，就是再跑一遍 `syncDocRibbon`。
+  // 这一枚订阅归本趟重建持有，先收上一趟的，不然每开一个文档就多留一个监听。
+  unitEchoOff?.();
+  unitEchoOff = onUnitChange(() => syncDocRibbon());
 }
+
+/** `RB_Page_Setup` 那几格的「单位换了就重算」监听：同一个持有法则是溢出箭头的 `resize` 监听（`overflowAbort`）。 */
+let unitEchoOff: (() => void) | undefined;
 
 /** 溢出箭头的 `resize` 监听归这一枚元素自己：重建前先 `abort()`，不然每切一次文档种类就多留一个监听。 */
 let overflowAbort: AbortController | undefined;
 
-function syncDocRibbon(): void {
+/**
+ * ribbon 跟着文档读的那一趟。`force` 只在**换文档**那一趟给：上一份里打了还没落笔的那串字属于上一份文件，
+ * 不搬进这一份（`buildRibbon` 同种类不重建，那几格是同一批元素，所以这一条得由这里说）。
+ */
+function syncDocRibbon(force = false): void {
   const state = editor?.markState();
   const mark = (key: string, want: boolean): void => {
     (ctl[key] as HTMLButtonElement | undefined)?.classList.toggle("on", want);
@@ -916,9 +1026,9 @@ function syncDocRibbon(): void {
     }
   }
   const face = ctl.font as HTMLInputElement | undefined;
-  // 正在打的那一格不回显：`syncDocRibbon` 随每次选区变化跑一遍，把用户打到一半的名字吃掉就不是他的名字了。
+  // 正在打的那一格不回显（换文档那一趟的 `force` 除外）：`syncDocRibbon` 随每次选区变化跑一遍，把用户打到一半的名字吃掉就不是他的名字了。
   // 回显给的是选区起点那一段（`markState` 一路按起点算），两张脸并存时给这段字真正穿的那一张。
-  if (face && document.activeElement !== face) face.value = state?.font ?? "";
+  if (face && (force || document.activeElement !== face)) face.value = state?.font ?? "";
   const size = ctl.size as HTMLSelectElement | undefined;
   if (size) {
     const pt = state?.sizePt;
@@ -936,6 +1046,22 @@ function syncDocRibbon(): void {
     const mult = state?.lineRule === "auto" && state.line !== undefined ? state.line / LINE_ONE : undefined;
     echoChoice(ls, mult === undefined ? undefined : String(mult), DOC_LINES.map(String), DOC_LINES.filter((n) => n < (mult ?? 0)).length);
   }
+  // `RB_Page_Setup` 那几格回显的是**这一节现在**的几何：没落笔的那一格不动（护的是打到一半的字，见下），
+  // 单位换字面靠 `onUnitChange` 再跑一趟这里；两条都问 `editor.pageSection()`，与对话框同一个出口。
+  const page = editor?.pageSection();
+  if (page) {
+    for (const [key, , edge] of PAGE_MARGIN_SPINS) {
+      const box = ctl[key] as HTMLInputElement | undefined;
+      // 护的是「打了还没落笔」那一格，不是「光标正站着」那一格：站着的格若框里还是上一趟刷给它的那句，
+      // 就没有用户的字要护——换测量单位时四格都得跟着换口径，只跳过站着的那一格会留下一个说旧单位字面的格。
+      if (box && (force || box.value === box.dataset.echo)) echoSpin(box, page.margins[edge]);
+    }
+    const orient = ctl.orient as HTMLSelectElement | undefined;
+    if (orient) orient.value = page.pageWidthTwips > page.pageHeightTwips ? "landscape" : "portrait";
+    const paper = ctl.paper as HTMLSelectElement | undefined;
+    // 件里那一对边叫不出标准名时，那一格显示「自定义尺寸」这件纸自己说的样子，而不是列表里最近的一张。
+    if (paper) echoChoice(paper, paperOf(page.pageWidthTwips, page.pageHeightTwips) ?? CUSTOM, PAPER.map((p) => p.name), PAPER.length);
+  }
   mark("track", editor?.trackingChanges ?? false);
   mark("revPane", editor?.reviewPaneOpen ?? false);
   mark("navPane", editor?.outlinePaneOpen ?? false);
@@ -946,6 +1072,17 @@ function syncDocRibbon(): void {
   const redoBtn = ctl.redo as HTMLButtonElement | undefined;
   if (undoBtn) undoBtn.disabled = !editor?.canUndo;
   if (redoBtn) redoBtn.disabled = !editor?.canRedo;
+}
+
+/**
+ * `RB_Page_Setup` 那四格唯一的写手：把缇数按当前测量单位写成字面放进格子，同时把这个字面记进 `data-echo`。
+ * 回显拿 `data-echo` 问「框里还是不是上一趟刷的那句」，落笔与拒收都走这里写自己那一格——两处共用，
+ * 才能保证「护没落笔的那格」和「换单位四格一起换口径」不互相打架。
+ */
+function echoSpin(box: HTMLInputElement, twips: number): void {
+  const want = twipText(twips);
+  box.value = want;
+  box.dataset.echo = want;
 }
 
 /**
@@ -1730,7 +1867,8 @@ function mountDoc(app: Extract<Opened, { kind: "docx" }>): void {
   docStatus = new DocStatusBar(editor);
   // The ribbon reads the editor, so it is built after one exists.
   buildRibbon("docx");
-  syncDocRibbon();
+  // `force`：这一趟是换了一份文件，上一份里打了还没落笔的那串字（字体框、四格页边距）不搬过来。
+  syncDocRibbon(true);
 }
 
 // -------------------------------------------------------------------- pptx

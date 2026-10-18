@@ -188,6 +188,17 @@
         cursor: pointer;
       }
       .rover[hidden] { display: none; }
+      /* `RB_Page_Setup` 那四枚页边距自旋格：WPS 给每枚声明 `fixedSpinBoxWidth="84"`（`CT_PageLayout.kuip:156-159`），
+         所以一格连名带框占 84 px、框吃掉剩下的宽度；高度压在行里，不为一格把带子撑高。 */
+      .ribbon .rspin { display: inline-flex; align-items: center; gap: 3px; width: 84px; font-size: 12px; }
+      .ribbon .rspin input {
+        flex: 1;
+        min-width: 0;
+        height: 22px;
+        padding: 0 3px;
+        font: inherit;
+        text-align: right;
+      }
       button.rb {
         font: inherit;
         font-size: 12px;

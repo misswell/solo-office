@@ -1,4 +1,4 @@
-import type { Block, BorderSet, Carried, CarriedInline, CellStyle, FormatRevision, HeaderFooter, HfSegment, Inline, LineSpacingRule, ParaStyle, PageGeometry, PageSetup, Paragraph, ParagraphFormatRevision, PropSlot, Revision, RevisionEntry, RowInfo, RunStyle, Table, TableBorder, TableCell, TableStyle, WordDocument } from "../core/docx.js";
+import type { Block, BorderSet, Carried, CarriedInline, CellStyle, FormatRevision, HeaderFooter, HfSegment, Inline, LineSpacingRule, ParaStyle, PageGeometry, PageSetup, Paragraph, ParagraphFormatRevision, PropSlot, Revision, RevisionEntry, RowInfo, RunStyle, Section, Table, TableBorder, TableCell, TableStyle, WordDocument } from "../core/docx.js";
 import type { CommentAnchor, DocComment } from "../core/comments.js";
 import { bodyShape, commentTexts } from "../core/comments.js";
 import { DEFAULT_SECTION, EAST_ASIAN_TEXT, RUN_STYLE_KEYS, applyFacePick, applyRunPatch, borderDelta, carriedShape, cellShapeOf, countTexts, lineGridPitchTwips, ownParaStyle, ownRunStyle, paraSpacingPitch, paraStyleOf, paragraphTextsOf, runStyleOf, samePropValue, sectionEndsOf, signCellRevision, signTableRevision, stampNow, syncCellBox, syncParaSlots, syncTableBox, tableShapeOf, twipsToPx } from "../core/docx.js";
@@ -1705,9 +1705,17 @@ export class DocEditor {
     return true;
   }
 
+  /**
+   * 这一页是从哪一节画的：「页面设置」对话框、ribbon 上 `RB_Page_Setup` 那几格都问的同一节。两处各自
+   * `sections[0] ??` 一遍就会分头漂，所以这一条只有一个出口。
+   */
+  pageSection(): Section {
+    return this.doc.sections[0] ?? DEFAULT_SECTION;
+  }
+
   /** Ribbon command: 「页面设置」 for the page this document is drawn on. */
   openPageSetup(): void {
-    showPageSetupDialog(this.doc.sections[0] ?? DEFAULT_SECTION, (set) => this.applyPageSetup(set));
+    showPageSetupDialog(this.pageSection(), (set) => this.applyPageSetup(set));
   }
 
   /**

@@ -91,7 +91,7 @@ const unitText = (tw: number | undefined): string => (tw === undefined ? "" : tw
  * 16 开 and 32 开 are deliberately absent: the numbers WPS gives them were never read off a dialog, and a
  * guess under a standard-looking name is how a document ends up on the wrong paper.
  */
-const PAPER: readonly { name: string; shortCm: number; longCm: number }[] = [
+export const PAPER: readonly { name: string; shortCm: number; longCm: number }[] = [
   { name: "A3", shortCm: 29.7, longCm: 42 },
   { name: "A4", shortCm: 21, longCm: 29.7 },
   { name: "A5", shortCm: 14.8, longCm: 21 },
@@ -100,8 +100,30 @@ const PAPER: readonly { name: string; shortCm: number; longCm: number }[] = [
   { name: "信纸", shortCm: 21.59, longCm: 27.94 },
   { name: "法律专用纸", shortCm: 21.59, longCm: 35.56 },
 ];
-const CUSTOM = "自定义尺寸";
+export const CUSTOM = "自定义尺寸";
 
+/**
+ * 一对手写的边长是哪张纸——不问哪条边在前，方向由 `w:pgSz` 自己那一对说。对不上任何一张就没有名字，
+ * 那一条在对话框里叫 `CUSTOM`，在 ribbon 上也是同一个答案。
+ */
+export const paperOf = (a: number, b: number): string | undefined => {
+  const long = Math.max(a, b);
+  const short = Math.min(a, b);
+  return PAPER.find((p) => cmToTwips(p.longCm) === long && cmToTwips(p.shortCm) === short)?.name;
+};
+
+/**
+ * 一张纸按方向摊开的两条边（宽在前的那一对）。对话框填格与 ribbon 选纸走同一条换算：A3 的 42 厘米回得 Exactly，
+ * A4 的 11906 缇写成 21.001 厘米，都不靠名字表里的整数糊过去。
+ */
+export const paperEdges = (name: string, landscape: boolean): { width: number; height: number } | undefined => {
+  const sheet = PAPER.find((p) => p.name === name);
+  if (!sheet) return undefined;
+  return {
+    width: cmToTwips(landscape ? sheet.longCm : sheet.shortCm),
+    height: cmToTwips(landscape ? sheet.shortCm : sheet.longCm),
+  };
+};
 /** What one box holds: nothing typed means "not asked about", and anything unparseable is refused. */
 type Reading = { value?: number; bad: boolean };
 
@@ -186,15 +208,12 @@ export function openPageSetup(current: Section, apply: (set: PageSetup) => void)
   /**
    * The sheet the two boxes add up to, ignoring which edge is which — the direction is asked about by its own
    * radios, and the model turns the pair itself. Unreadable boxes are no sheet, which the list shows as
-   * 自定义 and `build` refuses.
+   * 自定义 and `build` refuses. The pairing itself is `paperOf`, the same answer the ribbon's 纸张大小 asks for.
    */
-  const matchedPaper = (): (typeof PAPER)[number] | undefined => {
+  const matchedPaperName = (): string | undefined => {
     const a = readEdge(inputs.width, u);
     const b = readEdge(inputs.height, u);
-    if (a === undefined || b === undefined) return undefined;
-    const long = Math.max(a, b);
-    const short = Math.min(a, b);
-    return PAPER.find((p) => cmToTwips(p.longCm) === long && cmToTwips(p.shortCm) === short);
+    return a === undefined || b === undefined ? undefined : paperOf(a, b);
   };
 
   /**
@@ -206,11 +225,10 @@ export function openPageSetup(current: Section, apply: (set: PageSetup) => void)
    * always meant.
    */
   const fillPaper = (name: string): void => {
-    const sheet = PAPER.find((p) => p.name === name);
-    if (!sheet) return;
-    const land = isLandscape();
-    inputs.width.value = twipText(cmToTwips(land ? sheet.longCm : sheet.shortCm));
-    inputs.height.value = twipText(cmToTwips(land ? sheet.shortCm : sheet.longCm));
+    const edges = paperEdges(name, isLandscape());
+    if (!edges) return;
+    inputs.width.value = twipText(edges.width);
+    inputs.height.value = twipText(edges.height);
   };
 
   /** The setup the boxes say, or nothing at all when a box cannot be read. */
@@ -248,7 +266,7 @@ export function openPageSetup(current: Section, apply: (set: PageSetup) => void)
   const refresh = (): void => {
     const set = build();
     // The list follows the boxes; the boxes never follow the list here, so typing is not interrupted.
-    if (set) paper.value = matchedPaper()?.name ?? CUSTOM;
+    if (set) paper.value = matchedPaperName() ?? CUSTOM;
   };
   /**
    * Turn the two boxes with the page. This is for the number the user reads next to 「宽」: the model is handed
@@ -261,8 +279,8 @@ export function openPageSetup(current: Section, apply: (set: PageSetup) => void)
     if (width === undefined || height === undefined) return;
     // A sheet the list knows is refilled from the list rather than re-measured: a box the user left as the
     // file's own twips should turn into the sheet's own numbers, not stay whatever was typed there.
-    const sheet = matchedPaper();
-    if (sheet) fillPaper(sheet.name);
+    const name = matchedPaperName();
+    if (name) fillPaper(name);
     else {
       inputs.width.value = unitText(height);
       inputs.height.value = unitText(width);
@@ -322,8 +340,8 @@ export function openPageSetup(current: Section, apply: (set: PageSetup) => void)
   // A file that spells a listed sheet's two edges is shown under the list's own spelling — 21 and 29.7 rather
   // than the 21.001 that 11906 twips is worth — because that is the number a user recognises. Both spellings
   // convert back to 11906, so the page the save owes is the page that was read.
-  const opening = matchedPaper();
-  if (opening) fillPaper(opening.name);
+  const opening = matchedPaperName();
+  if (opening) fillPaper(opening);
   refresh();
   dialog.showModal();
   inputs.top.focus();

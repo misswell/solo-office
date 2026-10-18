@@ -83,14 +83,17 @@ describe("docx 页面设置：纸张大小/页边距/距离/装订线/方向", (
     // 「页面设置」 is the only edit that re-spells `w:sectPr` bytes: typing does not, because there the section
     // travels as the file's own bytes untouched. So this is where an unread child can die — `applyPageSetup`
     // walks the children and patches only `w:pgSz` and `w:pgMar`, and everything else in §17.3's list has to
-    // come back whole and in place. The shape is the corpus's: over the 86 files this machine's WPS wrote, those
-    // two elements plus `w:pgBorders` (24 sections), `w:cols`/`w:docGrid` (all 115), `w:pgNumType` (3) and
-    // `w:titlePg` (3) are the only children real files state, and every one came back byte-identical.
+    // come back whole and in place. The shape is the corpus's: over the authorized 46 份 / 58 节
+    // (`.scratch/sect-children-audience.py`), `w:pgSz`/`w:pgMar`/`w:cols`/`w:docGrid` are on all 58 sections,
+    // `w:pgNumType` 20, `w:footnotePr` 4, `w:titlePg` 2, band references 38 — and `w:pgBorders` 0, so the border set
+    // below is a §17.3 shape the walk must also survive rather than an observed one. Every child came back
+    // byte-identical, including `w:footnotePr`, the container this fixture newly carries because a real section does
+    // hold a child inside it.
     const doc = WordDocument.openBytes(makePageSetupDocx(WPS_SECTION_UNREAD_CHILDREN));
     doc.setPageSetup({ topTwips: 1000, rightTwips: 1200, bottomTwips: 1000, leftTwips: 1300, landscape: false });
     const xml = bodyXml(writeDocx(doc));
     expect(spanOf(xml, "sectPr")).toBe(
-      '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1000" w:right="1200" w:bottom="1000" w:left="1300" w:header="851" w:footer="992" w:gutter="0"/><w:pgBorders><w:top w:val="none" w:sz="0" w:space="0"/><w:left w:val="none" w:sz="0" w:space="0"/><w:bottom w:val="none" w:sz="0" w:space="0"/><w:right w:val="none" w:sz="0" w:space="0"/></w:pgBorders><w:pgNumType w:start="1"/><w:cols w:space="425" w:num="1"/><w:titlePg/><w:docGrid w:type="lines" w:linePitch="312" w:charSpace="0"/></w:sectPr>',
+      '<w:sectPr><w:footnotePr><w:numFmt w:val="decimal"/></w:footnotePr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1000" w:right="1200" w:bottom="1000" w:left="1300" w:header="851" w:footer="992" w:gutter="0"/><w:pgBorders><w:top w:val="none" w:sz="0" w:space="0"/><w:left w:val="none" w:sz="0" w:space="0"/><w:bottom w:val="none" w:sz="0" w:space="0"/><w:right w:val="none" w:sz="0" w:space="0"/></w:pgBorders><w:pgNumType w:start="1"/><w:cols w:space="425" w:num="1"/><w:titlePg/><w:docGrid w:type="lines" w:linePitch="312" w:charSpace="0"/></w:sectPr>',
     );
 
     // Twice, because the second walk reads what the first one wrote: a section that survives one dialog and is
@@ -100,7 +103,7 @@ describe("docx 页面设置：纸张大小/页边距/距离/装订线/方向", (
     again.setPageSetup({ topTwips: 1440, rightTwips: 1440, bottomTwips: 1440, leftTwips: 1440, landscape: true });
     const xml2 = bodyXml(writeDocx(again));
     expect(spanOf(xml2, "sectPr")).toBe(
-      '<w:sectPr><w:pgSz w:w="16838" w:h="11906" w:orient="landscape"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="851" w:footer="992" w:gutter="0"/><w:pgBorders><w:top w:val="none" w:sz="0" w:space="0"/><w:left w:val="none" w:sz="0" w:space="0"/><w:bottom w:val="none" w:sz="0" w:space="0"/><w:right w:val="none" w:sz="0" w:space="0"/></w:pgBorders><w:pgNumType w:start="1"/><w:cols w:space="425" w:num="1"/><w:titlePg/><w:docGrid w:type="lines" w:linePitch="312" w:charSpace="0"/></w:sectPr>',
+      '<w:sectPr><w:footnotePr><w:numFmt w:val="decimal"/></w:footnotePr><w:pgSz w:w="16838" w:h="11906" w:orient="landscape"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="851" w:footer="992" w:gutter="0"/><w:pgBorders><w:top w:val="none" w:sz="0" w:space="0"/><w:left w:val="none" w:sz="0" w:space="0"/><w:bottom w:val="none" w:sz="0" w:space="0"/><w:right w:val="none" w:sz="0" w:space="0"/></w:pgBorders><w:pgNumType w:start="1"/><w:cols w:space="425" w:num="1"/><w:titlePg/><w:docGrid w:type="lines" w:linePitch="312" w:charSpace="0"/></w:sectPr>',
     );
     // And the twice-written bytes still say what the file said: a carried child is kept whole, not kept as
     // padding, and this model reads it back exactly as far as it knows how.

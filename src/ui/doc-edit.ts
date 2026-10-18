@@ -616,8 +616,9 @@ export class DocEditor {
   /**
    * 页码域在纸上显示的是它算出来的数，不是「页码」「总页数」这两个字——WPS 打印视图里每一张都是那样。
    * 改的只是显示：域自己的 XML（`data-carry` 指回去的那一段）一个字不动，保存回来的仍是文件里那句
-   * `PAGE`/`NUMPAGES`。数的口径与状态栏同一份（`planOf` 的张数），多节不重新起算——授权语料里
-   * `w:pgNumType` 的 20 枚全是默认（十进制、start 缺省或 1），「按节起算」没有受众。
+   * `PAGE`/`NUMPAGES`。数的口径与状态栏同一份（`planOf` 的张数），多节不重新起算——授权 46 份 / 58 节里
+   * `w:pgNumType` 说了 20 枚（`.scratch/sect-children-audience.py`：`fmt` 4 枚、`fmt`+`start` 14 枚、只 `start` 2 枚），
+   * 而说的值**全是缺省**（`w:start` 只有 `1`、`w:fmt` 只有 `decimal`），所以「按节起算」没有受众。
    */
   private numberPageFields(band: HTMLElement, sheet: number, total: number): void {
     for (const chip of band.querySelectorAll<HTMLElement>("[data-field]")) chip.textContent = chip.dataset.field === "NUMPAGES" ? String(total) : String(sheet);

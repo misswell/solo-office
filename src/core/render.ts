@@ -299,10 +299,14 @@ const textHeightPt = (p: Paragraph): number | undefined => {
 
 /**
  * The paragraph's line height as one CSS value, in the unit the file wrote it in. `w:line` counts 240ths of a
- * line under `w:auto` (13,396 of the corpus's elements) and twips under `w:exact`/`w:atLeast` (6,802 of them),
- * so drawing every one of them as a multiplier put 固定值 22 磅 at 1.83 倍行距 — a third of the heights in the
- * files WPS itself wrote. A stated `w:line="0"` draws no height at all; the corpus states one once, and no unit
- * turns a zero into a line.
+ * line under `w:auto` (2,890 of the authorized 46 份's 3,948 stated heights, in the body/band/footnote parts, with
+ * 200 more in the style layer) and twips under `w:exact`/`w:atLeast` (1,004 + 54 of them), so drawing every one of
+ * them as a multiplier put 固定值 22 磅 at 1.83 倍行距 — a quarter of the heights in the files WPS itself wrote.
+ * Every one of those 3,948 signs its own `w:lineRule`: the reading is 2,890 auto / 1,004 exact / 54 atLeast and no
+ * height arrived unsigned (`.scratch/authorized-spacing-census.py`; the 13,396 and 6,802 over the old cohort are
+ * its arithmetic). A stated
+ * `w:line="0"` draws no height at all and no unit turns a zero into a line; the authorized 46 份 state one 0 times,
+ * so that guard is for a file the cohort has not shown yet.
  *
  * `exact` is a height, so it is simply that height; glyphs taller than it are cut, which is what 固定值 does.
  * `atLeast` is a floor, and CSS has no line height that says "this much, or whatever the text needs", so it is
@@ -312,16 +316,17 @@ const textHeightPt = (p: Paragraph): number | undefined => {
  *
  * `pitchPx` is the section's line grid, and when it is there and the paragraph has not opted out
  * (`w:snapToGrid w:val="0"`, `undefined` reading as on), the grid is the unit: a paragraph that states no
- * height of its own takes one grid line — which is the corpus's dominant case, 24,117 of its 27,511 `w:pPr`
- * blocks saying nothing about the grid while the page drew them all at the App's own 1.62 × 12pt = 25.92px
- * against the files' 20.8px — and one that states a height takes that height rounded up to whole grid lines. A
+ * height of its own takes one grid line — 3,507 of the cohort's 7,455 `w:pPr` blocks state none, and they are not
+ * the majority there (3,948 do state a height), which is the correction to the old cohort's "24,117 of 27,511 say
+ * nothing" — and one that states a height takes that height rounded up to whole grid lines. A
  * `w:auto` multiplier is the one case CSS cannot round: `1.5倍` means one and a half times *the line's own text*,
  * which the browser only knows per line, so on a grid it is drawn as the greater of one grid line and that many
  * times the paragraph's tallest text. That number has to be a length rather than `em`: `em` on a declaration
  * taken by the whole paragraph resolves against the paragraph's own font size, and before this the paragraph
  * carried none, so every one of those floors was measured against the App's 12pt — 735 of the 1,298 such
  * paragraphs in the 201 documents draw a different height once the file's own size answers instead, in 22 of
- * the files (`.scratch/em-ref-impact.ts`). The grid reaching a table cell is the same reading as the same
+ * the files (`.scratch/em-ref-impact.ts`; 待重证 on the authorized 46, as the sentence above says). The grid
+ * reaching a table cell is the same reading as the same
  * property on any other paragraph (§17.3.1.87 is a paragraph property, and cells hold paragraphs); WPS' own
  * in-cell grid is 未取证.
  */
@@ -490,10 +495,13 @@ function renderParagraph(p: Paragraph, doc: WordDocument, counters: Map<string, 
     // Font and size fall back the same way: the level's own statement wins, and where the level is silent it is the
     // paragraph's mark chain (§17.3.1.4) — not the page stylesheet, whose 12pt and Times/Songti pair are the
     // App's own default and no document asked for them.
-    // The colour has no level side to beat yet: 8 of the corpus's 617 levels state a `w:rPr/w:color`, and no
-    // paragraph sits on any of those slots (`.scratch/mark-color.ts`), so nothing here has evidence for what a
-    // level's colour should override. The mark's own rung answers 82 of the 473 listed paragraphs and 391 state
-    // nothing — those stay in the page's ink, because no file asked for a colour this renderer would invent.
+    // The colour has no level side to beat yet: of the 110 `w:lvl` the authorized 46 份's `numbering.xml` files
+    // spell, none states a `w:rPr/w:color`, so nothing here has evidence for what a level's colour should override
+    // (`.scratch/authorized-numbering-census.py`; the 617 levels / 8 stating a colour is the quarantined cohort's
+    // arithmetic). The mark's own rung answering 82 of the 473 listed paragraphs and 391 stating nothing is
+    // 待重证: that pair came off `.scratch/mark-color.ts`, whose file list belongs to the quarantined cohort and no
+    // longer exists. What does not move is that no file asked for a colour this renderer would invent, so a mark
+    // with no colour of its own stays in the page's ink.
     const markPt = level?.sizePt ?? p.markSizePt;
     const markStyle: string[] = [];
     if (level?.font) markStyle.push(`font-family:${esc(level.font)}`);
@@ -573,8 +581,9 @@ function numberText(doc: WordDocument, counters: Map<string, number>, numId: num
  * spell, or a value the corpus never writes, keeps the decimal digits.
  *
  * The two letter forms were one code point short of their own first item: `96 + ((n - 1) % 26)` puts U+0060
- * ("`") on n = 1 and 64 ("@") on the first uppercase item, so every one of the corpus's 75 `lowerLetter` levels
- * drew its items one letter early. A letter sequence is also a bijective base-26 count — a, b, …, z, aa — not a
+ * ("`") on n = 1 and 64 ("@") on the first uppercase item, so each of the authorized 46 份's 4 `lowerLetter` levels (and their 2 `lowerRoman` siblings;
+ * 110 `w:lvl` in all, of which 88 are `decimal` and 14 `chineseCounting` — `.scratch/authorized-numbering-census.py`,
+ * against the quarantined cohort's 75) drew its items one letter early. A letter sequence is also a bijective base-26 count — a, b, …, z, aa — not a
  * modulo, which restarted at a on the 27th item.
  */
 function ordinal(n: number, fmt: string): string {
@@ -705,9 +714,11 @@ function writingMode(direction: string): string {
  * be one the browser treats as a floor: measured in the engine this page runs in
  * (`.scratch/row-height-css.html`), `min-height` on a `<tr>` — or on its `<td>` — is **ignored** (a row
  * declaring 200px draws 23px), while `height` is the row's height when the content is shorter (200px) and only
- * a floor when it is taller (203px). The corpus is one-sided about which of the two this is: all 2,112 row
- * heights its 115 table-bearing WPS files state say `w:hRule="atLeast"` and none says `exact`, and none is
- * taller than a page. The page measures its tables off these boxes (`doc-layout.ts` reads one row as one
+ * a floor when it is taller (203px). The files are one-sided about which of the two this is: on the authorized 46 份
+ * all 580 `w:trHeight` — in 8 件, i.e. 4 template names each shipped twice (zh_CN and zh_HK) — state
+ * `w:hRule="atLeast"` beside their `w:val`, none says `exact`, and none is taller than a page (70..3,244 缇 against
+ * A4's 16,838; `.scratch/authorized-row-height.py`). The 2,112 heights over 115 table-bearing files is the
+ * quarantined cohort's arithmetic, and counting these by file name would report 4 件, not 8. The page measures its tables off these boxes (`doc-layout.ts` reads one row as one
  * unit), so a floor the browser drops draws — and paginates — a table shorter than the file says.
  *
  * `exact` would additionally clip content that does not fit; a table row here cannot be forced below its
@@ -727,11 +738,16 @@ function rowStyle(row?: RowInfo): string {
  * A side nobody states keeps the page's own spacing, which is what a table the editor built draws —
  * `w:w="0"` is not the same fact as silence, so this asks per side rather than taking the set as a whole.
  *
- * Before this the padding was never read at all: the sheet gave every cell `5px 9px`, while every one of
- * the corpus's 115 table-bearing WPS files states margins — 204 tables in `w:tblPr`, 1,660 rows in the
- * exception band, 1,897 cells in `w:tcPr` — and the commonest table says `0` above and below against 108
- * twips at the sides. Since the page measures each table row off its drawn box to cut the pages
- * (`doc-layout.ts`), those 5px were 10px of height per row × 2,647 rows of paper that is not in the file.
+ * Before this the padding was never read at all: the sheet gave every cell `5px 9px`, while the authorized 46 份's
+ * table margin statements are all per side and mostly say `0` above and below against 108 twips at the sides — 10 份
+ * hold a table (58 `w:tbl`, 698 `w:tr`, 4,136 `w:tc`), those 10 being 5 template names each shipped twice (zh_CN and
+ * zh_HK), and **every one of them** states margins: table-level `w:tblCellMar` on all 58 tables, a row-level
+ * `w:tblPrEx/w:tblCellMar` on 693 of the 698 rows, and cell-level `w:tcMar` in 2 份's 888 cells (653 of the
+ * table/row sets are top/bottom `0` + left/right `108`, 98 are all `0`; `.scratch/authorized-table-margin.py`).
+ * Counting those by file name is what used to report 5 份 and 1 份. Since the page measures each table row off its
+ * drawn box to cut the pages (`doc-layout.ts`), the old `5px 9px` was 10px of height per row × 698 rows of paper
+ * that is not in the file; the 115 table-bearing files / 204-1,660-1,897 / 2,647 rows figures is the quarantined
+ * cohort's arithmetic.
  */
 function cellPaddingCss(cell: TableCell, table: Table): string {
   const band = cell.row?.cellMargin;

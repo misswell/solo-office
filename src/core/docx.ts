@@ -770,10 +770,13 @@ export const MARGIN_SIDES = ["top", "left", "bottom", "right"] as const;
  * Cell padding, twips per side: `w:tblCellMar` (§17.3.2.82) says it for a whole table and `w:tcMar`
  * (§17.3.2.69) for a single cell. A side is present only when the file said it — `w:w="0"` means flush,
  * which is a different fact from saying nothing, and a page that cannot tell them apart puts its own
- * spacing back on a table that asked for none. The audience reading behind that — every one of the 115
- * WPS-written table-bearing files in the corpus saying at least one side, and every side that comes with a
- * `w:type` spelling it `dxa` — came from the quarantined cohort; `w:tblCellMar`/`w:tcMar` have not been re-counted
- * on the authorized 46 份, so it is 待重证.
+ * spacing back on a table that asked for none. The audience behind that, on the authorized 46 份: 10 份 hold a
+ * table and **all 10** state margins — `w:tblCellMar` on all 58 tables, a row-level `w:tblPrEx/w:tblCellMar` on 693
+ * of the 698 rows, `w:tcMar` on 888 cells in 2 of them — those 10 being 5 template names each shipped twice (zh_CN
+ * and zh_HK), and counting by file name is what used to report 5 and 1. Every one of the cohort's 6,556 side
+ * elements that states a `w:w` signs its unit `w:type="dxa"`; none leaves it out
+ * (`.scratch/authorized-table-margin.py`). The old reading of all 115 table-bearing files saying at least one side
+ * is the quarantined cohort's arithmetic.
  */
 export type MarginTwips = Partial<Record<(typeof MARGIN_SIDES)[number], number>>;
 
@@ -2593,10 +2596,11 @@ export class WordDocument {
 
   /**
    * The document's own 默认制表位 (`w:defaultTabStop` in `word/settings.xml`), in twips — the distance
-   * 增加缩进量／减少缩进量 moves a paragraph that spells its indent in twips. Measured over the 39 distinct
-   * WPS-written bodies in the bundle: 36 state 420 and 3 state 720, and none leaves it out
-   * (`.scratch/indent-step.ts`). `word/settings.xml` is not a part this model owns, so this reads it on demand
-   * and a save still carries the bytes the file wrote.
+   * 增加缩进量／减少缩进量 moves a paragraph that spells its indent in twips. On the authorized 46 份 every one
+   * states it: 43 spell `w:val="420"` and 3 spell `720`, and none leaves the element out
+   * (`.scratch/authorized-tab-stop.py`; the earlier 36-of-39 over distinct bundle bodies is 待重证 — that walk
+   * deduped by content hash, a different audience from the 件 the rest of this file counts). `word/settings.xml`
+   * is not a part this model owns, so this reads it on demand and a save still carries the bytes the file wrote.
    */
   defaultTabStop(): number | undefined {
     const raw = this.pkg ? new TextDecoder().decode(this.pkg.bytes("word/settings.xml") ?? new Uint8Array()) : "";

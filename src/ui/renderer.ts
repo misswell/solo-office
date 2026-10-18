@@ -795,9 +795,11 @@ function syncDocRibbon(): void {
  *
  * `undefined` deselects, which is how 「没提过」 reads; `value` among `presets` selects that option; a value the
  * control does not list gets one option of its own at `insertAt`, taken back out on the next sync. Showing the
- * nearest preset instead would put a property in the ribbon that is not in the file — measured over the 86 WPS
- * documents, 61 of them hold runs whose size is none of the eight presets, so a 21pt caret used to be answered
- * with 16 on every stop (`.scratch/ribbon-echo-measure.ts`).
+ * nearest preset instead would put a property in the ribbon that is not in the file — of the authorized 46 份, 30
+ * state a run size at all in the body or a band and all 30 state one outside the eight presets: 134 of their 5,662
+ * `w:sz` are 9, 15, 22, 26 or 42 磅, none of which the list carries, so a 15pt caret used to be answered with a
+ * preset the file never stated
+ * (`.scratch/authorized-slot-census.py`; the 61-of-86 reading is the quarantined cohort's arithmetic).
  */
 function echoChoice(s: HTMLSelectElement, value: string | undefined, presets: string[], insertAt: number): void {
   for (const o of [...s.options]) if (o.dataset.caret === "1") o.remove();

@@ -18,8 +18,9 @@ import type { Unit } from "./doc-units.js";
  * 60000 back as itself (`doc-units.ts` spells the two inequalities; the traversal is `tests/doc-units.test.ts`):
  * 厘米 3, 毫米 2, 英寸 4, 磅 2. 851 twips is 1.501 厘米, and the 1.50 a two-decimal box would show comes back as
  * 850; the same number in inches is 0.591, because 0.59 would come back as 850 too. That is why a dialog nobody
- * retouched cannot move a margin or an edge, and why a sheet that is not on the list — the near-A4 11900×16840
- * four of the corpus sections spell — stays 11900×16840 instead of being pulled to A4. The paper-name row
+ * retouched cannot move a margin or an edge, and why a sheet that is not on the list — the near-A4 11907×16840 the
+ * authorized 46 份 spell in 2 件 — against A4's 11906×16838 in 44 件 (`word/document.xml`'s 58 `w:pgSz`,
+ * `.scratch/authorized-table-margin.py` prints them) — stays 11907×16840 instead of being pulled to A4. The paper-name row
  * shows the file's own twips to the last digit: A4's 11906 reads 21.001 厘米, not the 21 a name-based table
  * might print, because in inches the same edge has no short spelling at all (8.2681) and one rule has to hold
  * in all four units.

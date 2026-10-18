@@ -94,9 +94,15 @@ function withMarkRevision(p: Paragraph, slot: PropSlot): string {
 
 /**
  * `w:ind` from the fields the model holds, stating only the attributes one of them carries. The attribute
- * order is the one WPS writes, measured over the 29,889 `w:ind` elements in the 86 documents this repository's
- * shapes come from — `left`, then `right`, then the first line's two spellings, then `w:hanging`
- * (`left,leftChars,right,rightChars,firstLine,firstLineChars` 123 times, `left,hanging` 118).
+ * order is the one WPS writes: of the 2,400 `w:ind` elements the authorized 46 份 spell across `word/*`, 2,306
+ * keep this relative order (`left`, then `right`, then the first line's two spellings, then `w:hanging`), and the
+ * only multi-attribute shape that does not is `left,leftChars,hanging,firstLineChars` — 94 of them in 4 份, where
+ * WPS puts `hanging` before the first line (`.scratch/authorized-slot-census.py`; the 29,889 over the 86 documents
+ * is the quarantined cohort's arithmetic). Attribute order asks nothing of a reader. The two paths that spell a
+ * `w:ind` agree on that order: this one, for a paragraph the file gave no `w:pPr` and for a `w:pPrChange` this
+ * editor signs, and `IND_ORDER` in `syncParaSlots`, which reorders only the six modelled attributes and leaves
+ * the rest of a slot's bytes alone. So editing the indent of one of those 4 份 does move `w:hanging` behind
+ * `w:firstLineChars`, and the 94 elements WPS wrote the other way are the whole of what that costs.
  */
 function indTag(s: ParaStyle): string {
   const attrs: string[] = [];
@@ -132,7 +138,9 @@ function paragraphProps(p: Paragraph): string {
   // `ownParaStyle` decides against the read snapshot. A paragraph whose file wrote no `w:pPr` states nothing of
   // its own, yet every property it now shows comes down the style chain (`paraLent`): the style goes on lending
   // it, so spelling it here would write a `w:pPr` the file never had. 159 of the corpus's paragraphs are in that
-  // shape, 91 of them in files whose default paragraph style states a property (`.scratch/para-no-pr.ts`). A
+  // shape, 91 of them in files whose default paragraph style states a property — 待重证, because
+  // `.scratch/para-no-pr.ts` counts over a `/tmp` list of paths that was never pinned to a cohort, and the only
+  // list it can have been fed is the quarantined one. A
   // paragraph this editor built has no snapshot, so all of its fields are its own and get spelled, which is
   // what keeps a paragraph split in two looking like the one it came from.
   const own = ownParaStyle(p.asRead, paraStyleOf(p));
@@ -168,7 +176,10 @@ function paragraphProps(p: Paragraph): string {
   if (has("spacingBefore")) spacing.push(` w:before="${Math.round(p.spacingBefore!)}"`);
   if (has("spacingAfter")) spacing.push(` w:after="${Math.round(p.spacingAfter!)}"`);
   // A height the model holds without a rule of its own is signed `w:auto`: that is §17.3.1.27's default, and
-  // the 13,396 `w:auto` elements are what the files this comes from write anyway.
+  // signing it is what the files do anyway — all 3,948 stated heights in the authorized 46 份's body/band/footnote
+  // parts name their rule beside it (2,890 `auto`, 1,004 `exact`, 54 `atLeast`; the style layer adds 212 more and
+  // signs them all too). The old cohort's 13,396 `w:auto` is quarantined arithmetic.
+  // `.scratch/authorized-spacing-census.py`.
   if (has("lineSpacing")) spacing.push(` w:line="${Math.round(p.lineSpacing!)}" w:lineRule="${p.lineSpacingRule ?? "auto"}"`);
   if (spacing.length) parts.push(`<w:spacing${spacing.join("")}/>`);
   const ind = indTag({
@@ -324,16 +335,21 @@ const RUN_PROPS: {
   },
   {
     key: "color",
-    // `w14:textFill` is the same sentence in the 2010 extension's words, so it moves with the colour. Over the 86
-    // WPS-written parts the 3656 extended fills (body plus headers/footers, 347 more in the style layer) all sit
-    // directly under a `w:rPr` that also states a `w:color` with a hex value, 2110 of them reaching our model as a
-    // slot and 1990 of those on a run carrying text (`.scratch/textfill-counted.ts`). Resolved through
-    // `word/theme/theme1.xml` — `schemeClr` name, then `lumMod`/`lumOff` — the fill names the colour `w:color`
-    // already gave in all 3296 cases that resolve, and the 360 that do not only differ in which naming generation
-    // the theme slot uses (`.scratch/textfill-theme.ts`). It is a mirror, not an extra: left standing, a colour
-    // change writes a run saying two colours at once, and which one a reader paints with is not ours to choose —
-    // measured over the 16 files with such a run, that is what saving did. Nothing is spelled for a run that never
-    // stated one, so a document without the extension does not gain a `w14:` child it never declared.
+    // `w14:textFill` is the same sentence in the 2010 extension's words, so it moves with the colour. On the
+    // authorized 46 份 the extension is spelled 58 times, in 6 份, every one of them in `word/styles.xml` (those 6
+    // are three preset templates in their `.docx` and `.dotx` forms) and none in the body or a band — so the cohort
+    // proves the shape, not a body-run audience. All 58 sit directly under a `w:rPr` that states a `w:color`, and
+    // that `w:color` states a hex value and a `w:themeColor` in all 58; the extension names the same theme slot
+    // (`tx1` for `text1`) in all 58. Two spellings cover them: `w14:solidFill/w14:schemeClr tx1` with `lumMod`
+    // 85000/`lumOff` 15000 beside `w:color w:val="262626" w:themeColor="text1" w:themeTint="D9"` (56), and
+    // `accent1` beside `4874CB` (2) (`.scratch/authorized-slot-census.py`). Whether resolving the extension through
+    // `word/theme/theme1.xml` lands on the hex `w:color` already gave is the part this cohort has not been re-run
+    // on: the 3296-that-resolve / 360-that-only-differ-in-naming-generation split and the 16-file save observation
+    // are the quarantined cohort's arithmetic, and 2,110-as-slot / 1,990-on-a-run-with-text with them.
+    // It is a mirror, not an extra, and that is why the write path still drops it with the colour: left standing,
+    // a colour change writes a run saying two colours at once, and which one a reader paints with is not ours to
+    // choose. Nothing is spelled for a run that never stated one, so a document without the extension does not
+    // gain a `w14:` child it never declared.
     tags: ["color", "textFill"],
     spell: (r, prefix) => (r.color ? `<${prefix}:color w:val="${XML_ESC(r.color.replace(/^#/, "").toUpperCase())}"/>` : ""),
   },
@@ -885,9 +901,14 @@ function documentXml(doc: WordDocument, rels: RelBuilder): string {
   const namespaces = [...declared].map(([prefix, uri]) => ` xmlns:${prefix}="${XML_ESC(uri)}"`).join("");
   const skip = ignorable ? ` mc:Ignorable="${XML_ESC(ignorable)}"` : "";
   // `w:` and `r:` are in every body this writer builds. The drawing prefixes go back only where the file
-  // itself declared them on the root: 14 of the 86 table-bearing files declare `a` on the drawing rather than
-  // on `w:document`, and a save that "helpfully" lifts it to the root has invented a declaration the file
-  // never wrote. Markup this writer generates carries its own declarations (see `imageRun`), so it needs none.
+  // itself declared them on the root, and on the authorized 46 份 that is exactly one of them: every `w:document`
+  // root declares `w, r, wp, wps, wpg, wpi, wpc, w14, w15, w10, wp14, m, o, v, wne` (`w15`/`wpsCustomData` in 43 of
+  // them) and not one declares `a` or `pic` (0 of 46 parts, `.scratch/authorized-slot-census.py`). The 16
+  // `w:drawing` in that cohort — 12 件, which is 6 template names each shipped twice (zh_CN and zh_HK), and
+  // counting them by file name is what used to report 6 — sit 4 in `document.xml` and 12 in `footer1/2/3`, and each
+  // bind `a` inside themselves, on `a:graphic`, all 16 of them. A save that "helpfully" lifted that declaration to
+  // the root has invented one the file never wrote. Markup this writer generates carries its own declarations (see
+  // `imageRun`), so it needs none.
   const fromSource = new Set(Object.keys(doc.documentNamespaces()));
   const declares = (prefix: string, uri: string): string => (fromSource.has(prefix) ? ` xmlns:${prefix}="${XML_ESC(uri)}"` : "");
   return (

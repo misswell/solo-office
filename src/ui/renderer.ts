@@ -668,8 +668,37 @@ function buildDocRibbon(): void {
   button(insert, "header", "页眉", "编辑页眉（无则新建）", () => editor?.openHF("header"));
   button(insert, "footer", "页脚", "编辑页脚（无则新建）", () => editor?.openHF("footer"));
 
-  // 审阅: the commands a reader needs to work through somebody else's changes. WPS keeps these on their own
-  // tab; this ribbon is one row, so they get their own group at the end, before the zoom control.
+  // 审阅那一簇按 WPS 自己声明的组序排（`office6/res/commands/wps/ongmani/CT_Review.kuip:199-207`：
+  // `RB_Proofing` → `RB_Comments` → `RB_Review` → `RB_Changes`，组与组之间是 `<separator/>`）。这一条是实据，
+  // 不是印象：WPS 的批注簇在修订簇**之前**，接受/拒绝单独成一组，字数统计挂在校对那一组里（`WordCountToolBar`，
+  // 同一支文件 :56）。组的中文名仍是**未取证**——`.kuip` 只给英文 source（`@Proofing` / `@Comments` /
+  // `@Track Changes` / `@Change`），`mui/zh_CN/*.qm` 是压缩字典，读不出字面。所以标签用自家的话，顺序按它的。
+  const proofing = group();
+  button(proofing, "wordCount", "字数统计", "字数统计：报出段落数、字数与字符数", () => editor?.showWordCount());
+
+  // 批注: the panel used to be reachable only by clicking a mark on the paper — so a document whose comments were
+  // scrolled off screen, or a reader who wanted to annotate the selection without hunting for a mark first, had
+  // no way in (`showComments` / `newCommentFromPanel` / `stepComment` had zero callers in `src`).
+  const comments = group();
+  button(comments, "cmtNew", "新建批注", "给选中的文字加一条批注，接着在面板里写正文", () => {
+    editor?.newCommentFromPanel();
+    syncDocRibbon();
+  });
+  button(comments, "cmtPrev", "上一条批注", "跳到上一条批注", () => {
+    editor?.stepComment(-1);
+    syncDocRibbon();
+  });
+  button(comments, "cmtNext", "下一条批注", "跳到下一条批注", () => {
+    editor?.stepComment(1);
+    syncDocRibbon();
+  });
+  button(comments, "cmtShow", "显示批注", "显示或收起批注面板", () => {
+    editor?.showComments();
+    syncDocRibbon();
+  });
+
+  // 修订: what a reader needs to work through somebody else's changes — the toggle, the list of pending ones,
+  // stepping through them, and which version of the document the paper shows.
   const review = group();
   button(review, "track", "修订", "修订：开启后编辑记为待判修订，而不是直接落定", () => {
     if (editor) editor.setTrackChanges(!editor.trackingChanges);
@@ -687,15 +716,6 @@ function buildDocRibbon(): void {
     editor?.stepRevision(1);
     syncDocRibbon();
   });
-  button(review, "revAccept", "接受全部", "接受修订：插入的留下，删除的生效", () => {
-    editor?.acceptRevisions();
-    syncDocRibbon();
-  });
-  button(review, "revReject", "拒绝全部", "拒绝修订：删除的文字回来，插入的文字去掉", () => {
-    editor?.rejectRevisions();
-    syncDocRibbon();
-  });
-  button(review, "wordCount", "字数统计", "字数统计：报出段落数、字数与字符数", () => editor?.showWordCount());
   chooser(
     review,
     "revView",
@@ -711,24 +731,14 @@ function buildDocRibbon(): void {
     },
   );
 
-  // 批注: WPS keeps these beside the revision commands on the 审阅 tab. The panel itself used to be reachable
-  // only by clicking a mark on the paper — so a document whose comments were scrolled off screen, or a reader
-  // who wanted to annotate the selection without hunting for a mark first, had no way in.
-  const comments = group();
-  button(comments, "cmtNew", "新建批注", "给选中的文字加一条批注，接着在面板里写正文", () => {
-    editor?.newCommentFromPanel();
+  // 更改: WPS keeps deciding the changes in their own group, right after the ones that track and show them.
+  const changes = group();
+  button(changes, "revAccept", "接受全部", "接受修订：插入的留下，删除的生效", () => {
+    editor?.acceptRevisions();
     syncDocRibbon();
   });
-  button(comments, "cmtPrev", "上一条批注", "跳到上一条批注", () => {
-    editor?.stepComment(-1);
-    syncDocRibbon();
-  });
-  button(comments, "cmtNext", "下一条批注", "跳到下一条批注", () => {
-    editor?.stepComment(1);
-    syncDocRibbon();
-  });
-  button(comments, "cmtShow", "显示批注", "显示或收起批注面板", () => {
-    editor?.showComments();
+  button(changes, "revReject", "拒绝全部", "拒绝修订：删除的文字回来，插入的文字去掉", () => {
+    editor?.rejectRevisions();
     syncDocRibbon();
   });
 

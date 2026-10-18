@@ -1573,6 +1573,11 @@ export function applySheetGaps(page: HTMLElement, doc: WordDocument): SheetLayou
   const zoom = parseFloat(page.style.getPropertyValue("zoom")) || 1;
   const origin = page.getBoundingClientRect().top;
   const localTopOf = (viewportTop: number): number => (viewportTop - origin) / zoom;
+  // 归属口径（#171 逐枚对拍后才定下来）：某一张纸上有没有正文、那枚算第几张，一律按**行盒的上沿**数——
+  // `units[].top` 与这里画的条带是同一条链（`.scratch/seam-straddle-dom.ts`：长段落切 7 张、67 枚行的表，
+  // 铺排的 `places` 与按条带反推的张 **0 分岔**，页数 == 条带数 + 1）。**不要按块的 `top` 认领**：一枚跨缝的块
+  // 只有一个块顶、留在上一张上，它的续段却压在下一张的开始线之下，按块顶数会把有墨的那一张读成空张
+  // （§109 七 那条「第 4 张有条带却没正文块」正是这么来的，不是铺排算错）。
   const sheetTop: number[] = [0, 0]; // 第 1 张纸的上沿就是画出来的纸盒上沿：本地坐标 0
   for (let target = 2; target <= pages; target++) {
     sheetTop.push(sheetTop[target - 1]! + paperHOf(unitSections[firstUnitOfPage(target - 1)] ?? 0) + SHEET_GAP_PX);

@@ -455,6 +455,51 @@ export function layoutUnits(page: HTMLElement): PlacedUnit[] {
 }
 
 /**
+ * 装箱那一趟读的列：每枚的**体重**按 100% 的那一份纸量，再乘回当前档；上沿仍是这一档画出来的那一处。
+ *
+ * 为什么要另量一次：一枚行盒的体重取的是 `max(line-height, 它在流里的推进)`（`lineCharges`），而推进是
+ * 浏览器按**当前档的设备像素**把字体的上下伸缩放量之后报回来的。同一档 1.62 行距、11 磅中文（`.scratch/zoom-line-height-dom.ts`，
+ * 80 段夹具逐档量）：声明 `line-height: 23.76px` 每一档都不动，可 100% 上块自己的推进是 **24.766px**（比声明高
+ * 1.006，那一截是字洒进格子上沿的墨），150% 上量到 35.625 视口 = **23.75 纸像素**，80% 上 19 = 23.75，200% 上
+ * 48.5 = 24.25。除回 zoom 回不到纸的那一份——取整发生在当前档。于是 `max` 在 100% 挑推进（24.766）、在 150% 挑
+ * 声明（23.76），一页装的枚数从 37 变 39：**换一下缩放，页界就往前挪两枚**，页数也跟着换（38、39、75、76、77、78
+ * 段这六档长度在 100% 与 150% 之间换了页数，同一份探针量的）。
+ *
+ * 页界是纸的事实：屏幕上放大只是把同一份事实画大，重排一次就等于换了一台打印机。WPS 真机换档怎么表现**未取证**
+ * （没有录屏授权），但自家两套读数必须先自洽——状态栏的页数、「第 X 页」与打印出来的那份不能各说一张。
+ * 所以这一趟把纸先摆回 100% 量高、再摆回来，量到的高乘 `zoom` 进视口空间，与 `planOf` 里 `contentHeightOf × zoom`
+ * 那一格同档（`zoomOf` 写的规矩不动，只是多这一处：与视口读数比长短的体重，得先换算到它自己那一档）。
+ *
+ * 只在 `zoom ≠ 1` 时多这两趟强制布局。摆回来之后按块逐枚对齐：哪一块在另一档里行数不一样（放大把一行挤下去
+ * 或拉上来），那一块整块退回画出来的量——那种块本身就是缩放改变了断行，页界按屏幕那份算，不硬凑。
+ */
+function unitBlocksForPacking(page: HTMLElement): { el: HTMLElement; units: PlacedUnit[] }[] {
+  const zoom = zoomOf(page);
+  if (zoom === 1) return unitBlocksOf(page);
+  // 摆回 100% 量高在前，量画出来的位置在最后：写 `zoom` 是一次 DOM 改动，浏览器按滚动锚定把这一叠纸的视口
+  // 位置挪一挪，而枚的 `top` 是**视口的绝对坐标**——下游 `applySheetGaps` 拿它与它自己现读的纸盒上沿相减
+  // （「原点只读这一次」那条守则，见该函数）。先量位置再摆档，两份读数就落在两个滚动空间里：实测 150% 上
+  // 推距凭空多垫 192 纸px，整张正文压进下一道缝（`.scratch/zoom-gap-dom.ts` 反向对照）。
+  page.style.setProperty("zoom", "1");
+  const paper = unitBlocksOf(page);
+  page.style.setProperty("zoom", String(zoom));
+  const drawn = unitBlocksOf(page);
+  return drawn.map((b, i) => {
+    const base = paper[i];
+    if (!base || base.units.length !== b.units.length) return b;
+    return {
+      el: b.el,
+      units: b.units.map((u, k) => {
+        const h = base.units[k]!;
+        const scaled: PlacedUnit = { ...u, height: h.height * zoom };
+        if (u.keepLines !== undefined && h.keepLines !== undefined) scaled.keepLines = h.keepLines * zoom;
+        return scaled;
+      }),
+    };
+  });
+}
+
+/**
  * 带子在纸上占走的那一截（纸的像素），一节一个数，挂在纸盒上：铺排、页沿推距、读数口都从这一处取，
  * 别处不另定一份（与文件头「量的口径都在这里」同一条守则）。
  *
@@ -703,8 +748,8 @@ function planOf(page: HTMLElement, doc: WordDocument): PagePlan | undefined {
   const contentHeightPx = contentHeightOf(page, sections[0]!);
   if (contentHeightPx === undefined) return undefined;
   // 装箱比的是一枚枚**画出来的**高（视口像素），而纸容量是节说的一截长度（纸的像素）：纸放大 zoom 倍，行盒
-  // 跟着放大，纸的容量也得放大同样倍数，两边才是同一个空间。这一记乘在这里，「换缩放档张数不变」就落在唯一
-  // 一处——`placementsAcrossSections` 自己不知道缩放，交出去的 `pages` 只由「量出来的高 ÷ 说出来的容量」定。
+  // 跟着放大，纸的容量也得放大同样倍数，两边才是同一个空间。这一记乘在这里——`placementsAcrossSections` 自己
+  // 不知道缩放，交出去的 `pages` 只由「量出来的高 ÷ 说出来的容量」定。
   // `PagePlan.contentHeightPx` 交回给外面的仍是纸的像素（它是报给人看的一截物理长度，不是比长短的中间量）。
   const zoom = zoomOf(page);
   // 第一节的两端让位已经写进纸上画出来的内边距（`applyBandYield` 的 `--band-yield-t/-b`），上面那一格
@@ -721,7 +766,10 @@ function planOf(page: HTMLElement, doc: WordDocument): PagePlan | undefined {
     sheets.push({ contentHeightPx: body * zoom });
   }
   const ends = sectionEndsOf(doc.blocks);
-  const blocks = unitBlocksOf(page);
+  // 高不能直接从当前这一档缩放里取：Blink 按设备像素对齐字形上下伸，同一行在 100% 流推 24.766、在 150% 推
+  // 23.75（纸的像素），于是 `max(声明, 流推)` 在两档各挑一头，接缝从 37 枚挪到 39 枚，用户滚一下缩放条就
+  // 换页。改拿 100% 那一档量高再乘回这一档的缩放（`unitBlocksForPacking`），接缝只由文档内容定。
+  const blocks = unitBlocksForPacking(page);
   const units: PlacedUnit[] = [];
   const unitSections: number[] = [];
   let passed = 0;

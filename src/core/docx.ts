@@ -4068,11 +4068,11 @@ export class WordDocument {
         .map((s) => attrsOf(s.xml));
       // Which band the page shows is the section's own statement, not the order it wrote its references in
       // (§17.10.3): the first-page band belongs to the opening page only when the section states `w:titlePg`, and
-      // an `even` band belongs to `w:evenAndOddHeaders` — which no `word/settings.xml` of the quarantined cohort
-      // turns on, and which the authorized 46 份 re-measure never read, so its state there is 待重证 — even though
-      // many sections still cite an even reference. The templates show why the
-      // switch is the file's and not the renderer's: some sections cite default, even *and* first for both bands
-      // while stating no `w:titlePg`, which is a page where 首页不同 is available and off.
+      // an `even` band belongs to `w:evenAndOddHeaders`. Measured on the authorized 46 份 (`.scratch/even-odd-audience.py`:
+      // 46 件都有 `word/settings.xml`，58 节、38 枚带引用): the switch is stated **0 枚** — the element never appears —
+      // while 4 节 do cite an `even` **footer** and none an `even` header, and none of those 4 states `w:titlePg`
+      // (the cohort states it on 2 节). So an even band is a page the file has ready but never asks to show, and the
+      // switch is the file's decision, not the renderer's. What WPS paints when a document *does* turn it on is 未取证.
       const firstPage = childSpans(elementContent(xml)).some((s) => s.tag === "titlePg");
       // A section that asks for a different first page but cites no first-page band still has the part it holds:
       // blanking the page here would take away text the file wrote. What WPS shows for that shape is 未取证.

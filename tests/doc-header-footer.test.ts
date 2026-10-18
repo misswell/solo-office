@@ -180,12 +180,13 @@ describe("docx header/footer parts travel as the file wrote them", () => {
 
   /**
    * 「首页不同」 is the section's own word for which of its bands the opening page wears (§17.10.3): a
-   * `w:type="first"` reference is the page's band when `w:titlePg` stands, and not otherwise. The local corpus
-   * is why this is a rule and not a guess — 14 of its 115 sections cite first, default and even for both bands
-   * with **no** `w:titlePg`, which is a letterhead where the switch is available and off, and picking whichever
-   * reference comes first would put the first-page part on every page of those files. `w:evenAndOddHeaders`
-   * appears in none of the 86 `word/settings.xml`, so an even reference is a part held, never a part shown on
-   * the one page this app draws.
+   * `w:type="first"` reference is the page's band when `w:titlePg` stands, and not otherwise. The choice cannot
+   * be made by whichever reference the section wrote first, and the authorized 46 份 show why the question is real
+   * rather than hypothetical (`.scratch/even-odd-audience.py`: 58 节, 38 枚带引用 — `footer:default` 26、
+   * `header:default` 6、`footer:even` 4、`footer:first` 2, no `header:even` at all). `w:titlePg` is stated on 2 节,
+   * and the 4 节 that hold an even band are not among them: an even band is a part held, never a part shown,
+   * because `w:evenAndOddHeaders` is stated **0 枚** across 46/46 `word/settings.xml` — the switch is the file's
+   * and this app has no page that asks for it (#164).
    */
   it("wears the first-page band only when the section says the first page differs", () => {
     const off = WordDocument.openBytes(makeFirstPageHeaderDocx());

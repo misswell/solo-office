@@ -162,9 +162,13 @@
       .rtabs button.on { color: var(--ink); background: #2c313a; border-color: #3a404a; }
       .rbar { display: flex; align-items: center; height: 38px; padding: 0 4px; overflow-x: auto; flex: none; }
       .rbar[hidden] { display: none; }
-      /* 装不下的那一档给一枚溢出箭头——WPS 自己的 ribbon 也带这一枚（`res/wpsongmani.kui` 的 `CommonLogicGroupShowArrow`）。
-         没有它，切窄之后用户看到的是一枚被切一半的按钮，说不出「右边还有、能滚」。
-         箭头站在 `.rbar` 外面的那一条右端，所以给行留一道右垫：滚到头的最后一枚不会被它压住。 */
+      /* 装不下的那一档给一枚看得见的箭头，否则用户看到的是一枚被切一半的按钮，说不出「右边还有、能滚」。
+         WPS 那边「单行放不下」确有声明：`res/commands/wps/ongmani/` 里 515 个 `<K*ListCommand>` 组声明有 30 个带
+         `needsinglerowmorebutton="true"`（`CT_Home.kuip:105` RB_Font、`:367` RB_Paragraph、`CT_PageLayout.kuip:152`
+         RB_Page_Setup、`CT_Insert.kuip:157` RB_Illustrations）——但它声明在**组**上，这一枚挂在**整行**右端，
+         形状不同，是已知差别。`res/wpsongmani.kui:113` 那条 tab 条上另有 `idKey="CommonLogicGroupShowArrow"`：
+         名字带 ShowArrow，指的是档名条还是组行**未取证**，只记名不当同物引用。
+         箭头站在 `.rbar` 外面那一端，所以给行留一道右垫：滚到头的最后一枚不会被它压住。 */
       .ribbon.tabbed { position: relative; }
       .ribbon.tabbed .rbar { padding-right: 34px; }
       .rover {

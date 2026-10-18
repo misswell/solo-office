@@ -521,9 +521,12 @@ function buildDocRibbon(): void {
   const bars: Record<string, HTMLElement> = {};
   const tabs: Record<string, HTMLButtonElement> = {};
   let shown = "home";
-  // 装不下的那一档要给一枚看得见的箭头：WPS 自己的 ribbon 也带这一枚（`res/wpsongmani.kui` 那条
-  // `CommonLogicGroupShowArrow`）。不给，用户看到的是一枚被切一半的按钮，说不出「这一行右边还有东西、能滚」。
-  // 滚到最右那一枚自己退场——最后一组整个进来了，留着只会挡字。
+  // 装不下的那一档要给一枚看得见的箭头：不给，用户看到的是一枚被切一半的按钮，说不出「这一行右边还有东西、能滚」。
+  // WPS 那边「单行放不下」确有声明，但形状不同：装机件 `res/commands/wps/ongmani/CT_*.kuip` 量到 515 个
+  // `<K*ListCommand>` 组声明，其中 30 个带 `needsinglerowmorebutton="true"`（如 `CT_Home.kuip:105 RB_Font`、
+  // `:367 RB_Paragraph`）——它声明在**组**上，这一枚挂在**整行**右端，是已知差别，不按同物引用。
+  // `res/wpsongmani.kui:113` 的 tab 条上另有 `idKey="CommonLogicGroupShowArrow"`：名字带 ShowArrow，指的是档名条
+  // 还是组行**未取证**。滚到最右那一枚自己退场——最后一组整个进来了，留着只会挡字。
   const more = document.createElement("button");
   more.className = "rover";
   more.textContent = "›";

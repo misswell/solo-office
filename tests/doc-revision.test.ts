@@ -4,7 +4,7 @@ import { WordDocument as Doc } from "../src/core/docx.js";
 import { writeDocx } from "../src/core/write-docx.js";
 import { OpcPackage } from "../src/core/opc.js";
 import { renderWord } from "../src/core/render.js";
-import { makeBreakableDocx, makeRevisedDocx, makeNestedRevisionDocx, makeMovedDocx, makeParaMarkDocx, makeStraddleDocx, makeMoveMarkDocx, makeLowIdDocx, makeTableRowDocx, makeLastRowDeletedDocx, makeFormatViewDocx } from "./helpers/make-revisions.js";
+import { makeBreakableDocx, makeRevisedDocx, makeNestedRevisionDocx, makeMovedDocx, makeParaMarkDocx, makeStraddleDocx, makeMoveMarkDocx, makeLowIdDocx, makeTableRowDocx, makeLastRowDeletedDocx, makeFormatViewDocx, makeFormatViewPagedDocx, makeFormatViewBreakDocx } from "./helpers/make-revisions.js";
 import { makeCommentedDocx } from "./helpers/make-comments.js";
 import { unstamped } from "./helpers/unstamp.js";
 
@@ -969,5 +969,26 @@ describe("修订视图：属性改动在「显示原文」里摆回改前那一�
     // 现值的 `rPrSlots`，纸面与它自己说的就是一套与另一套——写回不碰副本，但读回与对拍会。
     expect(shownRun.rPrSlots?.map((x) => x.tag)).toEqual(["i"]);
     expect(modelRun.rPrSlots?.map((x) => x.tag)).toEqual(["b"]);
+  });
+
+  it("竖向节奏那一族也摆得回去：prev 说的行距与断页开关上身，模型照旧说改后那一句", () => {
+    const doc = open(makeFormatViewPagedDocx());
+    const p = paragraphs(doc)[0]!;
+    expect(p).toMatchObject({ lineSpacing: 240, lineSpacingRule: "auto" });
+    expect(p.revFormat).toMatchObject({ id: 90, prev: { lineSpacing: 480, lineSpacingRule: "auto" } });
+    const shown = doc.originalView(doc.blocks)[0] as Paragraph;
+    expect([shown.lineSpacing, p.lineSpacing]).toEqual([480, 240]);
+
+    const brk = open(makeFormatViewBreakDocx());
+    const second = paragraphs(brk)[1]!;
+    expect(second.revFormat).toMatchObject({ id: 91, prev: { pageBreakBefore: true } });
+    // 现值那一句不是「没说」：段落自己带着 `w:pPr`，链上兜出来的就是「不断页」这一句（`false`），
+    // 记录把它摆回 `true` 才是另一张纸。
+    expect(second.pageBreakBefore).toBe(false);
+    expect((brk.originalView(brk.blocks)[1] as Paragraph).pageBreakBefore).toBe(true);
+    // 断页那一句是「另起一页」的声明，渲染器只认段落字段：摆回去的那一档必须把它写进 CSS，现值那一档不写。
+    expect(renderWord(brk, "original")).toContain("page-break-before:always");
+    expect(renderWord(brk, "marks")).not.toContain("page-break-before");
+    expect(second.pageBreakBefore).toBe(false);
   });
 });

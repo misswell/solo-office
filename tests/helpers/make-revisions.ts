@@ -244,3 +244,34 @@ export function makeFormatViewDocx(): Uint8Array {
 </w:document>`;
   return pack(SKELETON(document));
 }
+
+/**
+ * 「原始状态」那一档要把纸重切：`w:pPrChange` 的 `prev` 里躺着的可是竖向节奏——这一段自己说 `w:line="240"`
+ * （单倍），改前那一句是 `w:line="480"`（双倍）。件里就一段 5,000 字的中文（无空格，处处可折行），
+ * 摆回改前后同样多的行盒要占两倍高，纸的张数必须跟着变——这一族的受众与 `makeFormatViewDocx` 同一句话：
+ * 授权 46 件里 `w:pPrChange` 0 枚，靶子只有自家写出的修订件。
+ */
+export function makeFormatViewPagedDocx(): Uint8Array {
+  const long = "铺排节奏字".repeat(1000);
+  const document = `<w:document xmlns:w="${NS_W}" xmlns:r="${NS_R}">
+<w:body>
+<w:p><w:pPr><w:spacing w:line="240" w:lineRule="auto"/><w:pPrChange ${REV(90, "顾峰")}><w:pPr><w:spacing w:line="480" w:lineRule="auto"/></w:pPr></w:pPrChange></w:pPr><w:r><w:t xml:space="preserve">${long}</w:t></w:r></w:p>
+</w:body>
+</w:document>`;
+  return pack(SKELETON(document));
+}
+
+/**
+ * 另一条重切纸的来路，一枚开关就够：第二段自己没说 `w:pageBreakBefore`，`w:pPrChange` 的 `prev` 里说了。
+ * 标记态三段挤在一张纸上，原始态从第二段另起一张——不用把文字堆到页边界就能核对张数、条带数与光标归属。
+ */
+export function makeFormatViewBreakDocx(): Uint8Array {
+  const document = `<w:document xmlns:w="${NS_W}" xmlns:r="${NS_R}">
+<w:body>
+<w:p><w:r><w:t>甲 跟着纸首</w:t></w:r></w:p>
+<w:p><w:pPr><w:pPrChange ${REV(91, "顾峰")}><w:pPr><w:pageBreakBefore/></w:pPr></w:pPrChange></w:pPr><w:r><w:t>乙 改前要另起一页</w:t></w:r></w:p>
+<w:p><w:r><w:t>丙 跟在乙后面</w:t></w:r></w:p>
+</w:body>
+</w:document>`;
+  return pack(SKELETON(document));
+}

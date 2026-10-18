@@ -926,14 +926,20 @@ export class DocEditor {
     this.render();
     const again = this.host.querySelector<HTMLElement>(`:scope .hf-${which}:not(.${BAND_CLONE_CLASS})`);
     if (again) this.editHF(again);
+    // 域已经写进件，这一步就是改了字节，得由改它的这一步报。上面那趟 `commitHF` 只在带子 DOM 与模型**恰好**
+    // 不一致时顺带报一次——带子里本来没有别的字时它一个都不报（量到的：`{changed:0} → {changed:0}` 而件里域=true），
+    // 于是插完页码不 ●、关窗口不提示，刚插的页码整个丢掉。
+    this.hooks.changed();
   }
 
   /** Opens the header/footer for editing, creating one when the document had none. */
   openHF(which: "header" | "footer"): void {
     const hf = which === "header" ? this.doc.header : this.doc.footer;
+    let created = false;
     if (!hf) {
       const made = this.doc.ensureHeaderFooter(which);
       if (!made) return;
+      created = true;
       this.render();
     }
     const el = this.host.querySelector<HTMLElement>(`:scope .hf-${which}:not(.${BAND_CLONE_CLASS})`);
@@ -941,6 +947,10 @@ export class DocEditor {
       this.editHF(el);
       el.focus();
     }
+    // 件里从此多一枚部件（保存时 `headerFooterParts()` 把新建的这份写进 zip），所以这一步就改了字节，得由造
+    // 它的这一步报。留着等收笔那趟 `commitHF` 顺带报不可靠：带子开着时它比较的是 DOM 与模型，两者一样就 return，
+    // 于是不 ●、关窗口不提示，刚开的页眉整个丢掉。
+    if (created) this.hooks.changed();
   }
 
   private zoomLevel = 1;

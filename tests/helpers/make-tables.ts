@@ -382,3 +382,21 @@ export function makeCellVAlignDocx(): Uint8Array {
 </w:tbl><w:p><w:r><w:t>表外的一段</w:t></w:r></w:p>`;
   return pack(document);
 }
+
+/**
+ * 合并记录的两套范围：三行两列。第一列在「现在」是 1 行 + 2 行两段合并（第二行重启），而第二行那格挂着一枚
+ * `w:cellMerge`，记录的改前是「继续上面」——原文态整列是一整块 3 行。原文与最终态各画哪一套范围、差几行，
+ * 都从这里量。第二列每行一格，用来认「行还在、只有第一列的范围变了」。
+ */
+export function makeCellMergeViewDocx(): Uint8Array {
+  const plain = (text: string): string =>
+    `<w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:tc>`;
+  const merged = (text: string, v: string, extra = ""): string =>
+    `<w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/><w:vMerge${v ? ` w:val="${v}"` : ""}/>${extra}</w:tcPr><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:tc>`;
+  const document = `<w:tbl><w:tblPr><w:tblW w:w="4000" w:type="dxa"/><w:tblLayout w:type="fixed"/></w:tblPr><w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid>
+<w:tr>${merged("甲零", "restart")}${plain("乙零")}</w:tr>
+<w:tr>${merged("甲一", "restart", `<w:cellMerge ${REV_ATTRS(74, "林晓")}><w:vMerge/></w:cellMerge>`)}${plain("乙一")}</w:tr>
+<w:tr>${merged("甲二", "")}${plain("乙二")}</w:tr>
+</w:tbl>`;
+  return pack(document);
+}

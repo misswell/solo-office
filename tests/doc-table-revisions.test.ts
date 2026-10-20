@@ -9,6 +9,7 @@ import type { BoxPatch, CellBoxSide, TableBoxSide } from "../src/ui/doc-para-bor
 import { pack } from "./helpers/make-containers.js";
 import { makePresenceDocx } from "./helpers/make-revisions.js";
 import {
+  makeCellMergeViewDocx,
   makeCellRevisionDocx,
   makePartialCellInsDocx,
   makeRowSignatureDocx,
@@ -658,3 +659,58 @@ describe("格那一层的结构记录摆到纸上", () => {
   });
 });
 
+
+/** `w:cellMerge` 的两套范围：原文照改前那一套画、最终照现在这一套画。 */
+describe("docx 修订：合并记录的两套范围", () => {
+  const originalOf = (doc: WordDocument): Table =>
+    doc.originalView(doc.blocks).find((b) => b.kind === "table") as Table;
+  const spans = (t: Table): (number | undefined)[] => t.rows.map((r) => r[0]!.spanRows);
+
+  it("原文态按「先说的那一句」摆：合并记录说 continue，后面的整套记录不能把它顶回 restart", () => {
+    const doc = open(makeCellRevisionDocx());
+    // 同格两条记录：`cellMerge`(71) 说改前 span 0，`tcPrChange`(72) 说改前 span 1、宽 1200。
+    expect(spans(tableOf(doc))).toEqual([1, 0]);
+    const original = originalOf(doc);
+    expect(spans(original)).toEqual([0, 0]);
+    // 整套记录仍把没人答过的宽度摆回来；合并那一键归更早那条记录。
+    expect(original.rows[0]![0]).toMatchObject({ widthTwips: 1200, spanRows: 0 });
+    // 视图是复制出来的，模型本身一个字没动。
+    expect(spans(tableOf(doc))).toEqual([1, 0]);
+  });
+
+  it("拒绝全部之后与原文态画同一套范围", () => {
+    const doc = open(makeCellMergeViewDocx());
+    const before = spans(originalOf(doc));
+    expect(before).toEqual([1, 0, 0]);
+    doc.resolveRevisions("reject");
+    expect(spans(tableOf(doc))).toEqual(before);
+    const xml = saved(doc);
+    expect(xml).not.toContain("<w:cellMerge");
+    const yi = [...xml.matchAll(/<w:tc\b[\s\S]*?<\/w:tc>/g)].map((m) => m[0]).find((s) => s.includes("甲一"))!;
+    expect(yi).toContain("<w:vMerge/>");
+    expect(yi).not.toContain('w:val="restart"');
+  });
+
+  it("最终态画 1 行 + 2 行两段，原文态画一整块 3 行", () => {
+    const doc = open(makeCellMergeViewDocx());
+    const td = (html: string, text: string): string =>
+      (html.match(new RegExp(`<td[^>]*>(?:(?!</td>)[\\s\\S])*?${text}`)) ?? [""])[0]!;
+    const final = renderWord(doc, "final");
+    // 单行格不写 `rowspan="1"`，只有真的跨行才写。
+    expect(td(final, "甲零")).not.toContain("rowspan");
+    expect(td(final, "甲一")).toContain('rowspan="2"');
+    expect(td(final, "甲二")).toContain("display:none");
+    const original = renderWord(doc, "original");
+    expect(td(original, "甲零")).toContain('rowspan="3"');
+    expect(td(original, "甲一")).toContain("display:none");
+    expect(td(original, "乙零")).not.toContain("display:none");
+  });
+
+  it("没有 restart 打头的 continue 不吞字：原文态里它各自画成一格", () => {
+    const doc = open(makeCellRevisionDocx());
+    // 原文态：甲一改前是 continue，上面没有 restart——不许整列消失。
+    expect(hits(renderWord(doc, "original"), "display:none")).toBe(0);
+    // 最终态：甲一 restart 盖住甲二的 continue，甲二仍是隐藏的那一格。
+    expect(hits(renderWord(doc, "final"), "display:none")).toBe(1);
+  });
+});

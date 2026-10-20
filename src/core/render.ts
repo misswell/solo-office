@@ -799,7 +799,9 @@ function cellPaddingCss(cell: TableCell, table: Table): string {
  *
  * The covered cell stays in the page, hidden, rather than being left out. The editor re-derives the model
  * from the cells it finds, and a row that has lost one of them would lose its `w:tcPr` with it — a vertical
- * merge that survives viewing but vanishes on save is the failure this is here to avoid.
+ * merge that survives viewing but vanishes on save is the failure this is here to avoid. A `continue` with
+ * no `restart` above it covers nothing (the original face of a `w:cellMerge` can state exactly that), so it
+ * draws as its own one-row cell instead of disappearing with its text.
  */
 function mergeOf(t: Table): { rows: number; hidden: boolean }[][] {
   const startOf = t.rows.map((cells) => {
@@ -810,17 +812,20 @@ function mergeOf(t: Table): { rows: number; hidden: boolean }[][] {
       return at;
     });
   });
-  const out = t.rows.map((cells) => cells.map((c) => ({ rows: 1, hidden: c.spanRows === 0 })));
+  const out = t.rows.map((cells) => cells.map(() => ({ rows: 1, hidden: false })));
   t.rows.forEach((cells, r) => {
     cells.forEach((c, index) => {
       if (c.spanRows !== 1) return;
       let spanned = 1;
+      const covered: [number, number][] = [];
       for (let below = r + 1; below < t.rows.length; below++) {
         const continued = t.rows[below].findIndex((x, i) => x.spanRows === 0 && startOf[below][i] === startOf[r][index]);
         if (continued < 0) break;
+        covered.push([below, continued]);
         spanned += 1;
       }
       out[r][index].rows = spanned;
+      for (const [row, at] of covered) out[row][at]!.hidden = true;
     });
   });
   return out;

@@ -3510,8 +3510,9 @@ export class WordDocument {
             settled.push(rec);
             // A place-record has no properties of its own to put back, so it only ever leaves the set.
             if (cell.tcPrXml) cell.tcPrXml = decideSetXml(cell.tcPrXml, rec, properties ? outcome : "accept") || undefined;
-            if (properties && outcome === "reject") restoreCellStyle(cell, rec.prev, coversWholeSet(rec.tag));
           }
+          // 一格挂着多条记录时一次摆完，按文档顺序先说的那句算（见 `restoreCellRecords`）。
+          if (outcome === "reject") restoreCellRecords(cell, settled.filter((rec) => isPropertyRecord(rec.tag)));
           if (settled.length) {
             cell.revs = cell.revs!.filter((r) => !settled.includes(r));
             if (!cell.revs.length) delete cell.revs;
@@ -3763,7 +3764,7 @@ export class WordDocument {
             const info = row[0]?.row;
             if (info?.revFormat) restoreRowStyle(info, info.revFormat.prev);
             for (const cell of row) {
-              for (const rec of cell.revs ?? []) if (isPropertyRecord(rec.tag)) restoreCellStyle(cell, rec.prev, coversWholeSet(rec.tag));
+              restoreCellRecords(cell, (cell.revs ?? []).filter((rec) => isPropertyRecord(rec.tag)));
               walk(cell.paragraphs);
             }
           }
@@ -5914,17 +5915,28 @@ function restoreRowStyle(row: RowInfo, prev: RowStyle): void {
 }
 
 /**
- * Putting a cell back the properties a record named. A `w:tcPrChange` is a snapshot of the whole set, so the
- * keys it does not name were not set and clear first; a `w:cellMerge` names the one property it touched
- * (`w:vMerge`, which is `spanRows` here), and the rest of the cell keeps what it has.
+ * 同一格挂着多条属性记录时，`prev` 按**文档顺序先说的那一句**算。每条记录说的是「这次改之前」的样子，
+ * 后一条记的是前一条改完之后的状态；按文档顺序逐条盖上去，后一条就会把最早那一句顶掉。
+ * 例：`w:cellMerge` 的 prev 说这是 `continue`，随后 `w:tcPrChange` 的 prev 说 `restart`——逐条盖出来仍是
+ * `restart`，原文与最终态画成同一套范围（#176）。整套记录（`w:tcPrChange`）只认领还没人答过的键，
+ * 这样它清掉的是自己那一刻「本来没有」的属性，不会抹掉更早那条记录答过的属性。
  */
-function restoreCellStyle(cell: TableCell, prev: CellStyle, whole: boolean): void {
-  if (whole) {
-    for (const key of CELL_STYLE_KEYS) delete cell[key];
-    Object.assign(cell, prev);
-    return;
+function restoreCellRecords(cell: TableCell, records: CellRevision[]): void {
+  const answered = new Set<keyof CellStyle>();
+  for (const rec of records) {
+    const whole = coversWholeSet(rec.tag);
+    // `prev` 常常把每种属性都列成 `undefined`；单属性记录只认值非空的那几枚，别把没说的键也认领掉。
+    const keys = whole
+      ? CELL_STYLE_KEYS
+      : (Object.keys(rec.prev) as (keyof CellStyle)[]).filter((key) => rec.prev[key] !== undefined);
+    for (const key of keys) {
+      if (answered.has(key)) continue;
+      answered.add(key);
+      const value = rec.prev[key];
+      if (value !== undefined) (cell as unknown as Record<string, unknown>)[key] = value;
+      else if (whole) delete (cell as unknown as Record<string, unknown>)[key];
+    }
   }
-  Object.assign(cell, Object.fromEntries(Object.entries(prev).filter(([, v]) => v !== undefined)));
 }
 
 /**

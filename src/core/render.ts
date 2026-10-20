@@ -860,7 +860,16 @@ function renderTable(t: Table, doc: WordDocument, state: CommentState, gridPx?: 
             borderCss("border-right", [own?.right ?? own?.end, c2 < cells.length - 1 ? table?.insideV : undefined].find(isSet)),
           ].join("");
           const spans = [c.spanCols && c.spanCols > 1 ? ` colspan="${c.spanCols}"` : "", merge.rows > 1 ? ` rowspan="${merge.rows}"` : ""].join("");
-          return `<td${style ? ` style="${style}"` : ""}${spans}>${renderBlocks(c.paragraphs, doc, new Map(), state, gridPx)}</td>`;
+          // 格那一层的结构记录（`w:cellIns` / `w:cellDel`）说的是「这一格在不在」，行那一层的记号管不着它：
+          // 一枚记录可以只落在某一行的一格上（OOXML 记「修订的一列」时是给列里每一格盖同一个 `w:id`），
+          // 所以这一枚要摆在 `td` 上，视图才有条按接受/拒绝那一句摆的腿——与行同一条规矩，不是猜 WPS 的形状。
+          const cellRev = (c.revs ?? []).find((r) => r.tag === "cellIns" || r.tag === "cellDel");
+          const cellKind = cellRev ? (cellRev.tag === "cellIns" ? "ins" : "del") : "";
+          const cellAttrs = cellRev
+            ? ` class="rev-cell rev-${cellKind}" data-cell-rev="${cellKind}" data-cell-rev-id="${cellRev.id}" data-cell-rev-author="${esc(cellRev.author)}"${cellRev.date ? ` data-cell-rev-date="${esc(cellRev.date)}"` : ""}`
+            : "";
+          const cellShown = cellRev ? `${cellRev.author}${cellRev.date ? ` · ${cellRev.date.slice(0, 10)}` : ""} ${cellKind === "ins" ? "插入单元格" : "删除单元格"}` : "";
+          return `<td${style ? ` style="${style}"` : ""}${spans}${cellAttrs}${cellShown ? ` title="${esc(cellShown)}"` : ""}>${renderBlocks(c.paragraphs, doc, new Map(), state, gridPx)}</td>`;
         })
         .join("")}</tr>`;
     })

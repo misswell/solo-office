@@ -292,3 +292,34 @@ export function makeFacePagedDocx(): Uint8Array {
 </w:document>`;
   return pack(SKELETON(document));
 }
+
+/**
+ * 四族各摆一枚「在不在」的记录，凑一件给修订三档的**在场矩阵**当靶子（#178，格那一族同 #176）：
+ * 字（一枚 `w:ins` 长文与一枚 `w:del` 长文，够把纸推开）、段落标记（`w:pPr/w:rPr/w:del` 与 `w:ins` 各一处，
+ * 各自管着相邻两段要不要并成一条行盒）、行（`w:trPr/w:del`、普通、`w:trPr/w:ins` 三行）、
+ * 格（`w:tcPr/w:cellIns` 一枚记「这格是新加的」、`w:cellDel` 一枚记「这格被删」、外加一枚 `w:tcPrChange` 管属性——
+ * 属性那枚用**地**（现值 FF0000、改前 00FF00）当靶子，因为格的宽会被内容顶起来，量不出声明的那个数）。
+ * 受众与 `makeFormatViewDocx` 同一句话：授权 46 件里这六族记录**一枚都没有**（`.scratch/cell-struct-rev-audience.py`
+ * 量到 cellIns/cellDel/cellMerge/tcPrChange/tblPrChange/trPrChange/rPrChange/pPrChange 各 0 枚 / 46 件），
+ * 所以靶子只有自家写出的修订件与外部读入的修订件；记录按 MS 的例子拼，WPS 自己怎么写、怎么画仍未取证。
+ */
+export function makePresenceDocx(): Uint8Array {
+  const ins = "插入的长文".repeat(400);
+  const del = "删掉的长文".repeat(560);
+  const document = `<w:document xmlns:w="${NS_W}" xmlns:r="${NS_R}">
+<w:body>
+<w:p><w:r><w:t>纸首</w:t></w:r><w:ins ${REV(96, "顾峰")}><w:r><w:t xml:space="preserve">${ins}</w:t></w:r></w:ins><w:del ${REV(97, "林晓")}><w:r><w:delText xml:space="preserve">${del}</w:delText></w:r></w:del><w:r><w:t>纸尾</w:t></w:r></w:p>
+<w:p><w:pPr><w:rPr><w:del ${REV(98, "顾峰")}/></w:rPr></w:pPr><w:r><w:t>合并的上段</w:t></w:r></w:p>
+<w:p><w:r><w:t>合并的下段</w:t></w:r></w:p>
+<w:p><w:pPr><w:rPr><w:ins ${REV(99, "林晓")}/></w:rPr></w:pPr><w:r><w:t>新分的前段</w:t></w:r></w:p>
+<w:p><w:r><w:t>新分的后段</w:t></w:r></w:p>
+<w:tbl><w:tblGrid><w:gridCol w:w="900"/><w:gridCol w:w="600"/></w:tblGrid>
+<w:tr><w:trPr><w:del ${REV(100, "顾峰")}/></w:trPr><w:tc><w:tcPr><w:tcW w:w="900" w:type="dxa"/><w:cellDel ${REV(101, "林晓")}/></w:tcPr><w:p><w:r><w:t>删的行</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>它的第二格</w:t></w:r></w:p></w:tc></w:tr>
+<w:tr><w:tc><w:tcPr><w:tcW w:w="900" w:type="dxa"/><w:shd w:val="clear" w:fill="FF0000"/><w:tcPrChange ${REV(102, "顾峰")}><w:tcPr><w:shd w:val="clear" w:fill="00FF00"/></w:tcPr></w:tcPrChange></w:tcPr><w:p><w:r><w:t>留下的行</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>普通格</w:t></w:r></w:p></w:tc></w:tr>
+<w:tr><w:trPr><w:ins ${REV(103, "林晓")}/></w:trPr><w:tc><w:tcPr><w:tcW w:w="900" w:type="dxa"/><w:cellIns ${REV(104, "林晓")}/></w:tcPr><w:p><w:r><w:t>新增的行</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>新行的第二格</w:t></w:r></w:p></w:tc></w:tr>
+<w:tr><w:tc><w:tcPr><w:tcW w:w="900" w:type="dxa"/><w:cellDel ${REV(105, "顾峰")}/></w:tcPr><w:p><w:r><w:t>单格删</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:tcW w:w="600" w:type="dxa"/><w:cellIns ${REV(106, "林晓")}/></w:tcPr><w:p><w:r><w:t>单格插</w:t></w:r></w:p></w:tc></w:tr>
+</w:tbl>
+</w:body>
+</w:document>`;
+  return pack(SKELETON(document));
+}

@@ -485,9 +485,21 @@ function injectRevisionStyles(): void {
 .page.rev-final .rev-fmt, .page.rev-original .rev-fmt { text-decoration-line: none; }
 .page.rev-final .rev-mark-ins::after, .page.rev-final .rev-mark-del::after,
 .page.rev-original .rev-mark-ins::after, .page.rev-original .rev-mark-del::after { content: none; }
+/* 段落标记改的就是「这一段到此结束」那一下，所以它的修订不是藏起一个记号，而是挪开一道边界：
+   w:pPr/w:rPr/w:del 在最终状态下不再断（接受＝两段并一段），w:ins 在原始状态下本来没敲过（拒绝＝两段并一段）。
+   后一块必须自己也是段才并——标记删在表前是什么形状这里没有实据，照旧断开。链也接得上：每一枚被标记的段把自己
+   和下一段一起摆成 inline，于是 P|Q|R 两枚标记都去掉时三段走同一条行盒，R 之后那段自己仍另起一行。 */
+.page.rev-final .para[data-rev-mark="del"], .page.rev-final .para[data-rev-mark="del"] + .para,
+.page.rev-original .para[data-rev-mark="ins"], .page.rev-original .para[data-rev-mark="ins"] + .para { display: inline; }
 .page.rev-final .para-rev, .page.rev-original .para-rev { box-shadow: none; }
 .page.rev-final tr.rev-row.rev-ins .para, .page.rev-original tr.rev-row.rev-del .para { text-decoration: none; color: inherit; }
 .page.rev-final tr.rev-row.rev-ins > td:first-child, .page.rev-original tr.rev-row.rev-del > td:first-child { box-shadow: none; }
+/* 格那一层的结构记录走与行那一层同一条口径：接受掉的那格在最终状态下不在纸上，还没敲出来的那格在原始状态下不在。
+   记号摆成一圈边线，不拿底纹当记号——格的 w:shd 是写进 inline style 的，类别盖不住它，而「原始状态」正要把那枚
+   底纹摆回改前那一套（#160），两件事不能抢同一条腿。 */
+.page tr td.rev-cell-ins { box-shadow: inset 0 0 0 2px #1a6b1f; }
+.page tr td.rev-cell-del { box-shadow: inset 0 0 0 2px #b00020; }
+.page.rev-final tr td[data-cell-rev="del"], .page.rev-original tr td[data-cell-rev="ins"] { display: none; }
 `;
   document.head.append(style);
 }
@@ -3165,7 +3177,7 @@ export class DocEditor {
 
   /**
    * 「边框与底纹」那一条入口按选区派发——与 ribbon 那十条腿问的是同一个 `borderScope`：段落四条加底纹、
-   * 表六条（多内部横竖）加地、格四条加地。三层各说各的槽（`w:pBdr`/`w:shd`、`w:tblBorders`/`w:tblPr 的 shd`、
+   * 表六条（多内部横竖）加地、格四条加地。三层各说各的槽（`w:pBdr`/w:shd、`w:tblBorders`/`w:tblPr 的 shd`、
    * `w:tcBorders`/`w:tcPr 的 shd`），所以对话框把「应用于」那一层写在顶上；三层的底纹都写得回去（#145、#152）。
    */
   openBorderDialog(): void {
@@ -3413,7 +3425,7 @@ export class DocEditor {
     const entry = this.doc.revisionEntries()[index - 1];
     if (!entry) return false;
     const marks = [...this.page.querySelectorAll<HTMLElement>(
-      `[data-rev-id="${entry.id}"], [data-rev-format="${entry.id}"], [data-rev-mark-id="${entry.id}"], [data-para-rev="${entry.id}"], [data-row-rev-id="${entry.id}"]`,
+      `[data-rev-id="${entry.id}"], [data-rev-format="${entry.id}"], [data-rev-mark-id="${entry.id}"], [data-para-rev="${entry.id}"], [data-row-rev-id="${entry.id}"], [data-cell-rev-id="${entry.id}"]`,
     )];
     if (!marks.length) return false;
     this.activeRevision = entry.id;
@@ -4302,7 +4314,7 @@ function agreedBox<S extends keyof BorderSet>(sides: readonly S[], sets: readonl
   return out;
 }
 
-/** 一处一个值的物件（`w:shd` 那一枚的地）：各处说法一致才摆得出来，`auto` 与「没说」是两句话，都参与比对。 */
+/** 一处一个值的物件（w:shd 那一枚的地）：各处说法一致才摆得出来，`auto` 与「没说」是两句话，都参与比对。 */
 function agreedValue<T>(values: readonly T[]): T | undefined {
   const first = values[0];
   return values.every((value) => value === first) ? first : undefined;
@@ -4318,7 +4330,7 @@ function agreedValue<T>(values: readonly T[]): T | undefined {
  *
  * 「上一段是什么形状就带什么形状」这一套由 `carriedShape` 从模型的字段自己拼，不在这里手数——手数的版本漏过
  * `w:leftChars` 与槽位族那四项（不吸网格、三条保持规则），带过来的段就少说这几句，画出来与写回去都少一截
- * （`w:pBdr`/`w:shd` 加进模型是同一族缺口的最后一次）。
+ * （`w:pBdr`/w:shd 加进模型是同一族缺口的最后一次）。
  */
 function fresh(previous: Paragraph | undefined, doc?: WordDocument): Paragraph {
   if (!previous) return { kind: "paragraph", inlines: [] };

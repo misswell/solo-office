@@ -7,6 +7,7 @@ import { OpcPackage, text } from "../src/core/opc.js";
 import { TABLE_EDGE_SHAPE, applyBoxPatch } from "../src/ui/doc-para-border.js";
 import type { BoxPatch, CellBoxSide, TableBoxSide } from "../src/ui/doc-para-border.js";
 import { pack } from "./helpers/make-containers.js";
+import { makePresenceDocx } from "./helpers/make-revisions.js";
 import {
   makeCellRevisionDocx,
   makePartialCellInsDocx,
@@ -623,3 +624,37 @@ describe("docx 修订：表与格那一圈的改动由我们签出（w:tblPrChan
     expect(again.revisionEntries()).toEqual([]);
   });
 });
+
+/**
+ * #176 的显示腿、#178 同片：格那一层的结构记录（`w:cellIns` / `w:cellDel`）要在纸上留下可指的记号。
+ * 渲染只负责**摆记号**——藏不藏是修订视图那一档的事（`doc-edit.ts` 的 `.rev-final` / `.rev-original`），
+ * 所以这一片钉的是「三档都摆得出这四枚」，纸上按接受/拒绝那一句摆的那部分由 `.scratch/rev-presence-dom.ts` 量。
+ */
+describe("格那一层的结构记录摆到纸上", () => {
+  const pres = (): WordDocument => open(makePresenceDocx());
+  const stamps = (view: "marks" | "final" | "original"): string[] =>
+    (renderWord(pres(), view).match(/<td[^>]*data-cell-rev=[^>]*>/g) ?? []).map((s) => `${s.match(/data-cell-rev="(\w+)"/)?.[1]}#${s.match(/data-cell-rev-id="(\d+)"/)?.[1]}`);
+
+  it("四枚各归自己那一格：种类与号都对得上模型里的记录", () => {
+    expect(stamps("marks")).toEqual(["del#101", "ins#104", "del#105", "ins#106"]);
+  });
+
+  it("换档不抹记号：三档摆的是同一批记号，视图自己决定藏哪一枚", () => {
+    expect(stamps("final")).toEqual(stamps("marks"));
+    expect(stamps("original")).toEqual(stamps("marks"));
+  });
+
+  it("记号带署名与日期，窗格点得到也报得出（`revealRevision` 走 data-cell-rev-id）", () => {
+    const html = renderWord(pres(), "marks");
+    expect(html).toContain('data-cell-rev-id="105" data-cell-rev-author="顾峰"');
+    expect(html).toContain('data-cell-rev-id="106" data-cell-rev-author="林晓"');
+    expect((html.match(/data-cell-rev-date="/g) ?? []).length).toBe(4);
+  });
+
+  it("段落标记的种类照样带上——并段那一条腿靠它", () => {
+    const html = renderWord(pres(), "marks");
+    expect((html.match(/data-rev-mark="del"/g) ?? []).length).toBe(1);
+    expect((html.match(/data-rev-mark="ins"/g) ?? []).length).toBe(1);
+  });
+});
+

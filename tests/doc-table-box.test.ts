@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Table, TableBorder } from "../src/core/docx.js";
 import { WordDocument, borderDelta, syncCellBox, syncCellVAlign, syncTableBox } from "../src/core/docx.js";
-import { cellOuterSides } from "../src/core/doc-table-ops.js";
+import { allCells, cellOuterSides, cellsInSweep } from "../src/core/doc-table-ops.js";
 import { renderWord } from "../src/core/render.js";
 import { writeDocx } from "../src/core/write-docx.js";
 import { OpcPackage, text } from "../src/core/opc.js";
@@ -559,6 +559,49 @@ describe("格选区「外侧框线」的外圈几何（#151）", () => {
   };
   const shape = (t: Table, cells: { row: number; col: number }[]): [string, string][] =>
     cellOuterSides(t, cells).map(({ where, sides }) => [`${where.row},${where.col}`, [...sides].sort().join("|")]);
+
+  const names = (cells: { row: number; col: number }[]): string => cells.map((w) => `${w.row},${w.col}`).join(" ");
+
+  it("整张表的格子按页面格序数一遍，一格不多一格不少", () => {
+    const t = tableOf(open(plated([
+      ["甲", "乙", "丙", "丁"],
+      ["戊", "己", "庚", "辛"],
+      ["壬", "癸", "子", "丑"],
+      ["寅", "卯", "辰", "巳"],
+    ])));
+    expect(names(allCells(t))).toBe([0, 1, 2, 3].flatMap((r) => [0, 1, 2, 3].map((c) => `${r},${c}`)).join(" "));
+  });
+
+  it("跨表那一路的「扫到表沿」：从端点格顺页面格序扫，不走矩形", () => {
+    const t = tableOf(open(plated([
+      ["甲", "乙", "丙", "丁"],
+      ["戊", "己", "庚", "辛"],
+      ["壬", "癸", "子", "丑"],
+      ["寅", "卯", "辰", "巳"],
+    ])));
+    // 从 a22 到表尾：本行右边的、下面每一行的都在，唯独不再回头捡左边那一截。
+    expect(names(cellsInSweep(t, { row: 1, col: 1 }, { row: 3, col: 3 }))).toBe(
+      "1,1 1,2 1,3 2,0 2,1 2,2 2,3 3,0 3,1 3,2 3,3",
+    );
+    expect(names(cellsInSweep(t, { row: 0, col: 0 }, { row: 2, col: 2 }))).toBe(
+      "0,0 0,1 0,2 0,3 1,0 1,1 1,2 1,3 2,0 2,1 2,2",
+    );
+  });
+
+  it("竖合并的一带在跨表边界上只算带顶那一格，整张表也只算一次", () => {
+    const t = tableOf(open(pack(
+      `<w:tbl><w:tblPr><w:tblW w:w="3000" w:type="dxa"/><w:tblLayout w:type="fixed"/></w:tblPr>` +
+        `<w:tblGrid><w:gridCol w:w="1000"/><w:gridCol w:w="1000"/><w:gridCol w:w="1000"/></w:tblGrid>` +
+        `<w:tr><w:tc><w:tcPr><w:tcW w:w="1000" w:type="dxa"/><w:vMerge w:val="restart"/></w:tcPr><w:p><w:r><w:t>带</w:t></w:r></w:p></w:tc>` +
+        `<w:tc><w:p><w:r><w:t>a1</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>b1</w:t></w:r></w:p></w:tc></w:tr>` +
+        `<w:tr><w:tc><w:tcPr><w:tcW w:w="1000" w:type="dxa"/><w:vMerge/></w:tcPr><w:p/></w:tc>` +
+        `<w:tc><w:p><w:r><w:t>a2</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>b2</w:t></w:r></w:p></w:tc></w:tr>` +
+        `<w:tr><w:tc><w:p><w:r><w:t>c3</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>a3</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>b3</w:t></w:r></w:p></w:tc></w:tr></w:tbl>`,
+    )));
+    expect(names(cellsInSweep(t, { row: 0, col: 0 }, { row: 2, col: 2 }))).toBe("0,0 0,1 0,2 1,1 1,2 2,0 2,1 2,2");
+    expect(names(cellsInSweep(t, { row: 0, col: 0 }, { row: 1, col: 1 }))).toBe("0,0 0,1 0,2 1,1");
+    expect(names(allCells(t))).toBe("0,0 0,1 0,2 1,1 1,2 2,0 2,1 2,2");
+  });
 
   it("表中间铺 2×2：每格只写朝向块外的那两条边", () => {
     const t = tableOf(open(plated([

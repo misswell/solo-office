@@ -202,6 +202,11 @@ export function cellsInRect(t: Table, range: CellRange): CellWhere[] {
   });
 }
 
+/** Every painted cell of a table, in document order — a vertical band once, at its top. */
+export function allCells(t: Table): CellWhere[] {
+  return cellsBetween(t, 0, t.rows.length - 1, () => true);
+}
+
 /** A cell's own four edges, in the order the border commands name them. */
 export type CellSide = "top" | "left" | "bottom" | "right";
 

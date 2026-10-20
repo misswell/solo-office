@@ -3,7 +3,7 @@ import type { CommentAnchor, DocComment } from "../core/comments.js";
 import { bodyShape, commentTexts } from "../core/comments.js";
 import { DEFAULT_SECTION, EAST_ASIAN_TEXT, RUN_STYLE_KEYS, applyFacePick, applyRunPatch, borderDelta, carriedShape, cellShapeOf, countTexts, lineGridPitchTwips, ownParaStyle, ownRunStyle, paraSpacingPitch, paraStyleOf, paragraphTextsOf, runStyleOf, samePropValue, sectionEndsOf, signCellRevision, signTableRevision, stampNow, syncCellBox, syncCellVAlign, syncParaSlots, syncTableBox, tableShapeOf, twipsToPx } from "../core/docx.js";
 import type { CellWhere, TableEdit } from "../core/doc-table-ops.js";
-import { cellOuterSides, cellRangeFor, cellRect, cellsInRect, cellsInSweep, deleteColumnHere, deleteRowHere, gridColumns, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, splitHere, splitTableAt } from "../core/doc-table-ops.js";
+import { allCells, cellOuterSides, cellRangeFor, cellRect, cellsInRect, cellsInSweep, deleteColumnHere, deleteRowHere, gridColumns, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, splitHere, splitTableAt } from "../core/doc-table-ops.js";
 import { IMAGE_EXT_BY_MIME } from "../core/media.js";
 import { BAND_SOURCE_CLASS, CARRY_CLASS, CARRY_STYLE, BAND_MASTER_CLASS, PAGE_BORDER_CLASS, RUN_CARRY_CLASS, type RevisionView, fontStack, highlightColor, renderWord } from "../core/render.js";
 import { flatOf, inlineLength, isMark, keepRunIdentity } from "../core/run-identity.js";
@@ -41,6 +41,9 @@ type CellBoxEdit = {
   wasShape: CellStyle;
   wasXml?: string;
 };
+
+/** 一条选区碰到的一张顶层表，以及这张表里被碰到的那一段格子。 */
+type TableSelectionSegment = { prefix: number[]; table: Table; cells: CellWhere[] };
 
 /**
  * The names this page can bring back off a CSS colour: the seven the toolbar offers, plus §17.17.64's
@@ -2509,6 +2512,63 @@ export class DocEditor {
   }
 
   /**
+   * 选区碰到的顶层表，和每张表里被碰到的**那一段**。两端落在同一张表里时仍按 `tableSpan` 的矩形口径
+   * （嵌套表也算同一张，与合并单元格那条命令同源）；两端跑出表外、或落在别的表里时按顶层块逐张分：
+   * 端点所在的那张表从端点格**顺页面的格序**扫到表头/表沿（`cellsInSweep`——文字选区盖住的就是这一串，
+   * 不是光标那一格），夹在中间的整张算，正文段落不归这一层。
+   *
+   * WPS 自己在跨表选区里把边框写到哪一层仍未取证（`CT_Home.kuip:272-286` 只证明那是一枚按选区派发的控件）。
+   * 这里立的是「选区碰到哪张表的哪一段，就落哪一段」——此前只认光标那一格，选区一伸到表外就悄悄只改一格。
+   * 嵌套表里的跨表选区仍归它外面那一格（顶层口径），这是这一条划下的边。
+   */
+  private selectionTableSegments(): TableSelectionSegment[] {
+    const ends = this.pageSelection ?? this.rangeEnds();
+    if (!ends) {
+      const target = this.tableAt(this.caretPath());
+      return target ? [{ prefix: target.prefix, table: target.table, cells: [target.where] }] : [];
+    }
+    const from = this.tableAt(ends.start);
+    const to = this.tableAt(ends.end);
+    if (from && to && from.prefix.join() === to.prefix.join()) {
+      const cells = cellsInRect(from.table, { from: from.where, to: to.where });
+      return [{ prefix: from.prefix, table: from.table, cells: cells.length ? cells : [from.where] }];
+    }
+    const first = Math.min(ends.start.path[0] ?? 0, ends.end.path[0] ?? 0);
+    const last = Math.max(ends.start.path[0] ?? 0, ends.end.path[0] ?? 0);
+    const out: TableSelectionSegment[] = [];
+    for (let i = first; i <= last; i += 1) {
+      const block = this.doc.blocks[i];
+      if (block?.kind !== "table") continue;
+      const atStart = ends.start.path[0] === i ? this.outerCellOf(block, ends.start.path) : undefined;
+      const atEnd = ends.end.path[0] === i ? this.outerCellOf(block, ends.end.path) : undefined;
+      const edge = this.tableEdgeCells(block);
+      let cells: CellWhere[];
+      if (atStart && atEnd) cells = cellsInRect(block, { from: atStart, to: atEnd });
+      else if (atStart && edge) cells = cellsInSweep(block, atStart, edge.last);
+      else if (atEnd && edge) cells = cellsInSweep(block, edge.first, atEnd);
+      else cells = allCells(block);
+      if (!cells.length && atStart) cells = [atStart];
+      if (!cells.length && atEnd) cells = [atEnd];
+      if (cells.length) out.push({ prefix: [i], table: block, cells });
+    }
+    return out;
+  }
+
+  /** 顶层表里，一条落在格里的路径最外面那一格；正文路径（或已经不在的格）没有这一格。 */
+  private outerCellOf(table: Table, path: number[]): CellWhere | undefined {
+    if (path.length < 4 || (path.length - 1) % 3 !== 0) return undefined;
+    const where = { row: path[1] ?? 0, col: path[2] ?? 0 };
+    return table.rows[where.row]?.[where.col] ? where : undefined;
+  }
+
+  /** 页面格序里的头尾两格：跨表那一路拿端点格顺着格序扫到这两格之一（`cellsInSweep`）。 */
+  private tableEdgeCells(table: Table): { first: CellWhere; last: CellWhere } | undefined {
+    const lastRow = table.rows[table.rows.length - 1];
+    if (!lastRow?.length) return undefined;
+    return { first: { row: 0, col: 0 }, last: { row: table.rows.length - 1, col: lastRow.length - 1 } };
+  }
+
+  /**
    * Runs one structure command. Every command decides whether the shape can take it before it touches
    * anything, so a refusal costs the model nothing and only the undo entry taken for it has to come back.
    */
@@ -3282,11 +3342,17 @@ export class DocEditor {
    * 没说的边留空，留空在对话框里是「不改」。地是三态的：`auto` 是「这张表说不要自己的地」，摆得出也写得回。
    */
   tableBoxState(): BoxState<TableBoxSide> | undefined {
-    const target = this.tableAt(this.caretPath());
-    if (!target) return undefined;
-    const state: BoxState<TableBoxSide> = { sides: projectBox(TABLE_BOX_SIDES, target.table.borders) };
-    if (target.table.shading !== undefined) state.shading = target.table.shading;
-    return state;
+    const segments = this.selectionTableSegments();
+    if (!segments.length) return undefined;
+    const projected = segments.map((segment) => projectBox(TABLE_BOX_SIDES, segment.table.borders));
+    const ground = agreedValue(segments.map((segment) => segment.table.shading));
+    return {
+      sides: agreedBox(TABLE_BOX_SIDES, projected),
+      ...(ground !== undefined ? { shading: ground } : {}),
+      mixed:
+        segments.length > 1 &&
+        !segments.every((segment, i) => samePropValue(projected[i], projected[0]!) && segment.table.shading === segments[0]!.table.shading),
+    };
   }
 
   /**
@@ -3295,11 +3361,11 @@ export class DocEditor {
    * 不一致的边与地一律留空（留空=不算说话），所以「原样确定」替其余格子改写它没说过的东西这种事在这一层做不出来。
    */
   cellBoxState(): BoxState<CellBoxSide> | undefined {
-    const target = this.tableAt(this.caretPath());
-    if (!target) return undefined;
-    const cells = this.selectionCells(target)
-      .map((where) => target.table.rows[where.row]?.[where.col])
-      .filter((cell): cell is TableCell => !!cell);
+    const cells = this.selectionTableSegments().flatMap((segment) =>
+      segment.cells
+        .map((where) => segment.table.rows[where.row]?.[where.col])
+        .filter((cell): cell is TableCell => !!cell),
+    );
     if (!cells.length) return undefined;
     const projected = cells.map((cell) => projectBox(CELL_BOX_SIDES, cell.borders));
     const ground = agreedValue(cells.map((cell) => cell.shading));
@@ -3373,13 +3439,14 @@ export class DocEditor {
    * 边框那一格在三种选区里问的是三层：段落自己那一圈 `w:pBdr`、表那一圈 `w:tblBorders`、每格自己的
    * `w:tcBorders`。WPS 的 `RbTableOutsideBorder` 是**一枚按选区派发的控件**（`CT_Home.kuip:272-287` 那十条腿，
    * 表格工具那侧的边框命令绑的是同一条 `ksoCmd`），所以这里定的不是三个命令，而是同一条命令落在哪一层：
-   * 选区铺满整张表算「表」，其余落点（裸光标与没铺满的格选区）算「格」。内部横竖那三条只有表说得出
-   * （`CT_TcBorders` 没有那个槽），派发去向表——见 `tableLegPatch`。
+   * 选区碰到的每一张表都铺满算「表」，其余落点（裸光标与没铺满的格选区）算「格」；一张表也没碰到才是段落。
+   * 跨表与「从表里选到表外」按 `selectionTableSegments` 逐张分（WPS 侧未取证）。内部横竖那三条只有表说得
+   * 出（`CT_TcBorders` 没有那个槽），派发去向表——见 `tableLegPatch`。
    */
   borderScope(): "para" | "table" | "cells" {
-    const target = this.tableAt(this.caretPath());
-    if (!target) return "para";
-    return this.coversWholeTable(target.table, this.selectionCells(target)) ? "table" : "cells";
+    const segments = this.selectionTableSegments();
+    if (!segments.length) return "para";
+    return segments.every((segment) => this.coversWholeTable(segment.table, segment.cells)) ? "table" : "cells";
   }
 
   /**
@@ -3393,22 +3460,24 @@ export class DocEditor {
    */
   setTableBox(patch: BoxPatch<TableBoxSide>): boolean {
     const caret = this.caretPath();
-    const target = this.tableAt(caret);
-    if (!target) return false;
-    const table = target.table;
-    const after = patch.sides ? applyBoxPatch(table.borders, patch, TABLE_EDGE_SHAPE) : table.borders;
-    const changes = patch.sides ? borderDelta(table.borders, after) : {};
-    const ground = patch.shading !== undefined && patch.shading !== table.shading ? patch.shading : undefined;
-    if (!Object.keys(changes).length && ground === undefined) return false;
-    const wasShape = tableShapeOf(table);
-    const wasXml = table.tblPrXml;
+    const edits = this.selectionTableSegments().flatMap((segment) => {
+      const table = segment.table;
+      const after = patch.sides ? applyBoxPatch(table.borders, patch, TABLE_EDGE_SHAPE) : table.borders;
+      const changes = patch.sides ? borderDelta(table.borders, after) : {};
+      const ground = patch.shading !== undefined && patch.shading !== table.shading ? patch.shading : undefined;
+      if (!Object.keys(changes).length && ground === undefined) return [];
+      return [{ table, after, changes, ground, wasShape: tableShapeOf(table), wasXml: table.tblPrXml }];
+    });
+    if (!edits.length) return false;
     this.snapshot(caret);
-    table.borders = after;
-    if (ground !== undefined) table.shading = ground;
-    syncTableBox(table, changes, ground);
-    if (this.trackRevisions && table.revFormat?.author !== this.authorName) {
-      this.revSeq += 1;
-      signTableRevision(table, { id: this.revSeq, author: this.authorName, date: stampNow() }, wasShape, wasXml);
+    for (const edit of edits) {
+      edit.table.borders = edit.after;
+      if (edit.ground !== undefined) edit.table.shading = edit.ground;
+      syncTableBox(edit.table, edit.changes, edit.ground);
+      if (this.trackRevisions && edit.table.revFormat?.author !== this.authorName) {
+        this.revSeq += 1;
+        signTableRevision(edit.table, { id: this.revSeq, author: this.authorName, date: stampNow() }, edit.wasShape, edit.wasXml);
+      }
     }
     this.repaintWithSelection(caret);
     return true;
@@ -3421,17 +3490,17 @@ export class DocEditor {
    */
   setCellBox(patch: BoxPatch<CellBoxSide>): boolean {
     const caret = this.caretPath();
-    const target = this.tableAt(caret);
-    if (!target) return false;
     const edits: CellBoxEdit[] = [];
-    for (const where of this.selectionCells(target)) {
-      const cell = target.table.rows[where.row]?.[where.col];
-      if (!cell) continue;
-      const after = patch.sides ? applyBoxPatch(cell.borders, patch, TABLE_EDGE_SHAPE) : cell.borders;
-      const changes = patch.sides ? borderDelta(cell.borders, after) : {};
-      const ground = patch.shading !== undefined && patch.shading !== cell.shading ? patch.shading : undefined;
-      if (Object.keys(changes).length || ground !== undefined)
-        edits.push({ cell, after, changes, ground, wasShape: cellShapeOf(cell), wasXml: cell.tcPrXml });
+    for (const segment of this.selectionTableSegments()) {
+      for (const where of segment.cells) {
+        const cell = segment.table.rows[where.row]?.[where.col];
+        if (!cell) continue;
+        const after = patch.sides ? applyBoxPatch(cell.borders, patch, TABLE_EDGE_SHAPE) : cell.borders;
+        const changes = patch.sides ? borderDelta(cell.borders, after) : {};
+        const ground = patch.shading !== undefined && patch.shading !== cell.shading ? patch.shading : undefined;
+        if (Object.keys(changes).length || ground !== undefined)
+          edits.push({ cell, after, changes, ground, wasShape: cellShapeOf(cell), wasXml: cell.tcPrXml });
+      }
     }
     return this.commitCellEdits(caret, edits);
   }
@@ -3439,21 +3508,22 @@ export class DocEditor {
   /**
    * 格选区里的「外侧框线」：只给选区外圈那几条边画线，块内相邻的缝一条不动。WPS 那一枚控件在没铺满整张表时
    * 说的就是这句话；`CT_TcBorders` 只认识一格自己的四条边，所以外圈按 `cellOuterSides` 逐格算、逐格落。
-   * 没铺满整张表时这条腿才走得到这里（铺满由表那一层答，见 `borderScope`）。
+   * 没铺满整张表时这条腿才走得到这里（铺满由表那一层答，见 `borderScope`）。跨表选区逐段算：每张表只围
+   * 它自己那一段，两张表之间隔着正文，谁也不是谁的「内缝」。
    */
   setCellOutside(): boolean {
     const caret = this.caretPath();
-    const target = this.tableAt(caret);
-    if (!target) return false;
     const edits: CellBoxEdit[] = [];
-    for (const { where, sides } of cellOuterSides(target.table, this.selectionCells(target))) {
-      if (!sides.length) continue;
-      const cell = target.table.rows[where.row]?.[where.col];
-      if (!cell) continue;
-      const after = applyBoxPatch(cell.borders, cellOuterPatch(sides), TABLE_EDGE_SHAPE);
-      const changes = borderDelta(cell.borders, after);
-      if (!Object.keys(changes).length) continue;
-      edits.push({ cell, after, changes, wasShape: cellShapeOf(cell), wasXml: cell.tcPrXml });
+    for (const segment of this.selectionTableSegments()) {
+      for (const { where, sides } of cellOuterSides(segment.table, segment.cells)) {
+        if (!sides.length) continue;
+        const cell = segment.table.rows[where.row]?.[where.col];
+        if (!cell) continue;
+        const after = applyBoxPatch(cell.borders, cellOuterPatch(sides), TABLE_EDGE_SHAPE);
+        const changes = borderDelta(cell.borders, after);
+        if (!Object.keys(changes).length) continue;
+        edits.push({ cell, after, changes, wasShape: cellShapeOf(cell), wasXml: cell.tcPrXml });
+      }
     }
     return this.commitCellEdits(caret, edits);
   }
@@ -3483,13 +3553,13 @@ export class DocEditor {
    */
   setCellVAlign(valign: "top" | "center" | "bottom"): boolean {
     const caret = this.caretPath();
-    const target = this.tableAt(caret);
-    if (!target) return false;
     const edits: { cell: TableCell; wasShape: CellStyle; wasXml?: string }[] = [];
-    for (const where of this.selectionCells(target)) {
-      const cell = target.table.rows[where.row]?.[where.col];
-      if (!cell || cell.valign === valign) continue;
-      edits.push({ cell, wasShape: cellShapeOf(cell), wasXml: cell.tcPrXml });
+    for (const segment of this.selectionTableSegments()) {
+      for (const where of segment.cells) {
+        const cell = segment.table.rows[where.row]?.[where.col];
+        if (!cell || cell.valign === valign) continue;
+        edits.push({ cell, wasShape: cellShapeOf(cell), wasXml: cell.tcPrXml });
+      }
     }
     if (!edits.length) return false;
     this.snapshot(caret);
@@ -3511,14 +3581,6 @@ export class DocEditor {
     if (!target) return { inTable: false };
     const cell = target.table.rows[target.where.row]?.[target.where.col];
     return { inTable: true, valign: cell?.valign };
-  }
-
-  /** 这一击要落的格子：跨格选区里的每一格（竖合并的一带只算它起头那一格），没有跨格选区时就光标自己那一格。 */
-  private selectionCells(target: { prefix: number[]; table: Table; where: CellWhere }): CellWhere[] {
-    const span = this.tableSpan();
-    if (!span || span.prefix.join() !== target.prefix.join()) return [target.where];
-    const cells = cellsInRect(span.table, { from: span.from, to: span.to });
-    return cells.length ? cells : [target.where];
   }
 
   /** 选区是否铺满整张表：`cellRect` 的右下两条是排他的，所以比的是行高与网格宽本身。 */

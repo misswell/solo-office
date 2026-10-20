@@ -721,6 +721,11 @@ function buildDocRibbon(): void {
   button(align, "center", "中", "居中", () => editor?.setParagraph({ align: "center" }));
   button(align, "right", "右", "右对齐", () => editor?.setParagraph({ align: "right" }));
   button(align, "both", "两", "两端对齐", () => editor?.setParagraph({ align: "both" }));
+  // WPS 表格「对齐方式」的竖向那一列（`w:tcPr/w:vAlign`）：横向四枚落段上，这三枚落格上。授权 46 份里这一枚
+  // 4,130 处，页面早就在画，缺的是改它的手。光标不在表里时三枚灰着——段落没有「格子」可竖直摆。
+  button(align, "vtop", "↑", "顶端对齐", () => { editor?.setCellVAlign("top"); syncDocRibbon(); });
+  button(align, "vmid", "↕", "垂直居中", () => { editor?.setCellVAlign("center"); syncDocRibbon(); });
+  button(align, "vbot", "↓", "底端对齐", () => { editor?.setCellVAlign("bottom"); syncDocRibbon(); });
   // WPS 把这两条放在主页段落组里（`IncreaseIndent`/`DecreaseIndent`，图标 `indent_increase_kd`/`indent_decrease_kd`，
   // Touch Bar 图标的中文标题写的就是「增加缩进量」「减少缩进量」），右键菜单里也有同名的一对。
   button(align, "outdent", "缩进−", "减少缩进量", () => editor?.shiftParagraphIndent(-1));
@@ -1003,6 +1008,18 @@ function syncDocRibbon(force = false): void {
   mark("center", state?.align === "center");
   mark("right", state?.align === "right");
   mark("both", state?.align === "both");
+  // 竖向对齐回显的是**格**那一句，不是段那一句：光标在表外时三枚都灰、都不亮；在表里时格没写就是顶部
+  // （`w:vAlign` 的默认值，§17.4.84），写了哪一档就亮哪一枚。
+  const cellState = editor?.cellAlignState();
+  for (const [key, want] of [
+    ["vtop", cellState?.inTable && (cellState.valign === undefined || cellState.valign === "top")],
+    ["vmid", cellState?.inTable && cellState.valign === "center"],
+    ["vbot", cellState?.inTable && cellState.valign === "bottom"],
+  ] as [string, boolean][]) {
+    const b = ctl[key] as HTMLButtonElement | undefined;
+    if (b) b.disabled = !cellState?.inTable;
+    mark(key, !!want);
+  }
   mark("bullet", state?.list === "bullet");
   mark("number", state?.list === "number");
   // 边框那一格的列子问的是「这一击落在哪一层」：光标在正文、在表上铺满整张、还是只圈了几格。所以它随选区

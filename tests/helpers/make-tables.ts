@@ -367,3 +367,18 @@ export function makeRowAlignDocx(): Uint8Array {
 </w:tbl>`;
   return pack(document);
 }
+
+/**
+ * 一格里的字往哪儿靠（`w:tcPr/w:vAlign`）：第一行高 1440 缇（1 英寸），字少，所以三档在纸上真的差出位置。
+ * 三格分别「没说话」（顶部）、`bottom`、`center`；甲格还带着自己的框线与底纹，改竖向对齐时它们必须原样不动、
+ * 新的 `w:vAlign` 按 `CT_TcPr` 的孩子序排在它们之后。第二行是三格没说过的样子，表外还有一段用于「光标不在表里」。
+ */
+export function makeCellVAlignDocx(): Uint8Array {
+  const cell = (text: string, tcPr: string): string =>
+    `<w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/>${tcPr}</w:tcPr><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:tc>`;
+  const document = `<w:tbl><w:tblPr><w:tblW w:w="6000" w:type="dxa"/><w:tblLook w:val="04A0"/></w:tblPr><w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid>
+<w:tr><w:trPr><w:trHeight w:val="1440" w:hRule="atLeast"/></w:trPr>${cell("甲格", '<w:tcBorders><w:bottom w:val="single" w:sz="4" w:space="0" w:color="0070C0"/></w:tcBorders><w:shd w:val="clear" w:color="auto" w:fill="FFF2CC"/>')}${cell("乙格", '<w:vAlign w:val="bottom"/>')}${cell("丙格", '<w:vAlign w:val="center"/>')}</w:tr>
+<w:tr>${cell("丁格", "")}${cell("戊格", '<w:tcBorders><w:top w:val="dotted" w:sz="4" w:space="0" w:color="FF0000"/></w:tcBorders>')}${cell("己格", "")}</w:tr>
+</w:tbl><w:p><w:r><w:t>表外的一段</w:t></w:r></w:p>`;
+  return pack(document);
+}

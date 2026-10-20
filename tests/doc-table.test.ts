@@ -186,7 +186,9 @@ describe("docx table rendering", () => {
     expect(html).toContain("background:#FFF2CC;");
     expect(html).toContain("writing-mode:vertical-rl;");
     expect(html).toContain("white-space:nowrap;");
-    expect(html).toContain("vertical-align:center;");
+    // `vertical-align` 认的是 `middle`，不是文件里的 `center`：写成 `center` 是无效值，浏览器丢掉它、
+    // 字照旧贴着上沿——授权 46 份里 1,816 枚 center 全部没画对（#191 的 DOM 闸门量出来的）。
+    expect(html).toContain("vertical-align:middle;");
     expect(html).toContain("vertical-align:bottom;");
     expect(html).toContain("border-top:1px double currentColor;");
     expect(html).toContain("border-bottom:1px dotted #0070C0;");

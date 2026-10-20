@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Table, TableBorder } from "../src/core/docx.js";
-import { WordDocument, borderDelta, syncCellBox, syncTableBox } from "../src/core/docx.js";
+import { WordDocument, borderDelta, syncCellBox, syncCellVAlign, syncTableBox } from "../src/core/docx.js";
 import { renderWord } from "../src/core/render.js";
 import { writeDocx } from "../src/core/write-docx.js";
 import { OpcPackage, text } from "../src/core/opc.js";
@@ -477,5 +477,66 @@ describe("docx 表格与单元格的「边框与底纹」落笔（w:tblBorders /
       [undefined, "auto"],
     ]);
     expect(save(again)).toBe(save(doc));
+  });
+});
+
+describe("格竖向对齐 w:tcPr/w:vAlign", () => {
+  const cells = (doc: WordDocument) => tableOf(doc)!.rows.flat();
+  const FIXTURE = pack(
+    `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/></w:tblPr><w:tblGrid><w:gridCol w:w="2500"/><w:gridCol w:w="2500"/></w:tblGrid>` +
+      `<w:tr><w:tc><w:tcPr><w:tcW w:w="2500" w:type="dxa"/><w:tcBorders><w:bottom w:val="dotted" w:sz="4" w:space="0" w:color="0070C0"/></w:tcBorders><w:shd w:val="clear" w:color="auto" w:fill="FFF2CC"/></w:tcPr><w:p><w:r><w:t>甲格</w:t></w:r></w:p></w:tc>` +
+      `<w:tc><w:tcPr><w:tcW w:w="2500" w:type="dxa"/><w:vAlign w:val="bottom"/></w:tcPr><w:p><w:r><w:t>乙格</w:t></w:r></w:p></w:tc></w:tr>` +
+      `<w:tr><w:tc><w:tcPr><w:tcW w:w="2500" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>丙格</w:t></w:r></w:p></w:tc>` +
+      `<w:tc><w:tcPr><w:tcW w:w="2500" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>丁格</w:t></w:r></w:p></w:tc></w:tr></w:tbl>`,
+  );
+
+  it("改一档是换槽：同一枚孩子只留一处，位置仍按 CT_TcPr 的孩子序", () => {
+    const doc = open(FIXTURE);
+    const yi = cells(doc)[1]!;
+    expect(yi.valign).toBe("bottom");
+    syncCellVAlign(yi, "center");
+    yi.valign = "center";
+    const pr = setOf(save(doc), "tcPr", 1);
+    expect([...pr.matchAll(/<w:vAlign\b/g)].length).toBe(1);
+    expect(childOf(pr, "vAlign")).toBe('<w:vAlign w:val="center"/>');
+    expect(pr.indexOf("<w:tcW")).toBeLessThan(pr.indexOf("<w:vAlign"));
+  });
+
+  it("格本来没写这一句时按序插进去，不挤走相邻的底纹", () => {
+    const doc = open(FIXTURE);
+    const jia = cells(doc)[0]!;
+    syncCellVAlign(jia, "top");
+    jia.valign = "top";
+    const pr = setOf(save(doc), "tcPr", 0);
+    expect(childOf(pr, "vAlign")).toBe('<w:vAlign w:val="top"/>');
+    expect(pr.indexOf("<w:tcBorders")).toBeLessThan(pr.indexOf("<w:shd"));
+    expect(pr.indexOf("<w:shd")).toBeLessThan(pr.indexOf("<w:vAlign"));
+  });
+
+  it("保存再读开三档都读得回来，第二次保存字节不变", () => {
+    const doc = open(FIXTURE);
+    const [jia, yi, bing] = cells(doc);
+    syncCellVAlign(jia!, "top");
+    jia!.valign = "top";
+    syncCellVAlign(yi!, "center");
+    yi!.valign = "center";
+    syncCellVAlign(bing!, "bottom");
+    bing!.valign = "bottom";
+    const again = open(writeDocx(doc));
+    expect(cells(again).map((c) => c.valign)).toEqual(["top", "center", "bottom", undefined]);
+    expect(save(again)).toBe(save(doc));
+  });
+
+  it("格子没有原件的 `w:tcPr` 时由写出器按字段拼，槽这一条不动它", () => {
+    const bare = pack(
+      `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/></w:tblPr><w:tblGrid><w:gridCol w:w="5000"/></w:tblGrid>` +
+        `<w:tr><w:tc><w:p><w:r><w:t>无属性格</w:t></w:r></w:p></w:tc></w:tr></w:tbl>`,
+    );
+    const doc = open(bare);
+    const cell = cells(doc)[0]!;
+    syncCellVAlign(cell, "center");
+    expect(cell.tcPrXml).toBeUndefined();
+    cell.valign = "center";
+    expect(save(doc)).toContain('<w:vAlign w:val="center"/>');
   });
 });

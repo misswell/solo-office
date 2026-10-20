@@ -729,7 +729,7 @@ function tableAlign(t: Table): string {
 }
 
 /** `w:vAlign` on a cell, in the words CSS uses for the same thing. */
-const VALIGN: Record<string, string> = { top: "top", center: "center", bottom: "bottom" };
+const VALIGN: Record<string, string> = { top: "top", center: "middle", bottom: "bottom" };
 
 /** `w:textDirection`: the vertical spellings are the ones a page can actually draw. */
 function writingMode(direction: string): string {

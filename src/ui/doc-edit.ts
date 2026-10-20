@@ -1,7 +1,7 @@
 import type { Block, BorderSet, Carried, CarriedInline, CellStyle, FormatRevision, HeaderFooter, HfSegment, Inline, LineSpacingRule, ParaStyle, PageGeometry, PageSetup, Paragraph, ParagraphFormatRevision, PropSlot, Revision, RevisionEntry, RowInfo, RunStyle, Section, Table, TableBorder, TableCell, TableStyle, WordDocument } from "../core/docx.js";
 import type { CommentAnchor, DocComment } from "../core/comments.js";
 import { bodyShape, commentTexts } from "../core/comments.js";
-import { DEFAULT_SECTION, EAST_ASIAN_TEXT, RUN_STYLE_KEYS, applyFacePick, applyRunPatch, borderDelta, carriedShape, cellShapeOf, countTexts, lineGridPitchTwips, ownParaStyle, ownRunStyle, paraSpacingPitch, paraStyleOf, paragraphTextsOf, runStyleOf, samePropValue, sectionEndsOf, signCellRevision, signTableRevision, stampNow, syncCellBox, syncParaSlots, syncTableBox, tableShapeOf, twipsToPx } from "../core/docx.js";
+import { DEFAULT_SECTION, EAST_ASIAN_TEXT, RUN_STYLE_KEYS, applyFacePick, applyRunPatch, borderDelta, carriedShape, cellShapeOf, countTexts, lineGridPitchTwips, ownParaStyle, ownRunStyle, paraSpacingPitch, paraStyleOf, paragraphTextsOf, runStyleOf, samePropValue, sectionEndsOf, signCellRevision, signTableRevision, stampNow, syncCellBox, syncCellVAlign, syncParaSlots, syncTableBox, tableShapeOf, twipsToPx } from "../core/docx.js";
 import type { CellWhere, TableEdit } from "../core/doc-table-ops.js";
 import { cellRangeFor, cellRect, cellsInRect, cellsInSweep, deleteColumnHere, deleteRowHere, gridColumns, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, splitHere, splitTableAt } from "../core/doc-table-ops.js";
 import { IMAGE_EXT_BY_MIME } from "../core/media.js";
@@ -3436,6 +3436,44 @@ export class DocEditor {
     }
     this.repaintWithSelection(caret);
     return true;
+  }
+
+  /**
+   * 竖向对齐那一击：`w:tcPr/w:vAlign`。WPS 的表格「对齐方式」九宫格里，横向那一句落在段上，纵向这一句落在格上——
+   * 授权 46 份里这一枚有 4,130 处（顶 1,502 / 中 1,816 / 底 812，8 个文件），渲染与写回早就有，缺的是让用户改的那条命令。
+   * 与边框那一腿同一套落点与留痕：逐格比、逐格写，本来就这么说的那格一个字节不动；开着修订时逐格签一枚
+   * `w:tcPrChange`（prev 集里带 `valign`，拒绝时摆回改前那一句）。
+   */
+  setCellVAlign(valign: "top" | "center" | "bottom"): boolean {
+    const caret = this.caretPath();
+    const target = this.tableAt(caret);
+    if (!target) return false;
+    const edits: { cell: TableCell; wasShape: CellStyle; wasXml?: string }[] = [];
+    for (const where of this.selectionCells(target)) {
+      const cell = target.table.rows[where.row]?.[where.col];
+      if (!cell || cell.valign === valign) continue;
+      edits.push({ cell, wasShape: cellShapeOf(cell), wasXml: cell.tcPrXml });
+    }
+    if (!edits.length) return false;
+    this.snapshot(caret);
+    for (const edit of edits) {
+      edit.cell.valign = valign;
+      syncCellVAlign(edit.cell, valign);
+      if (this.trackRevisions && !(edit.cell.revs ?? []).some((r) => r.tag === "tcPrChange" && r.author === this.authorName)) {
+        this.revSeq += 1;
+        signCellRevision(edit.cell, { id: this.revSeq, author: this.authorName, date: stampNow() }, edit.wasShape, edit.wasXml);
+      }
+    }
+    this.repaintWithSelection(caret);
+    return true;
+  }
+
+  /** 竖向对齐按钮的回显：光标不在表里时三枚都该是灰的；在表里时说格自己那一句（没说就是顶部）。 */
+  cellAlignState(): { inTable: boolean; valign?: string } {
+    const target = this.tableAt(this.caretPath());
+    if (!target) return { inTable: false };
+    const cell = target.table.rows[target.where.row]?.[target.where.col];
+    return { inTable: true, valign: cell?.valign };
   }
 
   /** 这一击要落的格子：跨格选区里的每一格（竖合并的一带只算它起头那一格），没有跨格选区时就光标自己那一格。 */

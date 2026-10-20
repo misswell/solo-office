@@ -5506,6 +5506,18 @@ export function syncCellBox(cell: TableCell, changes: BorderSet, shading?: strin
   cell.tcPrXml = next;
 }
 
+/**
+ * 一格这一击改的竖向对齐写回它自己的 `w:tcPr`。`w:vAlign` 在原件里是槽（模型没读它之前一直原样带着），
+ * 所以这一击是**换槽**而不是追加：同一枚孩子只留一处，位置按 `CT_TcPr` 的孩子序。没有原件的格子由写出器
+ * 按 `cell.valign` 拼（`write-docx.ts` 那条早就有）。
+ */
+export function syncCellVAlign(cell: TableCell, valign: string): void {
+  const own = cell.tcPrXml;
+  if (!own) return;
+  const prefix = tagPrefix(own);
+  cell.tcPrXml = replaceElementChild(own, "vAlign", `<${prefix}:vAlign ${prefix}:val="${valign}"/>`, TCPR_CHILD_ORDER);
+}
+
 /** 一套属性在孩子里说过的那几枚：别人的待裁决不算进这一份快照。 */
 const statedChildren = (setXml: string): PropSlot[] =>
   childSpans(elementContent(setXml))

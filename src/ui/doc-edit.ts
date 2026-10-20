@@ -397,6 +397,131 @@ export interface CaretMark {
 /** What the four 选择 cells commands answer: whether the page can show such a range, and how many cells it lit up. */
 export type TableSelection = { ok: boolean; reason?: string; selected?: number };
 
+/**
+ * 「定位」能答出口的三种情形。`shown` 是唯一把光标放上纸的一档：记号在当前显示状态下有矩形，选区、点亮、滚动
+ * 都落在它身上。`hidden` 是模型里有这条记录、页上也有它的记号，但读者此刻看不见（最终状态里的 `w:del`、原始
+ * 状态里的 `w:ins`、已被接受或拒绝掉的行/格）——不落点，因为选区放进一棵 `display:none` 的子树等于把光标拔出纸面。
+ * `absent` 是页上连记号都找不回（锚在页眉带里、标记被重整吞掉、条目本身不在名单上）。
+ */
+export type RevealOutcome = "shown" | "hidden" | "absent";
+
+/** 浏览器给不给这枚元素矩形——「画在纸上」的唯一可量口径（§178 三档、#189 定位共用）。 */
+const drawnOnPaper = (els: HTMLElement[]): HTMLElement[] => els.filter((el) => el.getClientRects().length > 0);
+
+/**
+ * 一趟「定位」只指一处，所以两族的底一起带走：修订点亮着第 3 处、批注卡片又点亮了第 1 条，纸上就是同时写着
+ * 「你在这儿」的两个地方。认行的那圈高亮在各自窗格里由 `releaseFromPage`/`setActive(null)` 一并让位。
+ */
+const clearRevealHits = (page: HTMLElement): void => {
+  for (const stale of page.querySelectorAll<HTMLElement>(".solo-rev-hit, .solo-cmt-anchor-hit")) {
+    stale.classList.remove("solo-rev-hit", "solo-cmt-anchor-hit");
+  }
+};
+
+/** 元素后面那一处：锚着的字此刻不画时，退到画得出来的记号旁边，光标至少在纸上，读者看得见记号本身。 */
+const caretAfter = (el: HTMLElement): Range => {
+  const range = document.createRange();
+  range.setStartAfter(el);
+  range.collapse(true);
+  return range;
+};
+
+/** 元素前面那一处：记号后面那一处放不下的时候，前面还有一处。 */
+const caretBefore = (el: HTMLElement): Range => {
+  const range = document.createRange();
+  range.setStartBefore(el);
+  range.collapse(true);
+  return range;
+};
+
+/**
+ * 一段里每一处文字位置，段尾优先。段落级的记号（`w:pPrChange`、断点）没有自己的字，照「段尾」放会落进段末那枚
+ * 不画出来的标记里——量到的形状是段落本身有矩形、光标 0 枚，所以一处一处往上试而不是只挑段尾那一处。
+ */
+const caretSpotsIn = (root: HTMLElement): Range[] => {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const spots: Range[] = [];
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const text = node as Text;
+    const length = text.textContent?.length ?? 0;
+    if (!length) continue;
+    const range = document.createRange();
+    range.setStart(text, length);
+    range.collapse(true);
+    spots.unshift(range);
+  }
+  return spots;
+};
+
+/** 圈住这一串记号罩着的内容：修订与批注的第一候选都是「读者看得见被改/被批的那一截」。 */
+const spanOver = (els: HTMLElement[]): Range => {
+  const first = els[0]!;
+  const last = els[els.length - 1]!;
+  const range = document.createRange();
+  range.setStartBefore(first.firstChild ?? first);
+  range.setEndAfter(last.lastChild ?? last);
+  return range;
+};
+
+/**
+ * 一处光标看不看得见：选区自己有矩形，或者它夹在一处画得出来的地方里——父级画得出来，且紧挨着的那一枚有矩形
+ * 或有字。夹在两个元素之间的折叠光标，Blink 常常一枚矩形都不给，但那一处读者看得见、点得进（零长批注的引用
+ * 标记旁就是这个形状）。`display:none` 的子树里两样都没有，所以被当前显示状态藏起来的那一截仍然落不成点。
+ */
+const caretVisible = (spot: Range): boolean => {
+  if (spot.getClientRects().length) return true;
+  const holder = spot.startContainer;
+  const host = holder.nodeType === Node.TEXT_NODE ? holder.parentElement : (holder as HTMLElement);
+  if (!host?.getClientRects().length) return false;
+  if (holder.nodeType === Node.TEXT_NODE) return true;
+  const beside = (n: Node | undefined): boolean =>
+    n?.nodeType === Node.TEXT_NODE ? !!n.textContent?.trim() : n?.nodeType === Node.ELEMENT_NODE && (n as HTMLElement).getClientRects().length > 0;
+  return beside(host.childNodes[spot.startOffset - 1]) || beside(host.childNodes[spot.startOffset]);
+};
+
+/**
+ * 落点按**放进选区之后**量。游离的一枚 Range 自己算得出矩形，不代表它成为 live 选区后还在：折叠光标夹在两个元素
+ * 之间时量到的形状是同一条批注第一趟 0 枚矩形、第二趟 1 枚。所以候选逐个放上去，第一个看得见落得下的才算落点；
+ * 全放不下就把读者原来的选区放回原处——一次没落成的「定位」不该动他的光标。
+ */
+const landFirstDrawn = (spots: Range[], sel: Selection | null): Range | undefined => {
+  if (!sel || !spots.length) return undefined;
+  const saved = Array.from({ length: sel.rangeCount }, (_, i) => sel.getRangeAt(i).cloneRange());
+  for (const spot of spots) {
+    sel.removeAllRanges();
+    sel.addRange(spot);
+    if (sel.rangeCount && (sel.getRangeAt(0).getClientRects().length > 0 || caretVisible(spot))) return spot;
+  }
+  sel.removeAllRanges();
+  for (const restored of saved) sel.addRange(restored);
+  return undefined;
+};
+
+/**
+ * 修订的落点候选：整截记号 → 记号前后 → 记号所在那一行里画得出来的文字位置。段落级（`w:pPrChange`、断点）从第二
+ * 档起就没有自己的字可圈，直接走行里那一档。三档 × 各族量出来的形状都走这三条。
+ */
+const revisionSpots = (drawn: HTMLElement[]): Range[] => {
+  const first = drawn[0]!;
+  const last = drawn[drawn.length - 1]!;
+  if (first.classList.contains("para")) return caretSpotsIn(last);
+  const para = first.closest<HTMLElement>(".para");
+  return [spanOver(drawn), caretAfter(last), caretBefore(first), ...(para ? caretSpotsIn(para) : [])];
+};
+
+/** 批注的落点候选：先圈住锚着的那一截，再退到锚前后，最后退到锚所在那一行里画得出来的文字位置。 */
+const commentSpots = (shown: HTMLElement[], drawn: HTMLElement[]): Range[] => {
+  if (!drawn.length) return [];
+  const first = drawn[0]!;
+  const para = first.closest<HTMLElement>(".para");
+  return [
+    ...(shown.length ? [spanOver(shown)] : []),
+    caretAfter(drawn[drawn.length - 1]!),
+    caretBefore(first),
+    ...(para ? caretSpotsIn(para) : []),
+  ];
+};
+
 /** The body as one character stream, plus the paragraph each span of that stream came from and the
  *  stretch of paragraphs it belongs to: neighbours inside one stretch can be joined or split, and a
  *  paragraph on the other side of a table wall never is. */
@@ -2000,14 +2125,16 @@ export class DocEditor {
    * 定位到第 `n` 条批注：号码与纸上的批注编号**同源**——`render.ts` 那枚 `numbers` 映射就是 `this.doc.comments`
    * 的下标 + 1（回复也占一个号，虽然它自己没有标记、纸上不显号），这里数的是同一个数组，「打哪个号」与
    * 「纸上标着几号」不是两份算法。落点走审阅窗格那条「定位」`revealComment`：锚着文字的那条选中那段文字；
-   * 回复没有标记，跳到父批注那一段；一个标记都找不回来的（锚在页眉带里、标记被重整吞掉）落不了点、返回
-   * false。号码越界同样 false（对话框的 1..N 来自同一刻的 `doc.comments.length`，这是第二道闸门）。WPS
-   * 真机上「批注」目标数的是不是同一份下标、回复算不算一枚**未取证**。
+   * 回复没有标记，跳到父批注那一段；一个标记都找不回来的（锚在页眉带里、标记被重整吞掉）落不了点、回 `absent`。
+   * 有标记但当前显示状态不画它（锚在一段被删掉的字上而此刻是最终状态）同样不落点、回 `hidden`——这两档在对话框
+   * 里读起来是同一句「找不到」，但对纸面光标是两种命运，所以 `revealComment` 分开回。号码越界同样 false（对话框
+   * 的 1..N 来自同一刻的 `doc.comments.length`，这是第二道闸门）。WPS 真机上「批注」目标数的是不是同一份下标、
+   * 回复算不算一枚、藏起来的那条报的是哪句**未取证**。
    */
   goToComment(n: number): boolean {
     if (!this.page) return false;
     if (!Number.isInteger(n) || n < 1 || n > this.doc.comments.length) return false;
-    return this.revealComment(this.doc.comments[n - 1]!.id);
+    return this.revealComment(this.doc.comments[n - 1]!.id) === "shown";
   }
 
   /**
@@ -3418,54 +3545,60 @@ export class DocEditor {
   /**
    * 定位到第 N 条修订: selects what the change covers and brings it into view, the way clicking a row in
    * WPS' 审阅窗格 jumps to the change it lists. A break and a paragraph's property change have no
-   * characters of their own to select, so the caret goes to the end of the paragraph that carries them.
+   * characters of their own to select, so the caret goes to a text position inside the paragraph that carries
+   * them — 一段里画得出来的那一处，不是段尾那个可能没有矩形的边界。
+   *
+   * 「在场」与 #178 三档同一条规矩：一枚记录的记号画不画得出来，问的是浏览器给不给它矩形。当前显示状态
+   * 把它藏起来时（`w:del` 的字在最终状态、`w:ins` 的字在原始状态、被接受的行或格…）这里**不落点**并回
+   * `hidden`——把选区放进一棵 `display:none` 的子树里，光标就不在纸上了：状态栏那几格按 §126 的规矩留着
+   * 上一趟的读数，打字还落在读者看不见的地方，而窗格却报「已定位」。
    */
-  revealRevision(index: number): boolean {
-    if (!this.page) return false;
+  revealRevision(index: number): RevealOutcome {
+    if (!this.page) return "absent";
     const entry = this.doc.revisionEntries()[index - 1];
-    if (!entry) return false;
+    if (!entry) return "absent";
     const marks = [...this.page.querySelectorAll<HTMLElement>(
       `[data-rev-id="${entry.id}"], [data-rev-format="${entry.id}"], [data-rev-mark-id="${entry.id}"], [data-para-rev="${entry.id}"], [data-row-rev-id="${entry.id}"], [data-cell-rev-id="${entry.id}"]`,
     )];
-    if (!marks.length) return false;
+    if (!marks.length) return "absent";
+    // 窗格先认这一行：清单的加粗说的是「读者现在数到第几处」，与纸上画不画得出来是两件事。
     this.activeRevision = entry.id;
-    // One change at a time is lit: without this, stepping 下一条 accumulates a flash on every row visited
-    // since the last render, so the page shows the whole walk rather than where the reader now is.
-    for (const stale of this.page.querySelectorAll<HTMLElement>(".solo-rev-hit")) stale.classList.remove("solo-rev-hit");
-    for (const el of marks) el.classList.add("solo-rev-hit");
-    const sel = document.getSelection();
-    if (sel) {
-      const range = document.createRange();
-      const first = marks[0];
-      const last = marks[marks.length - 1];
-      if (first.classList.contains("para")) {
-        range.selectNodeContents(last);
-        range.collapse(false);
-      } else {
-        range.setStartBefore(first.firstChild ?? first);
-        range.setEndAfter(last.lastChild ?? last);
-      }
-      sel.removeAllRanges();
-      sel.addRange(range);
-    }
-    marks[0].scrollIntoView({ block: "center" });
-    this.page.focus({ preventScroll: true });
     this.review?.revealFromPage(entry.id);
-    return true;
+    // 上一趟那句「不画出来」讲的是**上一趟**：这一趟无论落不落成都先收掉，落不成的话由窗格按本趟的档位再写上。
+    this.review?.clearNotice();
+    const drawn = drawnOnPaper(marks);
+    // One change at a time is lit: without this, stepping 下一条 accumulates a flash on every row visited
+    // since the last render, so the page shows the whole walk rather than where the reader now is. 落不成的一趟
+    // 也要把上一处的底带走——纸上还亮着前一处、窗格却已经认了另一行，那也是一句假话。
+    clearRevealHits(this.page);
+    this.panel?.setActive(null);
+    if (!drawn.length) return "hidden";
+    const landed = landFirstDrawn(revisionSpots(drawn), document.getSelection());
+    if (!landed) return "hidden";
+    for (const el of drawn) el.classList.add("solo-rev-hit");
+    drawn[0]!.scrollIntoView({ block: "center" });
+    this.page.focus({ preventScroll: true });
+    return "shown";
   }
 
   /**
    * WPS's 下一条修订 / 上一条修订: walks the rows in the order `revisionEntries()` lists them, wrapping at
    * both ends, and answers the row it landed on. The first 下一条 from no row at all is the first one.
+   *
+   * 落在哪一档也一起答：`hidden` 是这一趟确实换了行、但纸上没有可放光标的地方（当前显示状态不画它）。窗格拿
+   * 这一句来决定要不要说「不画出来」，而不是默默把清单的加粗挪走。
    */
-  stepRevision(step: 1 | -1): number | undefined {
+  stepRevision(step: 1 | -1): { index: number; outcome: RevealOutcome } | undefined {
     const list = this.doc.revisionEntries();
     if (!list.length) return undefined;
     const current = list.findIndex((e) => e.id === this.activeRevision);
     const at = current < 0 ? (step === 1 ? 0 : list.length - 1) : (current + step + list.length) % list.length;
     const target = list[at]!;
-    this.revealRevision(target.index);
-    return target.index;
+    const outcome = this.revealRevision(target.index);
+    // 游标由走这一趟推，不等纸面落点：`absent`（页上连记号都没有）那一档 `revealRevision` 不认行，若把
+    // `activeRevision` 留给它，下一条 数到那种行就会停在原地不动。
+    this.activeRevision = target.id;
+    return { index: target.index, outcome };
   }
 
   /**
@@ -3521,6 +3654,10 @@ export class DocEditor {
     // `changed`（那是「内容动了、脏了」），也不是 `moved`（那是光标在纸上挪）。这条只报「铺排重算过了」，
     // 让状态栏那五格跟着当档的脸重读——装机件里那一格原本一直挂着换档前那句「共 7 页」（`renderer.ts` 的
     // `relayout`）。
+    // 窗格/面板头上那句「这一处此刻不画出来，切到「显示修订」才看得到」也是旧档的话：读者正是照它换的档，
+    // 换完还挂着，就成了指着自己说的一句话。
+    this.review?.clearNotice();
+    this.panel?.clearNotice();
     this.hooks.relayout?.();
   }
 
@@ -4095,40 +4232,44 @@ export class DocEditor {
     this.hooks.changed();
   }
 
-  /** Shows the anchored text: scrolled into view, selected, and lit until the next render. */
-  revealComment(id: number): boolean {
-    if (!this.page) return false;
-    let marks = [...this.page.querySelectorAll<HTMLElement>(`.cmt-anchor[data-cid="${id}"]`)];
+  /**
+   * Shows the anchored text: scrolled into view, selected, and lit until the next render.
+   *
+   * 与 `revealRevision` 同一条「在场」规矩：批注锚在一段被删掉的字上时，那枚 `.cmt-in` 在当前显示状态下没有矩形，
+   * 光标落进去就不在纸上了。所以落点逐个放进选区里量：圈得住锚着的字就圈，圈不住就退到那枚画得出来的批注号旁边、
+   * 再退到同一行里画得出来的字；一处都放不下才回 `hidden`，那时既不落点也不点亮，读者的光标一个字没动。
+   */
+  revealComment(id: number): RevealOutcome {
+    if (!this.page) return "absent";
+    const marks = [...this.page.querySelectorAll<HTMLElement>(`.cmt-anchor[data-cid="${id}"]`)];
     if (!marks.length) {
       // A reply carries no markers of its own — Word threads it onto its parent's range —
       // so revealing one jumps to the range that holds the thread.
       const parent = this.doc.comments.find((c) => c.id === id)?.parentId;
-      if (parent === undefined || parent === id) return false;
+      if (parent === undefined || parent === id) return "absent";
       return this.revealComment(parent);
     }
+    const drawn = drawnOnPaper(marks);
+    // 卡片先认这一条：窗格里加边框说的是「读者现在看第几条」，锚在纸上画不画得出来是另一件事。
     this.activeComment = id;
-    const ranges = [...this.page.querySelectorAll<HTMLElement>(".cmt-in")].filter((el) => (el.dataset.cids ?? "").split(",").includes(String(id)));
-    for (const el of [...marks, ...ranges]) el.classList.add("solo-cmt-anchor-hit");
-    const sel = document.getSelection();
-    if (sel) {
-      const range = document.createRange();
-      if (ranges.length) {
-        const first = ranges[0];
-        const last = ranges[ranges.length - 1];
-        range.setStartBefore(first.firstChild ?? first);
-        range.setEndAfter(last.lastChild ?? last);
-      } else {
-        // A zero-length range has no text to select: the caret goes where the mark is.
-        range.setStartAfter(marks[marks.length - 1]);
-        range.collapse(true);
-      }
-      sel.removeAllRanges();
-      sel.addRange(range);
-    }
-    marks[0].scrollIntoView({ block: "center" });
-    this.page.focus({ preventScroll: true });
     this.panel?.setActive(id);
-    return true;
+    // 与修订窗格同一条：上一趟那句先收掉，本趟落不成的话由面板按本趟再写上。
+    this.panel?.clearNotice();
+    const ranges = [...this.page.querySelectorAll<HTMLElement>(".cmt-in")]
+      .filter((el) => (el.dataset.cids ?? "").split(",").includes(String(id)));
+    const shown = drawnOnPaper(ranges);
+    // 锚着的字此刻不画时，范围元素自己还算得出矩形，圈住它的选区却是空的——照元素放落点会把光标放在纸上没有
+    // 的地方。所以落点问的是选区：范围选不通就退到画得出来的那枚锚旁边，再退到那一行里画得出来的文字位置，
+    // 一处一处放到选区里量，全放不下才是 `hidden`。
+    clearRevealHits(this.page);
+    this.review?.releaseFromPage();
+    if (!drawn.length) return "hidden";
+    const landed = landFirstDrawn(commentSpots(shown, drawn), document.getSelection());
+    if (!landed) return "hidden";
+    for (const el of [...drawn, ...shown]) el.classList.add("solo-cmt-anchor-hit");
+    drawn[0]!.scrollIntoView({ block: "center" });
+    this.page.focus({ preventScroll: true });
+    return "shown";
   }
 
   /** Ribbon toggle for the panel; with no argument it flips whatever the reader is looking at. */
@@ -4187,16 +4328,19 @@ export class DocEditor {
 
   /**
    * WPS's "&Next Comment" / "&Previous Comment": steps through the list in the order the
-   * reference marks are numbered, wrapping at both ends.
+   * reference marks are numbered, wrapping at both ends. 落在哪一档一起答——`hidden` 是这一条卡片确实被选中了、
+   * 锚却在当前显示状态下不画（它挂在一段被删掉的字上，而此刻是最终状态），面板要能把这句说出来。
    */
-  stepComment(step: 1 | -1): number | undefined {
+  stepComment(step: 1 | -1): { entry: CommentEntry; outcome: RevealOutcome } | undefined {
     const list = this.listComments();
     if (!list.length) return undefined;
     const current = list.findIndex((entry) => entry.id === this.activeComment);
     const at = current < 0 ? (step === 1 ? 0 : list.length - 1) : (current + step + list.length) % list.length;
-    const target = list[at];
-    this.revealComment(target.id);
-    return target.id;
+    const target = list[at]!;
+    const outcome = this.revealComment(target.id);
+    // 与 `stepRevision` 同一条：`absent` 那一档不认卡片，游标留在这里推，否则 下一条 数到没锚点的那条就停住。
+    this.activeComment = target.id;
+    return { entry: target, outcome };
   }
 
   /**

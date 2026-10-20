@@ -210,16 +210,44 @@ export class ReviewPanel {
     this.list.querySelector<HTMLElement>(`.solo-rev-item[data-rev-id="${id}"]`)?.scrollIntoView({ block: "nearest" });
   }
 
+  /**
+   * 批注那一趟「定位」接管了纸面，窗格这一行的加粗就得让位：它说的是「读者数到第几处修订」，落在批注上时
+   * 再认着一条修订，屏幕上就是两条相反的话。
+   */
+  releaseFromPage(): void {
+    this.activeId = undefined;
+    if (!this.open) return;
+    this.markActive();
+  }
+
+  /**
+   * 头上那句「这一处此刻不画出来」讲的永远是**上一趟**的落点，所以两件事都要把它收掉：换档（显示修订/最终状态/
+   * 原文）重铺了一趟纸，读者照它换了档之后它还挂着就成了指着自己；新一趟「定位」开头也一样先清，落不成的那句
+   * 随后由 `reveal`/`step` 写上。
+   */
+  clearNotice(): void {
+    this.note.textContent = "";
+  }
+
   private step(dir: 1 | -1): void {
-    const index = this.editor.stepRevision(dir);
-    if (index === undefined) {
+    const landed = this.editor.stepRevision(dir);
+    if (landed === undefined) {
       this.say("没有待处理的修订");
       return;
     }
     // `stepRevision` answers the row it landed on; the pane remembers the change itself, which survives
     // the renumbering that any later decision causes.
-    this.activeId = this.editor.revisionEntries()[index - 1]?.id;
+    this.activeId = this.editor.revisionEntries()[landed.index - 1]?.id;
     this.refresh();
+    // 落到纸上就把上一句收掉：那句报的是**上一趟**的落点，读者此刻已经在新的地方了。
+    this.say(landed.outcome === "shown" ? "" : this.missed(landed.index, landed.outcome));
+  }
+
+  /** 点了「定位」或 下一条 却没落到纸上，那两句要说清的不是同一件事：一档是这一处此刻不画，一档是正文里根本没有它的记号。 */
+  private missed(index: number, outcome: "hidden" | "absent"): string {
+    return outcome === "hidden"
+      ? `第 ${index} 处在当前显示状态下不画出来，切到「显示修订」才看得到`
+      : `第 ${index} 处在正文里没有可定位的标记`;
   }
 
   private decideAll(outcome: "accept" | "reject"): void {
@@ -381,8 +409,11 @@ export class ReviewPanel {
   private reveal(entry: RevisionEntry): void {
     // The change may sit where the page draws no mark for it — a header or footer band, a part the
     // renderer does not stamp — in which case the model still lists it but there is nothing to jump to.
+    // Or the mark may be there but hidden by the current 显示修订/最终状态/原文 档, which is a different
+    // sentence: switching the 档 finds it, while a header-band change never does.
     // On success the editor names this change through `revealFromPage`, which marks and scrolls the row.
-    if (!this.editor.revealRevision(entry.index)) this.say(`第 ${entry.index} 处在正文里没有可定位的标记`);
+    const outcome = this.editor.revealRevision(entry.index);
+    this.say(outcome === "shown" ? "" : this.missed(entry.index, outcome));
   }
 
   private at(outcome: "accept" | "reject", entry: RevisionEntry, run: () => boolean): void {

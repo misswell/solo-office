@@ -1,5 +1,5 @@
 import { renderInline } from "../core/render.js";
-import type { CommentEntry, DocEditor } from "./doc-edit.js";
+import type { CommentEntry, DocEditor, RevealOutcome } from "./doc-edit.js";
 
 /**
  * The comment side panel for a Word document.
@@ -43,7 +43,7 @@ const CSS = `
 }
 .solo-cmt-panel[hidden] { display: none; }
 .solo-cmt-head {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   padding: 8px 10px; border-bottom: 1px solid #ece2c8;
   font-weight: 600; color: #6b5a2a;
 }
@@ -62,6 +62,10 @@ const CSS = `
 .solo-cmt-item.solo-cmt-done .solo-cmt-text, .solo-cmt-item.solo-cmt-done .solo-cmt-edit { text-decoration: line-through; }
 .solo-cmt-item.solo-cmt-reply { margin-left: 18px; border-left: 3px solid #efe4c4; }
 .solo-cmt-state { color: #8c8c8c; font-size: 12px; }
+/* 定位/下一条 落到一条此刻不画的批注时，这一句说清「没跳过去」不是按钮坏了。与审阅窗格的 solo-rev-note 同一形状。 */
+.solo-cmt-note { flex: 1 1 100%; font-weight: 400; font-size: 12px; color: #8a5a00; }
+/* 没话说的时候不占一行：面板头部的高度不该因为一条还没发生过的失败而变。 */
+.solo-cmt-note:empty { display: none; }
 .solo-cmt-head button[aria-pressed="true"] { background: #6b5a2a; color: #fff; }
 .solo-cmt-meta { display: flex; align-items: center; gap: 6px; color: #7a6a3f; font-size: 12px; }
 .solo-cmt-avatar {
@@ -116,6 +120,7 @@ export class CommentPanel {
   private readonly root: HTMLElement;
   private readonly list: HTMLElement;
   private readonly count: HTMLElement;
+  private readonly note: HTMLElement;
   private dismissed = false;
   private active: number | null = null;
 
@@ -129,6 +134,8 @@ export class CommentPanel {
     this.root.hidden = true;
     this.count = document.createElement("span");
     this.count.className = "solo-cmt-count";
+    this.note = document.createElement("span");
+    this.note.className = "solo-cmt-note";
     this.list = document.createElement("div");
     this.list.className = "solo-cmt-list";
 
@@ -145,12 +152,12 @@ export class CommentPanel {
     prev.type = "button";
     prev.textContent = "‹";
     prev.title = "上一条批注";
-    prev.addEventListener("click", () => this.editor.stepComment(-1));
+    prev.addEventListener("click", () => this.step(-1));
     const next = document.createElement("button");
     next.type = "button";
     next.textContent = "›";
     next.title = "下一条批注";
-    next.addEventListener("click", () => this.editor.stepComment(1));
+    next.addEventListener("click", () => this.step(1));
     const all = document.createElement("button");
     all.type = "button";
     all.textContent = "全部删除";
@@ -173,7 +180,7 @@ export class CommentPanel {
     close.addEventListener("click", () => this.setOpen(false));
     const spacer = document.createElement("span");
     spacer.className = "solo-cmt-spacer";
-    head.append(title, this.count, spacer, prev, next, newButton, all, print, close);
+    head.append(title, this.count, spacer, prev, next, newButton, all, print, close, this.note);
     this.root.append(head, this.list);
     host.append(this.root);
 
@@ -303,7 +310,7 @@ export class CommentPanel {
     locate.type = "button";
     locate.textContent = entry.anchored ? "定位" : "正文中已无锚点";
     locate.disabled = !entry.anchored;
-    locate.addEventListener("click", () => this.editor.revealComment(entry.id));
+    locate.addEventListener("click", () => this.report(this.editor.revealComment(entry.id), entry));
     const remove = document.createElement("button");
     remove.type = "button";
     remove.textContent = "删除";
@@ -332,9 +339,29 @@ export class CommentPanel {
     return box;
   }
 
+  /**
+   * 下一条/上一条批注。卡片认了行（`revealComment` 里那句 `setActive`），纸上落不落点是另一件事——
+   * 落不成要把那一句写在头部，不然读者只看到选中框跳了号，纸面一动不动。
+   */
+  private step(dir: 1 | -1): void {
+    const landed = this.editor.stepComment(dir);
+    if (landed) this.report(landed.outcome, landed.entry);
+  }
+
+  private report(outcome: RevealOutcome, entry: CommentEntry): void {
+    if (outcome === "shown") {
+      this.note.textContent = "";
+      return;
+    }
+    // WPS 在这一处说什么未取证（授权 46 份里批注族 0 枚），这两句按自家「在场」规矩写：
+    // 一档是此刻的显示状态不画它，换档就找得回来；一档是正文里连标记都没有。
+    this.note.textContent = outcome === "hidden"
+      ? `#${entry.ordinal} 锚着的字在当前显示状态下不画出来，切到「显示修订」才看得到`
+      : `#${entry.ordinal} 在正文里找不到标记`;
+  }
+
   /** Which comment the caret sits inside, so the list names it. */
-  private followCaret(): void {
-    if (this.root.hidden) return;
+  private followCaret(): void {    if (this.root.hidden) return;
     if (this.list.contains(document.activeElement)) return;
     const ids = this.editor.commentIdsAtCaret();
     this.active = ids.length ? ids[0] : null;
@@ -350,6 +377,14 @@ export class CommentPanel {
   setActive(id: number | null): void {
     this.active = id;
     this.markActive();
+  }
+
+  /**
+   * 头部那句「这一条锚着的字此刻不画出来」讲的永远是**上一趟**的落点：换档（显示修订/最终状态/原文）重铺了一趟
+   * 纸，读者照它换了档之后它还挂着就成了指着自己；新一趟「定位」开头也一样先清，落不成的那句随后由 `report` 写上。
+   */
+  clearNotice(): void {
+    this.note.textContent = "";
   }
 
   /** Called by the editor when the reader clicks a reference mark. */

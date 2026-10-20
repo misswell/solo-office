@@ -178,3 +178,37 @@ export function makeReactionsDocx(): Uint8Array {
   for (const [k, v] of Object.entries(files)) packed[k] = strToU8(XML_DECL + v);
   return zipSync(packed, { level: 6 });
 }
+
+/**
+ * 批注的锚挂在修订的字上（#189）：一条压在 `w:del` 里、一条压在 `w:ins` 里、一条压在没人动过的字上。
+ * 三档之下「在场」的形状不一样——删掉的字在最终状态不画，插入的字在原文不画，普通字三档都画——所以这一份
+ * 一次给齐「定位」要答的三种情形。第 2 段另带一条段落属性改动（`w:pPrChange`），让同一份件里
+ * `revealRevision` 也有可指的行。授权 46 份里批注族 0 枚，这份是自己写的夹具；WPS 在这一处说什么、跳不跳，
+ * **未取证**。
+ */
+export function makeCommentRevDocx(): Uint8Array {
+  const document = `<w:document xmlns:w="${NS_W}" xmlns:r="${NS_R}">
+<w:body>
+<w:p><w:commentRangeStart w:id="0"/><w:del w:id="51" w:author="顾峰" w:date="2026-03-01T09:00:00Z"><w:r><w:delText>被删掉的锚</w:delText></w:r></w:del><w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r><w:commentRangeStart w:id="1"/><w:ins w:id="52" w:author="林晓" w:date="2026-03-01T09:10:00Z"><w:r><w:t>新插入的锚</w:t></w:r></w:ins><w:commentRangeEnd w:id="1"/><w:r><w:commentReference w:id="1"/></w:r><w:commentRangeStart w:id="2"/><w:r><w:t>没人动过的字</w:t></w:r><w:commentRangeEnd w:id="2"/><w:r><w:commentReference w:id="2"/></w:r></w:p>
+<w:p><w:pPr><w:jc w:val="center"/><w:pPrChange w:id="53" w:author="顾峰" w:date="2026-03-01T09:20:00Z"><w:pPr><w:jc w:val="left"/></w:pPr></w:pPrChange></w:pPr><w:r><w:t>属性被改过的第二段</w:t></w:r></w:p>
+<w:p><w:r><w:t>尾巴</w:t></w:r></w:p>
+<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>
+</w:body></w:document>`;
+
+  const comments = `<w:comments xmlns:w="${NS_W}">
+<w:comment w:id="0" w:author="顾峰" w:initials="G" w:date="2026-03-01T09:05:00Z"><w:p><w:r><w:t>删掉的这段还要不要留</w:t></w:r></w:p></w:comment>
+<w:comment w:id="1" w:author="林晓" w:initials="L" w:date="2026-03-01T09:15:00Z"><w:p><w:r><w:t>新加的这句请核对</w:t></w:r></w:p></w:comment>
+<w:comment w:id="2" w:author="顾峰" w:initials="G" w:date="2026-03-01T09:25:00Z"><w:p><w:r><w:t>普通的一条</w:t></w:r></w:p></w:comment>
+</w:comments>`;
+
+  const files: Record<string, string> = {
+    "[Content_Types].xml": `<Types xmlns="${NS_CT}"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="${CT_W}.document.main+xml"/><Override PartName="/word/comments.xml" ContentType="${CT_W}.comments+xml"/></Types>`,
+    "_rels/.rels": `<Relationships xmlns="${NS_PKG}"><Relationship Id="rId1" Type="${NS_R}/officeDocument" Target="word/document.xml"/></Relationships>`,
+    "word/_rels/document.xml.rels": `<Relationships xmlns="${NS_PKG}"><Relationship Id="rId5" Type="${NS_R}/comments" Target="comments.xml"/></Relationships>`,
+    "word/document.xml": document,
+    "word/comments.xml": comments,
+  };
+  const out: Record<string, Uint8Array> = {};
+  for (const [k, v] of Object.entries(files)) out[k] = strToU8(XML_DECL + v);
+  return zipSync(out, { level: 6 });
+}

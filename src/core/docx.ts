@@ -407,6 +407,8 @@ export interface RowStyle {
   header?: boolean;
   keepTogether?: boolean;
   hidden?: boolean;
+  /** `w:jc`: where the row's text sits — under a paragraph's own alignment, over the cell's. */
+  jc?: string;
 }
 
 /** What a `w:tcPr` says about its cell: width, span, shading, borders, alignment, wrapping. */
@@ -818,6 +820,13 @@ export interface RowInfo {
   keepTogether?: boolean;
   /** `w:hidden`: the row is there but draws nowhere. */
   hidden?: boolean;
+  /**
+   * `w:jc`: where this row's text sits. The authorized 46 份 hold 190 枚 on 4 templates (all `center`), and
+   * 1,294 cells have the row's word as the only one — no `w:tcPr/w:jc` anywhere in the cohort (0 枚), no
+   * paragraph `w:pPr/w:jc` in those cells. The precedence is the schema's: paragraph > cell > row, so a
+   * paragraph that names its own alignment keeps it while the rest of the cell takes the row's.
+   */
+  jc?: string;
   /**
    * The row's `w:tblPrEx` band, read down to the one property the page draws: cell padding as this row is
    * to lay itself out, overriding the table's. The band is a child of `w:tr` rather than of `w:trPr` — the
@@ -5728,6 +5737,8 @@ function rowStyleOf(trPr: any): RowStyle {
   if (onOff(trPr?.tblHeader)) out.header = true;
   if (onOff(trPr?.cantSplit)) out.keepTogether = true;
   if (trPr?.hidden !== undefined) out.hidden = onOff(trPr.hidden) ?? true;
+  const jc = str(trPr?.jc?.["@_val"]);
+  if (jc) out.jc = jc;
   return out;
 }
 
@@ -5859,7 +5870,7 @@ export const TABLE_STYLE_KEYS: (keyof TableStyle)[] = [
 ];
 
 /** Every row property a `w:trPrChange` can carry. */
-export const ROW_STYLE_KEYS: (keyof RowStyle)[] = ["heightTwips", "heightRule", "header", "keepTogether", "hidden"];
+export const ROW_STYLE_KEYS: (keyof RowStyle)[] = ["heightTwips", "heightRule", "header", "keepTogether", "hidden", "jc"];
 
 /** Every cell property a `w:tcPrChange` or a `w:cellMerge` can carry. */
 export const CELL_STYLE_KEYS: (keyof CellStyle)[] = [

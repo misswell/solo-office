@@ -345,3 +345,25 @@ export function makeElementAttrsDocx(): Uint8Array {
 <w:p><w:r><w:t>没有任何标记的段落</w:t></w:r></w:p><w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>`;
   return pack(document, WPS_ROOT);
 }
+
+/**
+ * Rows that say where their text sits (`w:trPr/w:jc`), which is the one alignment word the authorized
+ * corpus puts inside a table: 190 枚 on 4 templates, all `center`, with 1,294 cells below them that state
+ * no alignment of their own (`.scratch/cell-align-audience.py`; `w:tcPr/w:jc` is 0 枚 cohort-wide).
+ *
+ * Four rows: centered with one cell whose paragraph states `left` of its own (the schema's precedence,
+ * paragraph over row), a row that says nothing, a right-aligned row, and a centered row whose
+ * `w:trPrChange` recorded that it was `left` before — the recorded set has to come back as `left` when
+ * the change is refused.
+ */
+export function makeRowAlignDocx(): Uint8Array {
+  const cell = (text: string, ppr = ""): string =>
+    `<w:tc><w:tcPr><w:tcW w:w="2500" w:type="dxa"/></w:tcPr><w:p>${ppr}<w:r><w:t>${text}</w:t></w:r></w:p></w:tc>`;
+  const document = `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblLook w:val="04A0"/></w:tblPr><w:tblGrid><w:gridCol w:w="2500"/><w:gridCol w:w="2500"/></w:tblGrid>
+<w:tr><w:trPr><w:jc w:val="center"/></w:trPr>${cell("行居中的一格")}${cell("段自己说左", '<w:pPr><w:jc w:val="left"/></w:pPr>')}</w:tr>
+<w:tr>${cell("没说话的一行")}${cell("也没说")}</w:tr>
+<w:tr><w:trPr><w:jc w:val="right"/></w:trPr>${cell("靠右的一行")}${cell("同右")}</w:tr>
+<w:tr><w:trPr><w:jc w:val="center"/><w:trPrChange ${REV_ATTRS(101, "顾峰")}><w:trPr><w:jc w:val="left"/></w:trPr></w:trPrChange></w:trPr>${cell("改过对齐的一行")}${cell("改过")}</w:tr>
+</w:tbl>`;
+  return pack(document);
+}

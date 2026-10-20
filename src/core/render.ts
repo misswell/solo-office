@@ -161,7 +161,17 @@ export function highlightColor(name: string): string {
   return map[name] ?? name;
 }
 
-const ALIGN: Record<string, string> = { center: "center", right: "right", both: "justify", distribute: "justify" };
+// `left`/`start`/`end` are here for the same reason as `center`: a word that is spoken must draw as what it
+// says even when something above it (a row) says another. The authorized 46 份 state `left` on 108 paragraphs.
+const ALIGN: Record<string, string> = {
+  left: "left",
+  start: "left",
+  center: "center",
+  right: "right",
+  end: "right",
+  both: "justify",
+  distribute: "justify",
+};
 
 /**
  * Comment rendering state for one pass over the body: which anchored ranges are currently
@@ -748,6 +758,12 @@ function rowStyle(row?: RowInfo): string {
   if (!row) return "";
   let css = row.hidden ? "display:none;" : "";
   if (row.heightTwips) css += `height:${twipsToPx(row.heightTwips)}px;`;
+  // 行那一句（`w:trPr/w:jc`）落在 `<tr>` 上，格与段都从它继承；段自己说了话的那一处由 `ALIGN[p.align]`
+  // 盖回去，正是 §17.3.1.8 的优先级（段 > 格 > 行）。授权 46 份里 4 份模板的 190 行说了这一句（全是
+  // `center`），那 190 行里 1,294 格没有第二句可问——`w:tcPr/w:jc` 全语料 0 枚，这些格里的段也没有
+  // `w:pPr/w:jc`。在这之前这一句从没读进来，1,294 格都按页面的左对齐画。
+  const align = row.jc ? ALIGN[row.jc] : undefined;
+  if (align) css += `text-align:${align};`;
   return css;
 }
 

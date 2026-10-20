@@ -1,8 +1,11 @@
 /**
  * 文字页脚的**状态栏**：WPS 的 Writer 在窗口底下常驻一条 `KxWpsStatusCommand id="statusbar"`（`office6/res/wpscommon.kuip`，
- * 442–511 行，底下 63 个直接子项）。其中 `KxWpsStatusWordCountInfoCommand` 带着 `aid="792"`、`id="WordCountInfoCommand"`、
- * `minimumWidth="75"`，detail 说的是「Word Count. Click to open "Word Count" dialog.」——ribbon 那条「字数统计」
- * 就写在**同一个文件的 267 行**、同一个 `aid="792"`，而这一条里其余 62 项一个 `aid` 都没有。所以这一格不是
+ * 442–511 行，逐行数到 **61 个直接子项**——其中 **17 条是 `separator`**，余下 44 项才是读数格；这 61 项里
+ * **12 项**带 `minimumWidth`，值只有 72/75/90/105 四种，
+ * 我们这八格对应的两条——`WordCountInfoCommand`（457 行）与 `UnitCommand`（459 行）——各带 `minimumWidth="75"`，
+ * 页码/页数/节/纵向位置/行/列 六条一条都不带）。`KxWpsStatusWordCountInfoCommand` 还带着 `aid="792"`，
+ * detail 说的是「Word Count. Click to open "Word Count" dialog.」——ribbon 那条「字数统计」
+ * 就写在**同一个文件的 267 行**、同一个 `aid="792"`，而这一条里其余 60 项一个 `aid` 都没有。所以这一格不是
  * 另一个功能，是同一条命令的另一种长相：报一个数，点一下开同一个对话框。
  *
  * 这一条上挂着**八格**，顺序照 kuip 的子项次序（页码→页数→节→纵向位置→行→列→字数→单位）：
@@ -73,6 +76,14 @@ const CSS = `
   font-variant-numeric: tabular-nums;
 }
 .solo-doc-status button:hover { background: #d7dce2; color: #1f2328; }
+/* 字数 与 测量单位 两格各按 WPS 声明的 minimumWidth="75" 撑成一条自己的格子
+   （wpscommon.kuip:457/:459）。这两格在 kuip 里正好是紧邻的两条（中间只隔着 编码 那条没接的），家里都只按内容宽，
+   于是「字数：2」与「厘米」贴在一起读成「字数：2 厘米」——数被读成带了单位。75px 那一档把两格分开；字仍靠左，
+   因为内容在这 75px 里怎么摆 WPS **未取证**，靠左是不把数推进别人格子里的那种摆法。
+   余下六格（页码/页数/节/纵向位置/行/列）kuip 里都**不带** minimumWidth，这里也不给。 */
+.solo-doc-status .solo-doc-status-words, .solo-doc-status .solo-doc-status-unit { min-width: 75px; text-align: left; }
+/* 分隔条：位置与条数是 kuip 声明的（见构造函数里那段），画成 1px 细线是我们自己的摆法。 */
+.solo-doc-status .solo-doc-status-sep { flex: none; width: 1px; height: 12px; align-self: center; background: #cfd4da; }
 .solo-doc-status .solo-doc-status-loc, .solo-doc-status .solo-doc-status-sec, .solo-doc-status .solo-doc-status-vpos, .solo-doc-status .solo-doc-status-rc {
   padding: 0 2px; color: #6b7480;
   /* 页码/总页/节/纵向位置/行/列 都是数，同样用等宽数位。 */
@@ -160,7 +171,22 @@ export class DocStatusBar {
     this.unitItem.className = "solo-doc-status-unit";
     this.unitItem.title = "测量单位。点击打开「选项」对话框";
     this.unitItem.addEventListener("click", () => openOptions());
-    this.root.append(this.pageItem, this.pagesItem, this.sectionItem, this.posItem, this.lineItem, this.colItem, this.wordItem, this.unitItem);
+    // 摆法照 kuip 声明的邻接：`statusbar` 的 61 条直接子项里有 **17 条 `separator`**，它们的位置是文件自己说的
+    // （页码 与 页数 之间、页数 与 节 之间、纵向位置 与 行 之间、列 与 字数 之间、字数 与 单位 之间各一条），
+    // 而 节·纵向位置 与 行·列 **中间不隔**——这两组在 kuip 里就是紧邻的两条（`RowInfoCommand`/`ColumnInfoCommand`
+    // 还互相带 `rightSibling`/`leftSibling`），本来也是一起读的两句。家里原先只用一道 uniform `gap`：
+    // 于是 `字数：2` 与 `厘米` 只隔 10px，读成「字数：2 厘米」（数被安上了单位）。分隔条**画成什么** WPS 未取证，
+    // 这里给一条 1px 细线；隔几条、隔在哪两条之间是实据。
+    const sep = (): HTMLElement => {
+      const s = document.createElement("span");
+      s.className = "solo-doc-status-sep";
+      s.setAttribute("aria-hidden", "true");
+      return s;
+    };
+    this.root.append(
+      this.pageItem, sep(), this.pagesItem, sep(), this.sectionItem, this.posItem,
+      sep(), this.lineItem, this.colItem, sep(), this.wordItem, sep(), this.unitItem,
+    );
     document.body.append(this.root);
     this.offUnit = onUnitChange(() => this.refresh());
     this.refresh();

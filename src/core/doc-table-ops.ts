@@ -202,6 +202,48 @@ export function cellsInRect(t: Table, range: CellRange): CellWhere[] {
   });
 }
 
+/** A cell's own four edges, in the order the border commands name them. */
+export type CellSide = "top" | "left" | "bottom" | "right";
+
+/**
+ * 「外侧框线」在格选区里要写哪几条边：逐格只取朝向选区外的那几条，块内相邻的缝一条不写。
+ * 选区按整格算——竖合并的一带由起头那一格答，合并格伸出选区的那一段也算在块里，因为选区切不开一格。
+ * WPS 自己在这一击写出的字节未取证；这一条按 §17.4.77 的 `w:tcBorders` 与「外侧」的字面义立据。
+ */
+export function cellOuterSides(t: Table, cells: CellWhere[]): { where: CellWhere; sides: CellSide[] }[] {
+  const covered = new Set<string>();
+  const rects = new Map<CellWhere, NonNullable<ReturnType<typeof cellRect>>>();
+  for (const where of cells) {
+    const rect = cellRect(t, where);
+    if (!rect) continue;
+    rects.set(where, rect);
+    for (let r = rect.r0; r < rect.r1; r += 1)
+      for (let c = rect.c0; c < rect.c1; c += 1) covered.add(`${r},${c}`);
+  }
+  const inside = (r: number, c: number): boolean => covered.has(`${r},${c}`);
+  const columns = gridColumns(t);
+  return cells.flatMap((where) => {
+    const rect = rects.get(where);
+    if (!rect) return [];
+    const sides: CellSide[] = [];
+    // 顶/底按这一格横跨的每一列看：只要有一列上方不在选区里，这条边就有一段露在外面。
+    const exposedRow = (r: number): boolean => {
+      for (let c = rect.c0; c < rect.c1; c += 1) if (!inside(r, c)) return true;
+      return false;
+    };
+    // 左/右按这一格纵跨的每一行看，理由同上。
+    const exposedColumn = (c: number): boolean => {
+      for (let r = rect.r0; r < rect.r1; r += 1) if (!inside(r, c)) return true;
+      return false;
+    };
+    if (rect.r0 === 0 || exposedRow(rect.r0 - 1)) sides.push("top");
+    if (rect.r1 >= t.rows.length || exposedRow(rect.r1)) sides.push("bottom");
+    if (rect.c0 === 0 || exposedColumn(rect.c0 - 1)) sides.push("left");
+    if (rect.c1 >= columns || exposedColumn(rect.c1)) sides.push("right");
+    return [{ where, sides }];
+  });
+}
+
 /**
  * Every cell the page draws between two cells in its own order — exactly what one Range would light up if it
  * were pulled from the first to the last. Put against `cellsInRect` it answers whether a single Range can paint

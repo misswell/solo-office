@@ -485,7 +485,7 @@ function smoke(): void {
         // 读的五件事：列子换没换到表那一层的十一档、落点画没画在 table 元素那一圈、那一击之后选区还在不在表这一层
         // （本轮修的正是这条：缩回一格的话第二击就换了层）、同一条腿第二次落笔是不是空过（按历史问：撤销一步就退回
         // 落笔前那圈没线的样子，说明那一次没进历史——这颗点在这件上量不出空过，上面刚插了一张表，整篇从一开始就挂着），
-        // 以及光标退回一格时列子是不是回到九档。件里那句 w:tblBorders 由 .scratch/tbl-cmd-install-check.sh 在外面问。
+        // 以及光标退回一格时列子是不是回到十一档。件里那句 w:tblBorders 由 .scratch/tbl-cmd-install-check.sh 在外面问。
         // #148 又加一件：撤销之后**页面上此刻那条选区**自己还铺不铺在甲格与末格之间（不是探针替它重选的），
         // 因为落点那一层是它的下游——历史只记一个点的话这里会塌成一格，第二击问的就是别的层。
         const ringOf = (needle) => [...document.querySelectorAll("#view .page table.doc-table")].find((t) => (t.textContent ?? "").includes(needle));
@@ -557,7 +557,7 @@ function smoke(): void {
         const tblRedo = ribbonBtn("↷") ? (ribbonBtn("↷").click(), 1) : 0;
         await wait(340);
         const tblAfterRedo = ringBottom(ringOf("甲"));
-        // 光标退回一格：那一层说的是格（九档），落点从 table 那一圈换到那一格自己那一圈的顶缝。
+        // 光标退回一格：那一层说的是格（十一档），落点从 table 那一圈换到那一格自己那一圈的顶缝。
         const soloCell = spanOf("甲");
         if (soloCell) {
           const cr = document.createRange();

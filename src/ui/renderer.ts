@@ -338,6 +338,10 @@ const BORDER_LEGS: Record<"para" | "table" | "cells", [string, string][]> = {
     ["right", "右框线"],
     ["none", "无框线"],
     ["all", "所有框线"],
+    // #151：格选区与 WPS 那一枚控件说同一组话。外侧框线落在**选区的外圈**（`setCellOutside` 逐格算朝向块外的边），
+    // 横竖框线仍由表来说（`CT_TcBorders` 没有「内部」那一枚孩子）。
+    ["outside", "外侧框线"],
+    ["cross", "横竖框线"],
     ["insideH", "内部横框线"],
     ["insideV", "内部竖框线"],
     ["more", "边框与底纹…"],
@@ -776,10 +780,11 @@ function buildDocRibbon(): void {
         syncDocRibbon();
         return;
       }
-      // 表那一侧的每一腿都落 `w:tblBorders`；格那一侧只有内部横竖那两档例外——`CT_TcBorders` 说不出这一句，
-      // 照 WPS 一样由表来说（见 `borderScope`）。
+      // 表那一侧的每一腿都落 `w:tblBorders`；格那一侧两条例外——内部横竖与横竖框线 `CT_TcBorders` 说不出这一句，
+      // 照 WPS 一样由表来说；外侧框线落在选区外圈（`setCellOutside`，没有铺满整张表时）。
       if (scope === "table") editor.setTableBox(tableLegPatch(v as TableLeg));
-      else if (v === "insideH" || v === "insideV") editor.setTableBox(tableLegPatch(v));
+      else if (v === "cross" || v === "insideH" || v === "insideV") editor.setTableBox(tableLegPatch(v));
+      else if (v === "outside") editor.setCellOutside();
       else editor.setCellBox(cellLegPatch(v as CellLeg));
       syncDocRibbon();
     },

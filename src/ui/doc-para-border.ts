@@ -462,6 +462,16 @@ export function tableLegPatch(leg: TableLeg): BoxPatch<TableBoxSide> {
   return { sides };
 }
 
+/**
+ * 格选区里的「外侧框线」：只写外圈那几条边，块内相邻的缝一条不动。哪几条由 `cellOuterSides` 按选区几何算。
+ * WPS 那一枚控件在没铺满整张表时说的就是这句话；`CT_TcBorders` 只认识一格自己的四条边，所以外圈要逐格落。
+ */
+export function cellOuterPatch(sides: readonly CellBoxSide[]): BoxPatch<CellBoxSide> {
+  const patch: Partial<Record<CellBoxSide, EdgePatch>> = {};
+  for (const side of sides) patch[side] = ON;
+  return { sides: patch };
+}
+
 /** 格级那一腿落在每一格自己的 `w:tcBorders` 上；`insideH`/`insideV` 在这里没有槽，见 `tableLegPatch`。 */
 export function cellLegPatch(leg: CellLeg): BoxPatch<CellBoxSide> {
   const sides: Partial<Record<CellBoxSide, EdgePatch>> = {};

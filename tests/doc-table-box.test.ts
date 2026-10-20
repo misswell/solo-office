@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { Table, TableBorder } from "../src/core/docx.js";
 import { WordDocument, borderDelta, syncCellBox, syncCellVAlign, syncTableBox } from "../src/core/docx.js";
+import { cellOuterSides } from "../src/core/doc-table-ops.js";
 import { renderWord } from "../src/core/render.js";
 import { writeDocx } from "../src/core/write-docx.js";
 import { OpcPackage, text } from "../src/core/opc.js";
 import {
-  CELL_BOX_SIDES, PARA_EDGE_SHAPE, TABLE_EDGE_SHAPE, applyBoxPatch, cellLegPatch, tableLegPatch, TABLE_BOX_SIDES,
+  CELL_BOX_SIDES, PARA_EDGE_SHAPE, TABLE_EDGE_SHAPE, applyBoxPatch, cellLegPatch, cellOuterPatch, tableLegPatch, TABLE_BOX_SIDES,
 } from "../src/ui/doc-para-border.js";
 import type { BoxPatch, CellBoxSide, EdgePatch, EdgeShape, TableBoxSide } from "../src/ui/doc-para-border.js";
 import { pack } from "./helpers/make-containers.js";
@@ -538,5 +539,97 @@ describe("格竖向对齐 w:tcPr/w:vAlign", () => {
     expect(cell.tcPrXml).toBeUndefined();
     cell.valign = "center";
     expect(save(doc)).toContain('<w:vAlign w:val="center"/>');
+  });
+});
+
+/**
+ * #151：「外侧框线」落在格选区时画的是**选区的外圈**，不是每格自己的四条边。WPS 那一枚控件没铺满整张表时
+ * 只能逐格说（`CT_TcBorders` 没有「内部」那一枚孩子），所以这里先钉几何：哪一格、哪几条边朝向块外。
+ * 选区按整格算——合并格伸出选区的那一段也算在块里；竖合并的一带由起头那一格答。WPS 自己写出的字节未取证。
+ */
+describe("格选区「外侧框线」的外圈几何（#151）", () => {
+  const plated = (rows: string[][]): Uint8Array => {
+    const cell = (t: string): string =>
+      `<w:tc><w:tcPr><w:tcW w:w="1000" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>${t}</w:t></w:r></w:p></w:tc>`;
+    const tr = rows.map((r) => `<w:tr>${r.map(cell).join("")}</w:tr>`).join("");
+    return pack(
+      `<w:tbl><w:tblPr><w:tblW w:w="${rows[0]!.length * 1000}" w:type="dxa"/><w:tblLayout w:type="fixed"/></w:tblPr>` +
+        `<w:tblGrid>${rows[0]!.map(() => `<w:gridCol w:w="1000"/>`).join("")}</w:tblGrid>${tr}</w:tbl>`,
+    );
+  };
+  const shape = (t: Table, cells: { row: number; col: number }[]): [string, string][] =>
+    cellOuterSides(t, cells).map(({ where, sides }) => [`${where.row},${where.col}`, [...sides].sort().join("|")]);
+
+  it("表中间铺 2×2：每格只写朝向块外的那两条边", () => {
+    const t = tableOf(open(plated([
+      ["甲", "乙", "丙", "丁"],
+      ["戊", "己", "庚", "辛"],
+      ["壬", "癸", "子", "丑"],
+      ["寅", "卯", "辰", "巳"],
+    ])));
+    expect(shape(t, [{ row: 1, col: 1 }, { row: 1, col: 2 }, { row: 2, col: 1 }, { row: 2, col: 2 }])).toEqual([
+      ["1,1", "left|top"],
+      ["1,2", "right|top"],
+      ["2,1", "bottom|left"],
+      ["2,2", "bottom|right"],
+    ]);
+  });
+
+  it("铺满整张：角上两临边、边上一条、正中一条也不写", () => {
+    const t = tableOf(open(plated([["甲", "乙", "丙"], ["丁", "戊", "己"], ["庚", "辛", "壬"]])));
+    const all = [0, 1, 2].flatMap((row) => [0, 1, 2].map((col) => ({ row, col })));
+    expect(shape(t, all)).toEqual([
+      ["0,0", "left|top"], ["0,1", "top"], ["0,2", "right|top"],
+      ["1,0", "left"], ["1,1", ""], ["1,2", "right"],
+      ["2,0", "bottom|left"], ["2,1", "bottom"], ["2,2", "bottom|right"],
+    ]);
+  });
+
+  it("横向合并格伸出选区的那一段也按整格算：右边那条边仍算块外", () => {
+    const t = tableOf(open(pack(
+      `<w:tbl><w:tblPr><w:tblW w:w="2000" w:type="dxa"/><w:tblLayout w:type="fixed"/></w:tblPr>` +
+        `<w:tblGrid><w:gridCol w:w="1000"/><w:gridCol w:w="1000"/></w:tblGrid>` +
+        `<w:tr><w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/><w:gridSpan w:val="2"/></w:tcPr><w:p><w:r><w:t>横跨</w:t></w:r></w:p></w:tc></w:tr>` +
+        `<w:tr><w:tc><w:p><w:r><w:t>乙</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>丙</w:t></w:r></w:p></w:tc></w:tr></w:tbl>`,
+    )));
+    expect(shape(t, [{ row: 0, col: 0 }, { row: 1, col: 0 }, { row: 1, col: 1 }])).toEqual([
+      ["0,0", "left|right|top"],
+      ["1,0", "bottom|left"],
+      ["1,1", "bottom|right"],
+    ]);
+  });
+
+  it("落笔只碰外圈：件里恰 8 条边，块内的两道缝一条也不写", () => {
+    const doc = open(plated([
+      ["a11", "a12", "a13", "a14"],
+      ["a21", "a22", "a23", "a24"],
+      ["a31", "a32", "a33", "a34"],
+      ["a41", "a42", "a43", "a44"],
+    ]));
+    const t = tableOf(doc);
+    for (const { where, sides } of cellOuterSides(t, [{ row: 1, col: 1 }, { row: 1, col: 2 }, { row: 2, col: 1 }, { row: 2, col: 2 }])) {
+      const cell = t.rows[where.row]![where.col]!;
+      const after = applyBoxPatch(cell.borders, cellOuterPatch(sides), TABLE_EDGE_SHAPE);
+      syncCellBox(cell, borderDelta(cell.borders, after));
+      cell.borders = after;
+    }
+    const xml = save(doc);
+    const chunk = (needle: string): string =>
+      [...xml.matchAll(/<w:tc\b[\s\S]*?<\/w:tc>/g)].map((m) => m[0]).find((s) => s.includes(needle)) ?? "";
+    expect([...xml.matchAll(/<w:top w:val="single"/g)]).toHaveLength(2);
+    expect([...xml.matchAll(/<w:bottom w:val="single"/g)]).toHaveLength(2);
+    expect([...xml.matchAll(/<w:left w:val="single"/g)]).toHaveLength(2);
+    expect([...xml.matchAll(/<w:right w:val="single"/g)]).toHaveLength(2);
+    // 块内那两道缝：己格不说右边，庚格不说左边；癸格不说右边，子格不说左边。
+    expect(chunk("a22")).toContain('<w:top w:val="single"');
+    expect(chunk("a22")).toContain('<w:left w:val="single"');
+    expect(chunk("a22")).not.toContain("<w:right");
+    expect(chunk("a22")).not.toContain("<w:bottom");
+    expect(chunk("a23")).not.toContain("<w:left");
+    expect(chunk("a32")).not.toContain("<w:right");
+    expect(chunk("a33")).not.toContain("<w:left");
+    // 外圈之外那一圈格一枚 `w:tcBorders` 也没多出来。
+    expect(chunk("a11")).not.toContain("<w:tcBorders");
+    expect(chunk("a44")).not.toContain("<w:tcBorders");
   });
 });

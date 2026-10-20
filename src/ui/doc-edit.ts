@@ -3,7 +3,7 @@ import type { CommentAnchor, DocComment } from "../core/comments.js";
 import { bodyShape, commentTexts } from "../core/comments.js";
 import { DEFAULT_SECTION, EAST_ASIAN_TEXT, RUN_STYLE_KEYS, applyFacePick, applyRunPatch, borderDelta, carriedShape, cellShapeOf, countTexts, lineGridPitchTwips, ownParaStyle, ownRunStyle, paraSpacingPitch, paraStyleOf, paragraphTextsOf, runStyleOf, samePropValue, sectionEndsOf, signCellRevision, signTableRevision, stampNow, syncCellBox, syncCellVAlign, syncParaSlots, syncTableBox, tableShapeOf, twipsToPx } from "../core/docx.js";
 import type { CellWhere, TableEdit } from "../core/doc-table-ops.js";
-import { cellRangeFor, cellRect, cellsInRect, cellsInSweep, deleteColumnHere, deleteRowHere, gridColumns, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, splitHere, splitTableAt } from "../core/doc-table-ops.js";
+import { cellOuterSides, cellRangeFor, cellRect, cellsInRect, cellsInSweep, deleteColumnHere, deleteRowHere, gridColumns, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, splitHere, splitTableAt } from "../core/doc-table-ops.js";
 import { IMAGE_EXT_BY_MIME } from "../core/media.js";
 import { BAND_SOURCE_CLASS, CARRY_CLASS, CARRY_STYLE, BAND_MASTER_CLASS, PAGE_BORDER_CLASS, RUN_CARRY_CLASS, type RevisionView, fontStack, highlightColor, renderWord } from "../core/render.js";
 import { flatOf, inlineLength, isMark, keepRunIdentity } from "../core/run-identity.js";
@@ -12,7 +12,7 @@ import { applyBandYield, applySheetGaps, applyTabStops, BAND_CLONE_CLASS, caretC
 import { ReviewPanel } from "./doc-review.js";
 import { OutlinePanel } from "./doc-outline.js";
 import { openPageSetup as showPageSetupDialog } from "./doc-page-setup.js";
-import { CELL_BOX_SIDES, PARA_BOX_SIDES, applyBoxPatch, showCellBoxDialog, showParaBorderDialog, showTableBoxDialog, TABLE_BOX_SIDES, TABLE_EDGE_SHAPE } from "./doc-para-border.js";
+import { CELL_BOX_SIDES, PARA_BOX_SIDES, applyBoxPatch, cellOuterPatch, showCellBoxDialog, showParaBorderDialog, showTableBoxDialog, TABLE_BOX_SIDES, TABLE_EDGE_SHAPE } from "./doc-para-border.js";
 import type { BoxPatch, BoxState, CellBoxSide, ParaBoxPatch, ParaBoxState, TableBoxSide } from "./doc-para-border.js";
 import { showParaSpacingDialog } from "./doc-para-spacing.js";
 import type { ParaSpacingPatch, ParaSpacingState } from "./doc-para-spacing.js";
@@ -31,6 +31,16 @@ import { openGoTo } from "./doc-goto.js";
 
 /** What one structure command came back with, including which table it ran on and how the page names it. */
 type CommandOutcome = { ok: true; at: CellWhere; prefix: number[]; table: Table } | { ok: false; reason: string };
+
+/** 一格边框落笔的全部依据：改后的账、这一击动过的边、以及修订要记下的改前形状。 */
+type CellBoxEdit = {
+  cell: TableCell;
+  after: BorderSet | undefined;
+  changes: BorderSet;
+  ground?: string;
+  wasShape: CellStyle;
+  wasXml?: string;
+};
 
 /**
  * The names this page can bring back off a CSS colour: the seven the toolbar offers, plus §17.17.64's
@@ -3413,7 +3423,7 @@ export class DocEditor {
     const caret = this.caretPath();
     const target = this.tableAt(caret);
     if (!target) return false;
-    const edits: { cell: TableCell; after: BorderSet | undefined; changes: BorderSet; ground?: string; wasShape: CellStyle; wasXml?: string }[] = [];
+    const edits: CellBoxEdit[] = [];
     for (const where of this.selectionCells(target)) {
       const cell = target.table.rows[where.row]?.[where.col];
       if (!cell) continue;
@@ -3423,6 +3433,33 @@ export class DocEditor {
       if (Object.keys(changes).length || ground !== undefined)
         edits.push({ cell, after, changes, ground, wasShape: cellShapeOf(cell), wasXml: cell.tcPrXml });
     }
+    return this.commitCellEdits(caret, edits);
+  }
+
+  /**
+   * 格选区里的「外侧框线」：只给选区外圈那几条边画线，块内相邻的缝一条不动。WPS 那一枚控件在没铺满整张表时
+   * 说的就是这句话；`CT_TcBorders` 只认识一格自己的四条边，所以外圈按 `cellOuterSides` 逐格算、逐格落。
+   * 没铺满整张表时这条腿才走得到这里（铺满由表那一层答，见 `borderScope`）。
+   */
+  setCellOutside(): boolean {
+    const caret = this.caretPath();
+    const target = this.tableAt(caret);
+    if (!target) return false;
+    const edits: CellBoxEdit[] = [];
+    for (const { where, sides } of cellOuterSides(target.table, this.selectionCells(target))) {
+      if (!sides.length) continue;
+      const cell = target.table.rows[where.row]?.[where.col];
+      if (!cell) continue;
+      const after = applyBoxPatch(cell.borders, cellOuterPatch(sides), TABLE_EDGE_SHAPE);
+      const changes = borderDelta(cell.borders, after);
+      if (!Object.keys(changes).length) continue;
+      edits.push({ cell, after, changes, wasShape: cellShapeOf(cell), wasXml: cell.tcPrXml });
+    }
+    return this.commitCellEdits(caret, edits);
+  }
+
+  /** 格边框这几条腿共用的落笔处：一次快照、逐格写、开着修订逐格留痕，最后整条选区放回原处。 */
+  private commitCellEdits(caret: DocPath | null, edits: CellBoxEdit[]): boolean {
     if (!edits.length) return false;
     this.snapshot(caret);
     for (const edit of edits) {

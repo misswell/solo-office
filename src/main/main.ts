@@ -948,6 +948,59 @@ function smoke(): void {
           revBtn()?.click();
           await wait(160);
           const ttCellTrackEnd = revBtn()?.classList.contains("on") ? 1 : 0;
+          // 「单元格尺寸」那两枚自旋格（RB_Adjust）在装机这一趟量四条：件没说一句行高时框里空着（不替它编数）；
+          // 打下去之后那一行自己说一句 w:trHeight、纸上那一行长高；宽度那一格动的是整列（网格加这一列每一格），
+          // 盒宽跟着涨、只有一列宽的那些格才动；光标退到表外时两格都空、按下去被回绝。四条按完全部撤销，
+          // 不动这一件的字节账。字面按状态栏的测量单位（默认厘米）：2.54 厘米 = 1440 缇、5.292 厘米 = 3000 缇。
+          // 这一段整篇在模板字符串里：不写类型、不写反引号、注释不带转义。
+          const ttSpin = (label) => [...document.querySelectorAll("#ribbon .rbar[data-tab='table'] .rspin")]
+            .find((x) => (x.textContent || "").trim().indexOf(label) === 0)?.querySelector("input");
+          const ttType = (input, v) => {
+            if (!input) return 0;
+            input.focus();
+            input.value = v;
+            input.dispatchEvent(new Event("change", { bubbles: true }));
+            return 1;
+          };
+          const ttRowH = () => { const r = ttFind()?.rows[1]; return r ? Math.round(r.getBoundingClientRect().height * 10) / 10 : -1; };
+          const ttColW = (i) => { const c = ttFind()?.rows[1]?.cells[i]; return c ? Math.round(c.getBoundingClientRect().width * 10) / 10 : -1; };
+          ttPut(ttFind()?.rows[1]?.cells[0]);
+          await wait(240);
+          const ttSizeHit = (ttSpin("高度") ? 1 : 0) + (ttSpin("宽度") ? 1 : 0);
+          const ttHeightEcho0 = ttSpin("高度")?.value ?? "?";
+          const ttWidthEcho0 = ttSpin("宽度")?.value ?? "?";
+          const ttRowHBefore = ttRowH();
+          const ttHeightPress = ttType(ttSpin("高度"), "2.54");
+          await wait(360);
+          const ttRowHAfter = ttRowH();
+          const ttHeightEcho1 = ttSpin("高度")?.value ?? "?";
+          ttUndoKey();
+          await wait(360);
+          const ttRowHUndone = ttRowH();
+          const ttHeightEcho2 = ttSpin("高度")?.value ?? "?";
+          const ttBoxBeforeW = ttBox();
+          const ttCol0BeforeW = ttColW(0);
+          const ttCol1BeforeW = ttColW(1);
+          const ttWidthPress = ttType(ttSpin("宽度"), "5.292");
+          await wait(360);
+          const ttBoxAfterW = ttBox();
+          const ttCol0AfterW = ttColW(0);
+          const ttCol1AfterW = ttColW(1);
+          const ttWidthEcho1 = ttSpin("宽度")?.value ?? "?";
+          ttUndoKey();
+          await wait(360);
+          const ttBoxUndoneW = ttBox();
+          const ttSizeOut = [...document.querySelectorAll("#view .page .para")].find((el) => !el.closest("table"));
+          ttPut(ttSizeOut);
+          await wait(240);
+          const ttHeightEchoOut = ttSpin("高度")?.value ?? "?";
+          const ttWidthEchoOut = ttSpin("宽度")?.value ?? "?";
+          const ttOutPress = ttType(ttSpin("高度"), "2.54");
+          await wait(360);
+          const ttOutNotice = ttNoticeSel();
+          const ttHeightEchoRefused = ttSpin("高度")?.value ?? "?";
+          const ttRowHRefused = ttRowH();
+          const ttBoxRefused = ttBox();
           // 光标退出表挑的是**表外那一段**，不是「第一张纸最后一个孩子」：表涨宽后会挪到别的纸上，
           // 第一张纸的末 child 可能就是这只表——那样量到的是分页，不是那一页的退场。
           const ttOut = [...document.querySelectorAll("#view .para")].find((el) => !el.closest("table"));
@@ -974,6 +1027,10 @@ function smoke(): void {
             ttLeftPick, ttTargetText, ttRow0Before, ttTextBefore, ttRow0AfterLeft, ttTextAfterLeft, ttLeftNotice, ttRow0Back, ttTextBack,
             ttCellTrackOn, ttPaneRead, ttCellDelBefore, ttSignPick, ttRow0Signed, ttTextSigned, ttCellDelSigned, ttSignedNotice,
             ttCellDelAfterUndo, ttRow0AfterUndo, ttCellTrackEnd,
+            ttSizeHit, ttHeightEcho0, ttWidthEcho0, ttRowHBefore, ttHeightPress, ttRowHAfter, ttHeightEcho1,
+            ttRowHUndone, ttHeightEcho2, ttBoxBeforeW, ttCol0BeforeW, ttCol1BeforeW, ttWidthPress, ttBoxAfterW,
+            ttCol0AfterW, ttCol1AfterW, ttWidthEcho1, ttBoxUndoneW, ttHeightEchoOut, ttWidthEchoOut,
+            ttOutPress, ttOutNotice, ttHeightEchoRefused, ttRowHRefused, ttBoxRefused,
             ttDirty: (document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0,
           };
         }

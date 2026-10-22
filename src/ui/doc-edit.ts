@@ -1,9 +1,9 @@
-import type { Block, BorderSet, Carried, CarriedInline, CellStyle, FormatRevision, HeaderFooter, HfSegment, Inline, LineSpacingRule, ParaStyle, PageGeometry, PageSetup, Paragraph, ParagraphFormatRevision, PropSlot, Revision, RevisionEntry, RowInfo, RunStyle, Section, Table, TableBorder, TableCell, TableStyle, WordDocument } from "../core/docx.js";
+import type { Block, BorderSet, Carried, CarriedInline, CellStyle, FormatRevision, HeaderFooter, HfSegment, Inline, LineSpacingRule, ParaStyle, PageGeometry, PageSetup, Paragraph, ParagraphFormatRevision, PropSlot, Revision, RevisionEntry, RowInfo, RowStyle, RunStyle, Section, Table, TableBorder, TableCell, TableStyle, WordDocument } from "../core/docx.js";
 import type { CommentAnchor, DocComment } from "../core/comments.js";
 import { bodyShape, commentTexts } from "../core/comments.js";
-import { DEFAULT_SECTION, EAST_ASIAN_TEXT, RUN_STYLE_KEYS, applyFacePick, applyRunPatch, borderDelta, carriedShape, cellShapeOf, countTexts, lineGridPitchTwips, ownParaStyle, ownRunStyle, paraSpacingPitch, paraStyleOf, paragraphTextsOf, runStyleOf, samePropValue, sectionEndsOf, signCellPlaceRevision, signCellRevision, signTableRevision, stampNow, syncCellBox, syncCellVAlign, syncParaSlots, syncTableBox, tableShapeOf, twipsToPx } from "../core/docx.js";
+import { DEFAULT_SECTION, EAST_ASIAN_TEXT, RUN_STYLE_KEYS, applyFacePick, applyRunPatch, borderDelta, carriedShape, cellShapeOf, countTexts, lineGridPitchTwips, ownParaStyle, ownRunStyle, paraSpacingPitch, paraStyleOf, paragraphTextsOf, rowShapeOf, runStyleOf, samePropValue, sectionEndsOf, signCellPlaceRevision, signCellRevision, signRowRevision, signTableRevision, stampNow, syncCellBox, syncCellVAlign, syncParaSlots, syncRowHeight, syncTableBox, tableShapeOf, twipsToPx } from "../core/docx.js";
 import type { CellWhere, TableEdit } from "../core/doc-table-ops.js";
-import { allCells, cellOuterSides, cellRangeFor, cellRect, cellsInRect, cellsInSweep, deleteCellHere, deleteColumnHere, deleteRowHere, deleteTableBlock, gridColumns, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, splitHere, splitTableAt } from "../core/doc-table-ops.js";
+import { allCells, cellOuterSides, cellRangeFor, cellRect, columnCells, cellsInRect, cellsInSweep, deleteCellHere, deleteColumnHere, deleteRowHere, deleteTableBlock, gridColumns, gridWidths, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, setColumnWidth, splitHere, splitTableAt } from "../core/doc-table-ops.js";
 import { IMAGE_EXT_BY_MIME } from "../core/media.js";
 import { BAND_SOURCE_CLASS, CARRY_CLASS, CARRY_STYLE, BAND_MASTER_CLASS, PAGE_BORDER_CLASS, RUN_CARRY_CLASS, type RevisionView, fontStack, highlightColor, renderWord } from "../core/render.js";
 import { flatOf, inlineLength, isMark, keepRunIdentity } from "../core/run-identity.js";
@@ -3673,6 +3673,123 @@ export class DocEditor {
     if (!target) return { inTable: false };
     const cell = target.table.rows[target.where.row]?.[target.where.col];
     return { inTable: true, valign: cell?.valign };
+  }
+
+  /**
+   * 「单元格尺寸」两枚自旋格的回显。高度问**行**：`w:trHeight` 是行说的那句（§17.3.2.77 的孩子在 `w:trPr` 里），
+   * 光标那格所在的行说了多少就报多少；行没说过就不编一个数——框里空着，与页边距那几枚「件没说的不替它说」同一条口径。
+   * 宽度问**列**：报的是这一格盖住的那几枚网格列之和（跨列的格宽度就是几列之和）。
+   */
+  cellSizeState(): { inTable: boolean; heightTwips?: number; widthTwips?: number } {
+    const target = this.tableAt(this.caretPath());
+    if (!target) return { inTable: false };
+    const rect = cellRect(target.table, target.where);
+    const covered = rect ? gridWidths(target.table).slice(rect.c0, rect.c1).reduce((n, w) => n + w, 0) : 0;
+    const own = target.table.rows[target.where.row]?.[target.where.col];
+    return {
+      inTable: true,
+      heightTwips: target.table.rows[target.where.row]?.[0]?.row?.heightTwips,
+      widthTwips: (own && (!own.widthType || own.widthType === "dxa") ? own.widthTwips : undefined) ?? (covered || undefined),
+    };
+  }
+
+  /**
+   * 「单元格高度」那一击：OOXML 说不出「一格多高」——`w:trHeight`（§17.3.2.77）是**行**说的，所以选区碰到哪几行
+   * 就给哪几行落笔，一格所在的那一行只是其中一行。规则那一半跟着行自己那句（`w:hRule`）走：授权 46 份里 580 枚
+   * `w:trHeight` 全说 `atLeast`、`exact` 0 枚（`.scratch/cell-size-audience.py`），没说过的行按这一族唯一的写法
+   * `atLeast`；`exact` 还要把装不下的内容裁掉，WPS 那一侧怎么做仍未取证，这一击不主动换成它。
+   *
+   * 落笔两分：字段给渲染与铺排（`render.ts:rowStyle` 那一枚地板、`doc-layout` 按它切页），孩子给存盘与「拒绝」——
+   * 件里带回来的行按枚带着 `w:trPr` 的孩子，而 `write-docx.ts:rowPropsXml` 只在行**没有**孩子时才按字段拼，
+   * 光改字段存盘会发现那一行还是件里的数。编辑器插的行没有孩子，现造一枚 `RowInfo` 并让这一行每一格都指过去：
+   * `cells[0].row` 就是渲染、写出、判定记录三处找这一行的同一条路。
+   */
+  setCellHeight(twips: number): TableCommandAnswer {
+    const caret = this.caretPath();
+    const segments = this.selectionTableSegments();
+    if (!segments.length) return { ok: false, reason: "光标不在表格里" };
+    const hits: { info: RowInfo; was: RowStyle; wasSlots: PropSlot[] }[] = [];
+    const seen = new Set<RowInfo>();
+    for (const segment of segments) {
+      for (const where of segment.cells) {
+        const row = segment.table.rows[where.row];
+        if (!row?.length) continue;
+        let info = row[0].row;
+        if (!info) {
+          info = {};
+          for (const cell of row) cell.row = info;
+        }
+        if (seen.has(info) || info.heightTwips === Math.round(twips)) continue;
+        seen.add(info);
+        hits.push({ info, was: rowShapeOf(info), wasSlots: info.slots ?? [] });
+      }
+    }
+    if (!hits.length) return { ok: false, reason: "这些行已经是这个高度" };
+    this.snapshot(caret);
+    // 一次落笔一个 `w:id`：在审核者眼里这一击是一件事，逐行各签一枚就成了 N 次摇头。
+    if (this.trackRevisions) this.revSeq += 1;
+    for (const hit of hits) {
+      const rule = hit.info.heightRule ?? "atLeast";
+      syncRowHeight(hit.info, Math.round(twips), rule);
+      if (this.trackRevisions)
+        signRowRevision(hit.info, { id: this.revSeq, author: this.authorName, date: stampNow() }, hit.was, hit.wasSlots);
+    }
+    this.repaintWithSelection(caret);
+    return { ok: true };
+  }
+
+  /**
+   * 「单元格宽度」那一击：落点是**一整列**（网格那一枚 `w:gridCol` 加上这一列里每一格那句 `w:tcW`），不是光标
+   * 那一格——见 `doc-table-ops.ts:setColumnWidth` 里那条按 26 张表量出来的理由。选区跨几列就逐列落，跨表选区逐张
+   * 表落；一格说不出这一列多宽（跨列的格、按 `pct` 摆的格）时命令自己回绝，这里只把那句话递给用户。
+   *
+   * 开着修订时整击签**一枚** `w:id`：OOXML 记「改过的一列」就是把同一枚 `w:id` 摆在每一格的 `w:tcPrChange` 上
+   * （`docx.ts:coversColumn` 认的就是这一条），逐格各签一条会把一次落笔拆成 N 次裁决。参照是落笔前的那一套
+   * 字段与那段 `w:tcPr` 原文，所以先在改之前按列取快照，再让命令动字节。
+   */
+  setCellWidth(twips: number): TableCommandAnswer {
+    const caret = this.caretPath();
+    const segments = this.selectionTableSegments();
+    if (!segments.length) return { ok: false, reason: "光标不在表格里" };
+    const columns = new Map<Table, Set<number>>();
+    for (const segment of segments) {
+      for (const where of segment.cells) {
+        const rect = cellRect(segment.table, where);
+        if (!rect) continue;
+        let set = columns.get(segment.table);
+        if (!set) columns.set(segment.table, (set = new Set<number>()));
+        for (let c = rect.c0; c < rect.c1; c += 1) set.add(c);
+      }
+    }
+    if (!columns.size) return { ok: false, reason: "光标不在表格里" };
+    const was = new Map<TableCell, { shape: CellStyle; xml?: string }>();
+    for (const [table, set] of columns)
+      for (const at of set)
+        for (const cell of columnCells(table, at))
+          if (!was.has(cell)) was.set(cell, { shape: cellShapeOf(cell), xml: cell.tcPrXml });
+    this.snapshot(caret);
+    const moved: TableCell[] = [];
+    let reason: string | undefined;
+    for (const [table, set] of columns)
+      for (const at of set) {
+        const out = setColumnWidth(table, at, twips);
+        if (out.ok) moved.push(...out.cells);
+        else reason ??= out.reason;
+      }
+    if (!moved.length) {
+      this.undoStack.pop();
+      return { ok: false, reason: reason ?? "这一列的宽度改不了" };
+    }
+    if (this.trackRevisions) {
+      this.revSeq += 1;
+      const sign = { id: this.revSeq, author: this.authorName, date: stampNow() };
+      for (const cell of moved) {
+        const back = was.get(cell);
+        if (back) signCellRevision(cell, sign, back.shape, back.xml);
+      }
+    }
+    this.repaintWithSelection(caret);
+    return { ok: true };
   }
 
   /** 选区是否铺满整张表：`cellRect` 的右下两条是排他的，所以比的是行高与网格宽本身。 */

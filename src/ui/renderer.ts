@@ -548,6 +548,7 @@ const DOC_RIBBON_TABS: [string, string][] = [
 const TABLE_TOOL_KEYS = [
   "rowAbove", "rowBelow", "colLeft", "colRight", "insertCellKind", "delRow", "delCol", "delTable", "deleteCellKind",
   "mergeCells", "splitCell", "splitTable",
+  "cellHeight", "cellWidth",
   "selectCell", "selectCol", "selectRow", "selectTable",
 ] as const;
 
@@ -562,6 +563,17 @@ const PAGE_MARGIN_SPINS: [string, string, "top" | "left" | "bottom" | "right", "
   ["marginLeft", "左", "left", "leftTwips"],
   ["marginBottom", "下", "bottom", "bottomTwips"],
   ["marginRight", "右", "right", "rightTwips"],
+];
+
+/**
+ * `RB_Adjust` 那两枚自旋格（`CT_TableTools.kuip` 的组序里排在 `RB_Merge` 之后：`RB_Table` → `RB_RowsAndColumns` →
+ * `RB_Merge` → `RB_Adjust` → …）。OOXML 说不出「一格」的尺寸：高度归**行**（`w:trPr/w:trHeight`，§17.3.2.77），
+ * 宽度归**列**（`w:gridCol/w:w` 加上那一列每一格那句 `w:tcPr/w:tcW`）。所以这一族只有两格是真的，第三列说的是
+ * 「回显问哪一层」；往哪几行/哪几列落笔、说不出单一数时怎么回绝，都定在 `doc-edit.ts` 那两条命令里。
+ */
+const CELL_SIZE_SPINS: [string, string, "heightTwips" | "widthTwips"][] = [
+  ["cellHeight", "高度", "heightTwips"],
+  ["cellWidth", "宽度", "widthTwips"],
 ];
 
 /** 纸张方向那一格的两档；WPS 只声明了 `PageOrientation` 这一枚命令，它的Widget 是下拉还是开关**未取证**，这里按可回显的两档摆。 */
@@ -848,13 +860,14 @@ function buildDocRibbon(): void {
 
   // 表格工具的上下文页。WPS 的组序是 `<subcommand id="CT_TableTools">`（`CT_TableTools.kuip:180-198`）说死的：
   // RB_Table → RB_RowsAndColumns → RB_Merge → RB_Adjust → RB_Table_Font → RB_Alignment → RB_Data → TableSelectMenu。
-  // 这里只摆家里真做得了的三组，组名用自家的话：
+  // 这里摆家里真做得了的四组，组名用自家的话：
   //   · 行与列 ← RB_RowsAndColumns 里的 `TableTools_Insert`（上方/下方插入行、左侧/右侧插入列、Cells…）
   //     与 `Delete` 那档四条（:33-36：单元格、列、行、表格）；
   //   · 合并与拆分 ← RB_Merge 的 Merge Cells / Split Cells / Split Table by Row（按列拆仍是 0 命令）；
+  //   · 单元格尺寸 ← RB_Adjust 的高度/宽度两格（见 `CELL_SIZE_SPINS`）；
   //   · 选择 ← TableSelectMenu 的四条。
-  // RB_Table（属性/网格线）、RB_Adjust（单元格尺寸）、RB_Data（公式/转文字/标题行重复）、RB_Table_Font 与
-  // RB_Alignment 要建模或对话框，这一轮不摆空按钮——宁缺一条，不摆一条按下去什么也不改的。
+  // RB_Table（属性/网格线）、RB_Data（公式/转文字/标题行重复）、RB_Table_Font 与 RB_Alignment 要建模或对话框，
+  // 这一轮不摆空按钮——宁缺一条，不摆一条按下去什么也不改的。
   const tbl = group("table");
   /**
    * 结构命令的答案：拒绝时把**命令自己说的那一句**摆出来，然后无论成败都重读一遍 ribbon。那一条带子上每一枚
@@ -887,6 +900,25 @@ function buildDocRibbon(): void {
   button(merges, "mergeCells", "合并单元格", "合并单元格（WPS：Merge Cells）", () => tableAction(editor?.mergeCells()));
   button(merges, "splitCell", "拆分单元格", "拆分单元格（WPS：Split Cells）", () => tableAction(editor?.splitCell()));
   button(merges, "splitTable", "按行拆分表格", "按行拆分表格（WPS：Split Table by Row）", () => tableAction(editor?.splitTable()));
+
+  // `RB_Adjust` 那两格按自家已经说出的两层落：高度那一格给选区碰到的**每一行**（`w:trHeight` 是行说的），
+  // 宽度那一格给选区碰到的**每一整列**（网格加那一列每格那句 `w:tcW`），不是光标那一格。落笔口径照页边距四格：
+  // 按状态栏的测量单位算，失焦或回车才算；说不出数的字面（空的、半个、负）当场刷回件里那句，不留在框里装成生效过。
+  const sizes = group("table");
+  for (const [key, label, dim] of CELL_SIZE_SPINS) {
+    spin(sizes, key, label, `${label}按状态栏的测量单位填；落笔（失焦或回车）才算`, (text) => {
+      const v = Number(text.trim());
+      if (text.trim() === "" || !Number.isFinite(v) || v < 0) {
+        echoSpin(ctl[key] as HTMLInputElement, editor?.cellSizeState()?.[dim]);
+        return;
+      }
+      const twips = twipsFromUnit(v, currentUnit());
+      tableAction(dim === "heightTwips" ? editor?.setCellHeight(twips) : editor?.setCellWidth(twips));
+      // 落笔之后自己读回件里**现在**那句（`tableAction` 已重跑一趟回显，但那一趟会护住「还没落笔」的框，
+      // 而这一格的字面已经落笔了）：成了报刚写的数，被回绝报件里没动的那个数——两条命令共用这一条出口。
+      echoSpin(ctl[key] as HTMLInputElement, editor?.cellSizeState()?.[dim]);
+    });
+  }
 
   const picking = group("table");
   button(picking, "selectCell", "选择单元格", "选择单元格（WPS：Select Cell）", () => tableAction(editor?.selectCell()));
@@ -1187,6 +1219,14 @@ function syncDocRibbon(force = false): void {
     // 件里那一对边叫不出标准名时，那一格显示「自定义尺寸」这件纸自己说的样子，而不是列表里最近的一张。
     if (paper) echoChoice(paper, paperOf(page.pageWidthTwips, page.pageHeightTwips) ?? CUSTOM, PAPER.map((p) => p.name), PAPER.length);
   }
+  // 「单元格尺寸」那两格与页边距四格同一条口径：件（这里是光标那格所在的行/列）没说的不替它编一个数，
+  // 框里空着；光标出表时 `cellSizeState()` 说不出尺寸，两格一起清空——留着上一张表的数，配合那一页页签已经退场，
+  // 摆的是「这张纸上一个数也没有，但 ribbon 说它 2 厘米」那种假话。
+  const cellSize = editor?.cellSizeState();
+  for (const [key, , dim] of CELL_SIZE_SPINS) {
+    const box = ctl[key] as HTMLInputElement | undefined;
+    if (box && (force || box.value === box.dataset.echo)) echoSpin(box, cellSize?.[dim]);
+  }
   mark("track", editor?.trackingChanges ?? false);
   mark("revPane", editor?.reviewPaneOpen ?? false);
   mark("navPane", editor?.outlinePaneOpen ?? false);
@@ -1200,12 +1240,14 @@ function syncDocRibbon(force = false): void {
 }
 
 /**
- * `RB_Page_Setup` 那四格唯一的写手：把缇数按当前测量单位写成字面放进格子，同时把这个字面记进 `data-echo`。
+ * ribbon 上那几格数字唯一的写手：把缇数按当前测量单位写成字面放进格子，同时把这个字面记进 `data-echo`。
  * 回显拿 `data-echo` 问「框里还是不是上一趟刷的那句」，落笔与拒收都走这里写自己那一格——两处共用，
- * 才能保证「护没落笔的那格」和「换单位四格一起换口径」不互相打架。
+ * 才能保证「护没落笔的那格」和「换单位几格一起换口径」不互相打架。
+ * `undefined` 是「件里没说这个数」，摆空框：页边距那四格永远有数（节总有 `w:pgMar`），
+ * 「单元格尺寸」那两格没有——行没写 `w:trHeight`、列说不出单一宽度时，替它编一个数就是往件里写字。
  */
-function echoSpin(box: HTMLInputElement, twips: number): void {
-  const want = twipText(twips);
+function echoSpin(box: HTMLInputElement, twips: number | undefined): void {
+  const want = twips === undefined ? "" : twipText(twips);
   box.value = want;
   box.dataset.echo = want;
 }

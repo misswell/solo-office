@@ -1,5 +1,5 @@
 import { strToU8, zipSync } from "fflate";
-import type { Block, BorderSet, CellStyle, Inline, ListAddition, ParaStyle, Paragraph, ParagraphFormatRevision, PropSlot, RunStyle, RowInfo, Table, TableBorder, TableCell, TableStyle, WordDocument } from "./docx.js";
+import type { Block, BorderSet, CellStyle, Inline, ListAddition, ParaStyle, Paragraph, ParagraphFormatRevision, PropSlot, RunStyle, RowInfo, RowStyle, Table, TableBorder, TableCell, TableStyle, WordDocument } from "./docx.js";
 import { bytesOfDataUrl } from "./media.js";
 import { BORDER_ORDER, PBDR_ORDER, ROW_REVISION_TAGS, ownParaStyle, ownRunStyle, paraBorderChanges, paraStyleOf, preserve, revisionTag, runStyleOf, samePropValue, shadingFillToken } from "./docx.js";
 import { childSpans, elementContent } from "./opc.js";
@@ -742,18 +742,34 @@ function cellXml(cell: TableCell, rels: RelBuilder): string {
 function rowPropsXml(row?: RowInfo): string {
   if (!row) return "";
   const kids = row.slots?.map((s) => s.xml) ?? [];
-  if (!kids.length) {
-    if (row.keepTogether) kids.push("<w:cantSplit/>");
-    if (row.heightTwips !== undefined)
-      kids.push(`<w:trHeight w:val="${Math.round(row.heightTwips)}"${row.heightRule ? ` w:hRule="${XML_ESC(row.heightRule)}"` : ""}/>`);
-    if (row.header) kids.push("<w:tblHeader/>");
-    if (row.hidden) kids.push("<w:hidden/>");
-  }
+  if (!kids.length) kids.push(...rowPropsInner(row));
+  // 没有原件孩子的行没有地方挂签下的记录，只能在这里拼——与表、格那两条同一句「改了、存了、记录没了」。
+  // 件里已经带了这一枚孩子的行不双写：`signRowRevision` 把记录换进了 `slots`，这一条只管编辑器自己造的行。
+  const rec = row.revFormat;
+  if (rec && !kids.some((k) => /<w:trPrChange[\s/>]/.test(k)))
+    kids.push(changeRecordXml("trPrChange", rec, slotsXml(rec.prevSlots) || rowPropsInner(rec.prev).join("")));
   if (row.rev) {
     const at = kids.findIndex((k) => /<w:trPrChange[\s/>]/.test(k));
     kids.splice(at < 0 ? kids.length : at, 0, `<w:${revisionTag(row.rev)} ${revAttrs(row.rev)}/>`);
   }
   return kids.length ? `<w:trPr>${kids.join("")}</w:trPr>` : "";
+}
+
+/**
+ * 一行说过的属性，按 `CT_TrPr` 的孩子序（`.scratch/trpr-order-audience.py` 量到的那一段：`w:cantSplit` 在前、
+ * `w:trHeight` 居中、`w:jc` 收尾）——现下的行与记录里那一套「改之前」共用这一份拼法。
+ * `w:jc` 也在这一份里：读侧认它（`rowStyleOf`），画侧也画它（`render.ts:rowStyle`），按字段拼时漏了它，
+ * 编辑器自己造的行就把这一行说过的摆位丢了。
+ */
+function rowPropsInner(row: RowStyle): string[] {
+  const props: string[] = [];
+  if (row.keepTogether) props.push("<w:cantSplit/>");
+  if (row.heightTwips !== undefined)
+    props.push(`<w:trHeight w:val="${Math.round(row.heightTwips)}"${row.heightRule ? ` w:hRule="${XML_ESC(row.heightRule)}"` : ""}/>`);
+  if (row.header) props.push("<w:tblHeader/>");
+  if (row.jc) props.push(`<w:jc w:val="${XML_ESC(row.jc)}"/>`);
+  if (row.hidden) props.push("<w:hidden/>");
+  return props;
 }
 
 /** `w:tblGrid` as the file wrote it, or one sized from what the model knows of the new grid. */

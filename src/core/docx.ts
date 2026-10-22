@@ -3,7 +3,7 @@ import { ThemeFonts, themeFontScript } from "./theme-fonts.js";
 import { isMark } from "./run-identity.js";
 import { dataUrl } from "./media.js";
 import { TABLE_RECORD_TAGS, changeRecordXml, coversWholeSet, decideSetXml, decideSlots, isPropertyRecord, placeRecordXml, recordedSlots, setChildren } from "./doc-table-revisions.js";
-import { cellCovering, columnStarts, deleteColumn, gridColumns, removeCell, repairMerges } from "./doc-table-ops.js";
+import { cellCovering, columnStarts, deleteColumn, gridColumns, removeCell, repairMerges, restateColumnFromCells } from "./doc-table-ops.js";
 import {
   allocIds,
   anchorInline,
@@ -3477,6 +3477,8 @@ export class WordDocument {
     let touched = 0;
     /** The cells whose record says they are not there, with the grid column each sits in. */
     const goers: { t: Table; row: TableCell[]; cell: TableCell; at: number; rec: CellRevision }[] = [];
+    /** 拒绝时把某格的宽度摆回去过的那一列：`w:tblGrid` 没有记录族，得由该列的格反述（见 `restateColumnFromCells`）。 */
+    const widened = new Map<Table, Set<number>>();
     this.eachTable((t) => {
       const tableRec = t.revFormat;
       if (tableRec && (id === undefined || tableRec.id === id)) {
@@ -3515,6 +3517,14 @@ export class WordDocument {
           }
           // 一格挂着多条记录时一次摆完，按文档顺序先说的那句算（见 `restoreCellRecords`）。
           if (outcome === "reject") restoreCellRecords(cell, settled.filter((rec) => isPropertyRecord(rec.tag)));
+          if (outcome === "reject" && settled.some((rec) => rec.tag === "tcPrChange" && rec.prev.widthTwips !== undefined)) {
+            const at = columnStarts(row)[row.indexOf(cell)];
+            if (at !== undefined) {
+              const cols = widened.get(t) ?? new Set<number>();
+              cols.add(at);
+              widened.set(t, cols);
+            }
+          }
           if (settled.length) {
             cell.revs = cell.revs!.filter((r) => !settled.includes(r));
             if (!cell.revs.length) delete cell.revs;
@@ -3566,6 +3576,9 @@ export class WordDocument {
         touched += changed;
       }
     }
+    // 拒绝把哪一列的格摆回了改前的宽度，就把那一列的网格数也摆回去——件里那一枚 `w:gridCol` 没有记录族，
+    // 网格只是那份数的镜像；`restateColumnFromCells` 只在整列说得出同一个数时动，说不出就不猜。
+    for (const [t, cols] of widened) for (const at of cols) restateColumnFromCells(t, at);
     return touched;
   }
 
@@ -3762,14 +3775,22 @@ export class WordDocument {
           b.inlines = b.inlines.map((i) => (i.revFormat ? restoreStyle(i, i.revFormat) : i));
         } else if (b.kind === "table") {
           if (b.revFormat) restoreTableStyle(b, b.revFormat.prev);
+          /** 这一张表里，有格的宽度被记录摆回改前的那些列——网格得跟着反述一次（同 `resolveTableParts`）。 */
+          const widened = new Set<number>();
           for (const row of b.rows) {
             const info = row[0]?.row;
             if (info?.revFormat) restoreRowStyle(info, info.revFormat.prev);
             for (const cell of row) {
-              restoreCellRecords(cell, (cell.revs ?? []).filter((rec) => isPropertyRecord(rec.tag)));
+              const records = (cell.revs ?? []).filter((rec) => isPropertyRecord(rec.tag));
+              restoreCellRecords(cell, records);
+              if (records.some((rec) => rec.tag === "tcPrChange" && rec.prev.widthTwips !== undefined)) {
+                const at = columnStarts(row)[row.indexOf(cell)];
+                if (at !== undefined) widened.add(at);
+              }
               walk(cell.paragraphs);
             }
           }
+          for (const at of widened) restateColumnFromCells(b, at);
         }
       }
     };
@@ -5452,6 +5473,15 @@ const TCPR_CHILD_ORDER = [
   "tcFitText", "vAlign", "hideMark", "headers", "cellIns", "cellDel", "cellMerge", "tcPrChange",
 ];
 /**
+ * `CT_TrPr` 给孩子的序，按件里量到的那一段钉：授权 46 份的 598 枚 `w:trPr` 里说行高的 580 枚**全部排在最前**
+ * 或紧跟一枚 `w:cantSplit`（22 枚），而 `w:jc` 190 枚没有一枚走在 `w:trHeight` 之前
+ * （`.scratch/trpr-order-audience.py`）。其余位置按 schema 序摆，件里这一族只说到这三枚。
+ */
+const TRPR_CHILD_ORDER = [
+  "cnfStyle", "divId", "gridBefore", "gridAfter", "wBefore", "wAfter", "cantSplit", "trHeight", "tblHeader",
+  "tblCellSpacing", "jc", "hidden", "ins", "del", "trPrChange",
+];
+/**
  * `CT_TblBorders`（§17.4.76）的孩子序：表比一格多出「内部横/内部竖」两条，斜线两边都有。
  * 与模型那一份 `BORDER_ORDER` 同序同集合——`w:between` 是 `CT_PBdr`（§17.3.2.36）才有的那一枚，
  * 摆进这一族就是在编 schema 里不存在的孩子。
@@ -5521,6 +5551,45 @@ export function syncCellVAlign(cell: TableCell, valign: string): void {
   cell.tcPrXml = replaceElementChild(own, "vAlign", `<${prefix}:vAlign ${prefix}:val="${valign}"/>`, TCPR_CHILD_ORDER);
 }
 
+/** 逐枚带着的孩子集里新写的一枚该用哪个名字空间前缀：问集里已有的邻居，没有邻居才按 `w:`。 */
+const slotPrefix = (slots: PropSlot[] | undefined): string => (slots?.length ? tagPrefix(slots[0]!.xml) : "w");
+
+/**
+ * 逐枚孩子带着的属性集（行的 `w:trPr` 正是这一种，`rowInfoOf` 按枚拆开带）里换掉一枚孩子：同一枚只留一处，
+ * 新写的一枚按 `order` 落在第一枚比它晚的邻居之前，其余的位置一个字节不动。与 `replaceElementChild` 同一
+ * 分工——那一位管「整枚属性集带在件里」的文字形状，这一位管模型的 `slots` 形状。
+ */
+function upsertSlot(slots: PropSlot[], tag: string, xml: string, order: readonly string[]): PropSlot[] {
+  const rank = (t: string): number => {
+    const at = order.indexOf(t);
+    return at < 0 ? order.length : at;
+  };
+  const rest = slots.filter((s) => s.tag !== tag);
+  const at = rest.findIndex((s) => rank(s.tag) > rank(tag));
+  if (at < 0) return [...rest, { tag, xml }];
+  return [...rest.slice(0, at), { tag, xml }, ...rest.slice(at)];
+}
+
+/**
+ * 行高那一击写回行自己那句 `w:trPr/w:trHeight`：字段是给渲染与铺排读的（`render.ts:rowStyle`、`doc-layout.ts`
+ * 按这一枚算行盒），孩子是给「拒绝」与写出读的——`write-docx.ts:rowPropsXml` 只在行**没有**带着的孩子时才按
+ * 字段拼，读过件的行是按枚带回来的，光改字段存盘会发现那一句还是件里原来的数。没有孩子的行（编辑器自己造的）
+ * 没有字节可换，字段就够了，写出器本来就按它们拼这一枚。
+ */
+export function syncRowHeight(row: RowInfo, twips: number, rule?: string): void {
+  row.heightTwips = twips;
+  if (rule) row.heightRule = rule;
+  else delete row.heightRule;
+  if (!row.slots?.length) return;
+  const prefix = slotPrefix(row.slots);
+  row.slots = upsertSlot(
+    row.slots,
+    "trHeight",
+    `<${prefix}:trHeight ${prefix}:val="${Math.round(twips)}"${rule ? ` ${prefix}:hRule="${rule}"` : ""}/>`,
+    TRPR_CHILD_ORDER,
+  );
+}
+
 /** 一套属性在孩子里说过的那几枚：别人的待裁决不算进这一份快照。 */
 const statedChildren = (setXml: string): PropSlot[] =>
   childSpans(elementContent(setXml))
@@ -5539,6 +5608,8 @@ const statedFields = <T extends object>(part: T, keys: readonly string[]): Recor
 export const tableShapeOf = (t: Table): TableStyle => statedFields(t, TABLE_STYLE_KEYS) as TableStyle;
 /** 一格自己说过的那一整套 `w:tcPr` 字段。 */
 export const cellShapeOf = (c: TableCell): CellStyle => statedFields(c, CELL_STYLE_KEYS) as CellStyle;
+/** 一行自己说过的那一整套 `w:trPr` 字段。 */
+export const rowShapeOf = (row: RowInfo): RowStyle => statedFields(row, ROW_STYLE_KEYS) as RowStyle;
 
 /**
  * 开着修订改表这一圈（`w:tblBorders`、`w:tblPr/w:shd`）时留下的 `w:tblPrChange`。记的是**改之前那一整套自己
@@ -5576,6 +5647,39 @@ export function signCellRevision(cell: TableCell, sign: { id: number; author: st
     cell.tcPrXml = replaceElementChild(cell.tcPrXml, "tcPrChange", changeRecordXml("tcPrChange", sign, recorded, tagPrefix(cell.tcPrXml)), TCPR_CHILD_ORDER);
   }
   cell.revs = [...(cell.revs ?? []).filter((r) => r.tag !== "tcPrChange"), rec];
+  return rec;
+}
+
+/**
+ * 开着修订改**行**那一圈（行高、重复表头、断页、隐藏）时留下的 `w:trPrChange`，与表、格那两条同两分：字节挂进
+ * 行按枚带着的 `w:trPr` 孩子集（按 `CT_TrPr` 的孩子序，`TRPR_CHILD_ORDER`），字段留作「拒绝」的参照。
+ * 记的是改之前那一整套**自己说过**的属性：`w:trPr` 的孩子里，别人那条待裁决的签名（`w:ins`/`w:del`）不算行
+ * 说过的属性——读侧 `rowFormatRevision` 把它们从 `prevSlots` 里滤掉，这里同一口径，否则「拒绝」会把同一枚签名
+ * 摆回两份。`CT_TrPr` 只容一枚 `w:trPrChange`，新签的这枚顶掉上一枚，模型这一侧同步顶。
+ *
+ * 同一个人记过就不再重签：一条 `w:id` 只裁一次，两击得一起退。没有孩子的行（编辑器自己造的）没有字节可挂，
+ * 记录只进字段，由写出器按字段拼这一枚孩子——那一处也认这一枚记录，否则这一句「改之前不是这样」只活在内存里，
+ * 存盘即蒸发。
+ */
+export function signRowRevision(
+  row: RowInfo,
+  sign: { id: number; author: string; date?: string },
+  was: RowStyle,
+  wasSlots: PropSlot[],
+): RowFormatRevision {
+  const mine = row.revFormat?.author === sign.author ? row.revFormat : undefined;
+  if (mine) return mine;
+  const recorded = wasSlots.filter((s) => !TABLE_RECORD_TAGS.has(s.tag) && !ROW_REVISION_TAGS.has(s.tag));
+  const rec: RowFormatRevision = { kind: "format", tag: "trPrChange", ...sign, prev: was, prevSlots: recorded };
+  if (row.slots?.length) {
+    row.slots = upsertSlot(
+      row.slots,
+      "trPrChange",
+      changeRecordXml("trPrChange", sign, recorded.map((s) => s.xml).join(""), slotPrefix(row.slots)),
+      TRPR_CHILD_ORDER,
+    );
+  }
+  row.revFormat = rec;
   return rec;
 }
 

@@ -400,3 +400,56 @@ export function makeCellMergeViewDocx(): Uint8Array {
 </w:tbl>`;
   return pack(document);
 }
+
+/**
+ * 「单元格尺寸」问的两层：高度归**行**（`w:trPr/w:trHeight`，§17.3.2.77），宽度归**列**（`w:gridCol/w:w` 加上
+ * 那一列每一格那句 `w:tcPr/w:tcW`）。两张表各摆自家量出来的那几种形状（授权 46 份 58 张：同列全等 26 张、
+ * 同列两个数 **0** 张、有跨列格或说不出数 32 张；`w:trHeight` 非 0 的 580 枚全说 `atLeast`，`exact` 0 枚）。
+ *
+ * 第一张：4 行 × 4 列网格（2000/1500/1500/1500，`w:tblW` 说的是网格和 6,500 缇）。
+ *  · 行 0 说 `1440 atLeast`；行 1 说 `600 atLeast` 并带着 `w:cantSplit`（改高度时那一枚必须原样不动）；
+ *  · 行 2 什么也没说（回显要空着，落笔才现造那一枚 `w:trPr`）；行 3 说 `800 exact`（落笔只换数，不换成 `atLeast`）；
+ *  · 第 0 列每格都说 2,000 缇、只占一列（改得动）；第 1~3 列只被一枚 `w:gridSpan="3"` 的格盖着
+ *    （那一列说不出单一宽度，改它必须回绝，而不是把跨列那句改成「这一列加剩下三列」）。
+ *
+ * 第二张：3 列网格（2000/1000/1000，`w:tblW` 4,000 缇）说的是另外三种落点。第 0 列照常改得动；第 1 列既有
+ * 只占一列的格、又有一枚跨两列的格（改这一列只动前者，后者一个字节不动）；第 2 列的格按 `pct` 摆（缇数不是
+ * 它的口径，整列回绝）。表外留一段，给「光标不在表格里」。
+ */
+export function makeCellSizeDocx(): Uint8Array {
+  const cell = (text: string, w: number, type = "dxa", span = 1): string =>
+    `<w:tc><w:tcPr><w:tcW w:w="${w}" w:type="${type}"/>${span > 1 ? `<w:gridSpan w:val="${span}"/>` : ""}</w:tcPr>` +
+    `<w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:tc>`;
+  const row = (trPr: string, cells: string): string => `<w:tr>${trPr ? `<w:trPr>${trPr}</w:trPr>` : ""}${cells}</w:tr>`;
+  const height = (val: number, rule?: string): string => `<w:trHeight w:val="${val}"${rule ? ` w:hRule="${rule}"` : ""}/>`;
+  const document = `<w:tbl><w:tblPr><w:tblW w:w="6500" w:type="dxa"/><w:tblLayout w:type="fixed"/></w:tblPr>` +
+    `<w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="1500"/><w:gridCol w:w="1500"/><w:gridCol w:w="1500"/></w:tblGrid>` +
+    row(height(1440, "atLeast"), cell("甲一", 2000) + cell("甲跨三列", 4500, "dxa", 3)) +
+    row(`<w:cantSplit/>${height(600, "atLeast")}`, cell("乙一", 2000) + cell("乙跨三列", 4500, "dxa", 3)) +
+    row("", cell("丙一", 2000) + cell("丙跨三列", 4500, "dxa", 3)) +
+    row(height(800, "exact"), cell("丁一", 2000) + cell("丁跨三列", 4500, "dxa", 3)) +
+    `</w:tbl>` +
+    `<w:tbl><w:tblPr><w:tblW w:w="4000" w:type="dxa"/></w:tblPr>` +
+    `<w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="1000"/><w:gridCol w:w="1000"/></w:tblGrid>` +
+    row("", cell("戊一", 2000) + cell("戊二", 1000) + cell("戊三", 20, "pct")) +
+    row("", cell("己一", 2000) + cell("己跨两列", 2000, "dxa", 2)) +
+    `</w:tbl><w:p><w:r><w:t>表外的一段</w:t></w:r></w:p>`;
+  return pack(document);
+}
+
+/**
+ * 一列被改过宽度、正等着点头的形状：网格与这一列的格都说 1,500 缇，每格挂一枚 `w:tcPrChange`，记的改前是
+ * 2,000——两枚共用一个 `w:id`（`docx.ts:coversColumn` 认的就是这一条：同一枚 `w:id` 摆在整列每一格上，
+ * 说的才是「改过的一列」）。OOXML 没有 `w:tblGrid` 的记录族，所以「拒绝」那一趟得把这一列的网格数从格摆回来。
+ */
+export function makeColumnWidthRevisionDocx(): Uint8Array {
+  const cell = (text: string, w: number, rec = ""): string =>
+    `<w:tc><w:tcPr><w:tcW w:w="${w}" w:type="dxa"/>${rec}</w:tcPr><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:tc>`;
+  const record = `<w:tcPrChange ${REV_ATTRS(90, "顾峰")}><w:tcW w:w="2000" w:type="dxa"/></w:tcPrChange>`;
+  const document = `<w:tbl><w:tblPr><w:tblW w:w="3500" w:type="dxa"/><w:tblLayout w:type="fixed"/></w:tblPr>` +
+    `<w:tblGrid><w:gridCol w:w="1500"/><w:gridCol w:w="2000"/></w:tblGrid>` +
+    `<w:tr>${cell("甲", 1500, record)}${cell("乙", 2000)}</w:tr>` +
+    `<w:tr>${cell("丙", 1500, record)}${cell("丁", 2000)}</w:tr>` +
+    `</w:tbl>`;
+  return pack(document);
+}

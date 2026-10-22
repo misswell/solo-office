@@ -283,7 +283,7 @@ function cellsBetween(t: Table, r0: number, r1: number, keep: (row: TableCell[],
 }
 
 /** The grid columns a table's rows use, twips each — from the file's grid, or measured off its cells. */
-function gridWidths(t: Table): number[] {
+export function gridWidths(t: Table): number[] {
   const columns = gridColumns(t);
   if (t.columnWidths?.length === columns) return [...t.columnWidths];
   const carried = t.gridXml ? childSpans(elementContent(t.gridXml)) : [];
@@ -360,6 +360,86 @@ function restateTableWidth(t: Table, twips: number): void {
     ? carried.replace(/\bw:w="[^"]*"/, `w:w="${twips}"`)
     : `<${/^<([A-Za-z_][-\w.]*):/.exec(carried)?.[1] ?? "w"}:tblW w:w="${twips}"/>`;
   t.tblPrXml = t.tblPrXml.replace(carried, next);
+}
+
+// ------------------------------------------------------------------- 列宽
+
+/** 一格说没说自己按缇数摆宽：`w:tcW` 的 `w:type` 只有 `dxa`（与没写=写出器认的 `dxa`）才吃缇数。 */
+const isDxaWidth = (cell: TableCell): boolean => !cell.widthType || cell.widthType === "dxa";
+
+/** 那一列上、只占这一列的格：跨列的格说的是几列之和，不是这一列的数。 */
+export function columnCells(t: Table, at: number): TableCell[] {
+  const out: TableCell[] = [];
+  for (const row of t.rows) {
+    const starts = columnStarts(row);
+    row.forEach((cell, i) => {
+      if (starts[i] === at && spanOf(cell) === 1) out.push(cell);
+    });
+  }
+  return out;
+}
+
+/** 「单元格宽度」那一击的答：动了哪些格，或为什么这一列说不出这个数。 */
+export type ColumnWidthEdit = { ok: true; cells: TableCell[] } | { ok: false; reason: string };
+
+/**
+ * 换过宽度的那一列不能再把件里那一句 `w:gridCol` 原样递回去：`setGrid` 按位置复用带回来的元素，护的是
+ * 插列/拆列时「活下来的那一列一个字节不动」，而这一击改的正是那一列的数——原样递回去会发现格换了、网格没换
+ * （表盒按新和算出来，`w:tblW` 与 `w:tblGrid` 从此各说一句话）。照 `restateTableWidth` 同一条口径：只把
+ * `w:w` 这一个值换成新的数，元素其余部分留着；那一句本来没说 `w:w` 时把这一格交回 `undefined`，由 `setGrid`
+ * 现造一枚说得出这个数的。
+ */
+function restateCarriedGrid(carried: (string | undefined)[], at: number, twips: number): (string | undefined)[] {
+  const mine = carried[at];
+  if (!mine) return carried;
+  const next = [...carried];
+  next[at] = /\bw:w="[^"]*"/.test(mine) ? mine.replace(/\bw:w="[^"]*"/, `w:w="${twips}"`) : undefined;
+  return next;
+}
+
+/**
+ * 单元格宽度: 网格那一列换成这个数，这一列上只占一列的格跟着换，表自己那句 `w:tblW` 由 `setGrid` 跟着和走。
+ *
+ * 为什么不是只改光标那一格：授权 46 份里能量出「一列一个数」的 26 张表，同列出现两个数的 **0** 张
+ * （`.scratch/cell-size-audience.py`；另 32 张有跨列格，量不出这一条）。一格单独换个数，写出的就是 WPS
+ * 不写的那一种形状，而页面逐格画宽（`render.ts:868`），同一列上下两格从此不齐——用户看到的是列自己歪了。
+ *
+ * 跨列的格一个字节不动：它的宽度是几列之和，缇数算术会把那句改成「这一列加剩下那几列」。整列都被跨列格
+ * 盖住、或格都按 `pct` 摆时这一击没有格可改，于是回绝——只挪网格会让表变宽而纸面一格没变，那比一句拒绝更糟。
+ */
+export function setColumnWidth(t: Table, at: number, twips: number): ColumnWidthEdit {
+  if (at < 0 || at >= gridColumns(t)) return { ok: false, reason: "这一列不在表格里" };
+  const wanted = Math.round(twips);
+  const movable = columnCells(t, at).filter(isDxaWidth);
+  if (!movable.length) return { ok: false, reason: "这一列被跨列或按百分比摆的格盖住，说不出单列宽度" };
+  const widths = gridWidths(t);
+  const already = widths[at] === wanted && movable.every((c) => Math.round(c.widthTwips ?? wanted) === wanted);
+  if (already) return { ok: false, reason: "这一列已经是这个宽度" };
+  for (const cell of movable) applyCellProps(cell, { widthTwips: wanted });
+  widths[at] = wanted;
+  setGrid(t, widths, restateCarriedGrid(gridCarried(t), at, wanted));
+  return { ok: true, cells: movable };
+}
+
+/**
+ * 「拒绝」/「显示原文」把某一列的格摆回改前那个数之后，网格那一列跟着回去。OOXML 没有 `w:tblGrid` 的记录族——
+ * 修订着的列是**逐格**签的（一格一枚 `w:tcPrChange`，整列共用一个 `w:id`），网格只是那份数的镜像；不重述这一列，
+ * 表盒（`w:tblW`，#190 按网格和算）与逐格画出来的宽就还站在按下去的那个数上，「原始状态」与最终态画成一样宽。
+ *
+ * 只在**那一列的数能确定**时才动：这一列上只占一列、按缇数摆的格全都说了同一个数，而网格说的不是它。跨列的格
+ * 说不出这一列多宽，各说各的（授权 46 份 32/58 张是这样）也不猜——保持现状比编一个数诚实。
+ */
+export function restateColumnFromCells(t: Table, at: number): boolean {
+  if (at < 0 || at >= gridColumns(t)) return false;
+  const stated = columnCells(t, at).filter((c) => isDxaWidth(c) && c.widthTwips !== undefined);
+  if (!stated.length) return false;
+  const first = Math.round(stated[0].widthTwips!);
+  if (!stated.every((c) => Math.round(c.widthTwips!) === first)) return false;
+  const widths = gridWidths(t);
+  if (widths[at] === first) return false;
+  widths[at] = first;
+  setGrid(t, widths, restateCarriedGrid(gridCarried(t), at, first));
+  return true;
 }
 
 // ------------------------------------------------------- carried property sets

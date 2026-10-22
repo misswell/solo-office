@@ -2670,7 +2670,9 @@ export class DocEditor {
    * 开着修订 is a different landing, and it is the model's, not a guess at WPS: `w:cellDel`（§17.4.67）says only
    * 「这一格不在了」 — no direction, no property set — so the cell stays on the paper carrying that sentence and
    * the fill-in happens when the reviewer accepts it, through the same `removeCell` absorption the untracked
-   * click applies. WPS's own bytes for this command remain 未取证.
+   * click applies. The sentence does reach the paper: `render.ts` stamps `td[data-cell-rev]` from `cell.revs`
+   * (which `signCellPlaceRevision` fills along with `w:tcPr`) and the 档位 rules retire it in 最终状态.
+   * WPS's own bytes — and its own mark for a pending cell deletion — remain 未取证.
    */
   deleteCell(shift: "left" | "up"): TableCommandAnswer {
     const caret = this.caretPath();

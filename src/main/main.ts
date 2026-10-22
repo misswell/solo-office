@@ -746,8 +746,11 @@ function smoke(): void {
           // 现问：这一腿每按一次命令纸就重铺一回，开头抓住的那只盒当场离开文档——照旧引用量到的是 0 宽与旧列数。
           const ttFind = () => [...document.querySelectorAll("#view .page table.doc-table")].find((x) => (x.textContent ?? "").includes("甲"));
           const ttBox = () => Math.round((ttFind()?.getBoundingClientRect().width ?? 0) * 10) / 10;
-          // 两样分开报：CSS 上写的那一句是文件的数（8000 缇 ÷ 15.0001 = 533.3px），盒量到的是纸面真实那只盒——
-          // 这一页的表格带 1 px 缝线（index.html 的 doc-table td border 与 collapse），所以盒比写的数宽约 1 px。
+          // 两样分开报：CSS 上写的那一句是文件的数（8000 缇 ÷ 15.0001 = 533.3px），盒量到的是纸面真实那只盒。
+          // 这两个数在这一件上**不该相等**：同一趟更早的 #146 那一腿在这张表上落过框线（它按表形状认件），
+          // 文件说了边的格子里那条 1px 在 collapse 模型下半宽出地界，所以盒恒比写的数宽 0.5px。
+          // 这一条量在 .scratch/tbl-ring-width-probe.html：边挂在 table 自身不涨宽，挂在外圈格子上才涨。
+          // 「页面替每一格发明一条缝线」那条假象不靠这个差量证据，改由下面「查看网格线」那一腿的墨/导引互斥审计直接量。
           const ttWritten = () => {
             const el = ttFind();
             return el ? Math.round(parseFloat(el.style.width || "0") * 10) / 10 : 0;
@@ -1122,6 +1125,114 @@ function smoke(): void {
             await wait(240);
             ttPrevLit = ttAlignLit();
           }
+          // 「查看网格线」那一枚（CT_TableTools.kuip:8 的 ShowGridlines，RB_Table 组里第一枚摆得出的）在装机这一趟量五条：
+          // 起手这一档开着且导引真画得出、关掉之后墨那一本账一条不动、开与关之间纸一个像素不挪、按两下回到原档而件不脏，
+          // 再加上「同一条边不许既有墨又有导引」（#196 之前页面替每一格发明一条边，量的正是这一枚）。
+          // 夹具（.scratch/make-table-tools-smoke.ts）刚拼出来时一句边也没说，但**同一趟 smoke 早几步**的 #146 那一腿
+          // 会在这张表上落框线（它按表形状认件，不按标题），所以「墨」这一趟不是一张白纸：断的是「墨只随文件说的那句动、
+          // 不随这一档动」与「有墨的边不留导引」，不是「六格 24 条边全没墨」。
+          // 按钮每次现问：这一页的 ribbon 会随 syncDocRibbon 重排，开头抓住的那枚节点当场离开文档。
+          const glBtn = () => ttRowEls().find((b) => (b.textContent ?? "").includes("查看网格线"));
+          const glViewOn = () => (document.getElementById("view")?.classList.contains("doc-grid") ? 1 : 0);
+          const glLit = () => (glBtn()?.classList.contains("on") ? 1 : 0);
+          const glTds = () => [...(ttFind()?.querySelectorAll("td") ?? [])].slice(0, 6);
+          const glShadow = () => glTds().map((td) => (getComputedStyle(td).boxShadow === "none" ? 0 : 1)).join("");
+          const glInk = () => glTds().map((td) => {
+            const s = getComputedStyle(td);
+            return [s.borderTopStyle, s.borderRightStyle, s.borderBottomStyle, s.borderLeftStyle].join("/");
+          }).join("|");
+          // 「页面替文件说话」那一枚缺陷的签名：同一条物理线上**既有墨又有导引**（导引只该留给没人画线的那些线）。
+          // 反过来「既没墨又没导引」是这一档开着时屏幕上看不见地界。问「这条线上有没有墨」得问**那条线**而不是手上那一格：
+          // 外圈那四条线是表自己说的，墨写在 table 元素身上（render.ts 的 edgeOf 同一口径），内部那一条缝由贴着它的两格
+          // 任一格的墨代表。四条边的签名互不为子串，所以能从一整串 --gl 里逐条认出来（串本身画得出这条量在
+          // .scratch/bs-td-probe.html）。
+          const glSig = { top: "inset 0 1px 0", bottom: "inset 0 -1px 0", left: "inset 1px 0 0", right: "inset -1px 0 0" };
+          const glAudit = () => {
+            const t = ttFind();
+            if (!t) return { edges: 0, both: "no-table", neither: "no-table" };
+            const CAP = { top: "Top", bottom: "Bottom", left: "Left", right: "Right" };
+            const OPP = { top: "bottom", bottom: "top", left: "right", right: "left" };
+            const SIDES = ["top", "bottom", "left", "right"];
+            const both = [];
+            const neither = [];
+            let edges = 0;
+            const inkOf = (el, side) => getComputedStyle(el)["border" + CAP[side] + "Style"] !== "none";
+            const near = (a, b) => Math.abs(a - b) < 1.5;
+            const tr = t.getBoundingClientRect();
+            const all = [...t.querySelectorAll("td")].map((td) => ({ el: td, q: td.getBoundingClientRect() }));
+            const overX = (a, b) => a.q.left < b.q.right - 1 && a.q.right > b.q.left + 1;
+            const overY = (a, b) => a.q.top < b.q.bottom - 1 && a.q.bottom > b.q.top + 1;
+            const lineInk = (a, side) => {
+              if (inkOf(a.el, side)) return true;
+              const ring = side === "top" ? near(a.q.top, tr.top) : side === "bottom" ? near(a.q.bottom, tr.bottom)
+                : side === "left" ? near(a.q.left, tr.left) : near(a.q.right, tr.right);
+              if (ring && inkOf(t, side)) return true;
+              const other = OPP[side];
+              for (let j = 0; j < all.length; j++) {
+                const b = all[j];
+                if (b.el === a.el) continue;
+                const face = side === "top" ? near(b.q.bottom, a.q.top) && overX(a, b)
+                  : side === "bottom" ? near(b.q.top, a.q.bottom) && overX(a, b)
+                  : side === "left" ? near(b.q.right, a.q.left) && overY(a, b) : near(b.q.left, a.q.right) && overY(a, b);
+                if (face && inkOf(b.el, other)) return true;
+              }
+              return false;
+            };
+            const sample = glTds();
+            for (let i = 0; i < sample.length; i++) {
+              const a = { el: sample[i], q: sample[i].getBoundingClientRect() };
+              const list = getComputedStyle(a.el).getPropertyValue("--gl");
+              for (let k = 0; k < 4; k++) {
+                const side = SIDES[k];
+                edges++;
+                const ink = lineInk(a, side);
+                const guide = list.indexOf(glSig[side]) >= 0;
+                if (ink && guide) both.push(i + "." + side);
+                if (!ink && !guide) neither.push(i + "." + side);
+              }
+            }
+            return { edges, both: both.join(","), neither: neither.join(",") };
+          };
+          const glRect = () => {
+            const t = ttFind();
+            const r = t ? t.getBoundingClientRect() : null;
+            const box = r ? Math.round(r.width * 10) / 10 + "x" + Math.round(r.height * 10) / 10 : "no-table";
+            return box + "|" + glTds().map((td) => {
+              const q = td.getBoundingClientRect();
+              return Math.round(q.width * 100) + "x" + Math.round(q.height * 100);
+            }).join(",");
+          };
+          const glGroups = [...document.querySelectorAll("#ribbon .rbar[data-tab='table'] .grp")];
+          const glGroupIdx = glGroups.findIndex((g) => [...g.querySelectorAll("button")].some((b) => (b.textContent ?? "").includes("查看网格线")));
+          const glStartView = glViewOn();
+          const glStartLit = glLit();
+          const glStartShadow = glShadow();
+          const glStartInk = glInk();
+          const glStartAudit = glAudit();
+          const glStartRect = glRect();
+          // 视图那一档不该把件弄脏，也不该给谁回绝一句（这一枚归视图，不归选区）。
+          // 起手那一档标题上已经挂着 ●（上面几腿是真编辑），所以这里问的是「按两下前后那枚 ● 有没有换边」，不是它亮不亮。
+          const glDirty0 = (document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0;
+          glBtn()?.click();
+          await wait(320);
+          const glOffView = glViewOn();
+          const glOffLit = glLit();
+          const glOffShadow = glShadow();
+          const glOffInk = glInk();
+          // 关掉这一档之后量的这一条只报 both，不报 neither——量到的不是产品改了导引：那串 --gl 里嵌着
+          // var(--gl-ink)，而 --gl-ink 只挂在容器那枚 doc-grid 上（index.html 的 463-464 行），档一关这个变量按
+          // CSS 变量的规矩整个失效，computed --gl 就序列化成空串。所以那一档问得出「没有哪条边墨与导引叠在一起」，
+          // 问不出「导引的字面还是不是原来那串」——后者由起手那一条与画得出/退场那两条一起管。
+          const glOffAudit = glAudit();
+          const glOffRect = glRect();
+          const glOffNotice = ttNoticeSel();
+          glBtn()?.click();
+          await wait(320);
+          const glBackView = glViewOn();
+          const glBackLit = glLit();
+          const glBackShadow = glShadow();
+          const glBackRect = glRect();
+          const glDirty1 = (document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0;
           // 光标交回表外：下面那一段量的还是「表一退场、页签跟着退、档回到开始」，与这一腿各说各的。
           const ttCursorBackInCell = ttAlignTd() ? 1 : 0;
           // 光标退出表挑的是**表外那一段**，不是「第一张纸最后一个孩子」：表涨宽后会挪到别的纸上，
@@ -1166,6 +1277,10 @@ function smoke(): void {
             ttRefuseH, ttNoticeRefuseH, ttLitRefuseH, ttTextAlignRefuseH, ttLitUndoH, ttTextAlignUndoH,
             ttLitEnd, ttHomeEnd, ttValignEnd, ttTextAlignEnd, ttNoticeEnd, ttPrevLit, ttCursorBackInCell,
             ttAlignOutLit, ttAlignOutDisabled, ttHomeOutDisabled,
+            glBtnPresent: glBtn() ? 1 : 0, glBtnLabel: glBtn()?.textContent ?? "", glGroupIdx: glGroupIdx,
+            glStartView, glStartLit, glStartShadow, glStartInk, glStartEdges: glStartAudit.edges, glStartBoth: glStartAudit.both, glStartNeither: glStartAudit.neither, glStartRect,
+            glOffView, glOffLit, glOffShadow, glOffInk, glOffEdges: glOffAudit.edges, glOffBoth: glOffAudit.both, glOffNeither: glOffAudit.neither, glOffRect, glOffNotice,
+            glBackView, glBackLit, glBackShadow, glBackRect, glDirty0, glDirty1,
             ttDirty: (document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0,
           };
         }

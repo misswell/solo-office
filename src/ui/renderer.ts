@@ -881,15 +881,29 @@ function buildDocRibbon(): void {
 
   // 表格工具的上下文页。WPS 的组序是 `<subcommand id="CT_TableTools">`（`CT_TableTools.kuip:180-198`）说死的：
   // RB_Table → RB_RowsAndColumns → RB_Merge → RB_Adjust → RB_Table_Font → RB_Alignment → RB_Data → TableSelectMenu。
-  // 这里摆家里真做得了的五组，组名用自家的话，**位置按上面那个组序**（缺的是中间那几组，不是摆好的这几组的位）：
+  // 这里摆家里真做得了的组，组名用自家的话，**位置按上面那个组序**（缺的是中间那几组，不是摆好的这几组的位）：
+  //   · 表格 ← RB_Table 的 `ShowGridlines`（视图那一档，见下面那枚 `props`；`TableProperties` 仍缺）；
   //   · 行与列 ← RB_RowsAndColumns 里的 `TableTools_Insert`（上方/下方插入行、左侧/右侧插入列、Cells…）
   //     与 `Delete` 那档四条（:33-36：单元格、列、行、表格）；
   //   · 合并与拆分 ← RB_Merge 的 Merge Cells / Split Cells / Split Table by Row（按列拆仍是 0 命令）；
   //   · 单元格尺寸 ← RB_Adjust 的高度/宽度两格（见 `CELL_SIZE_SPINS`）；
   //   · 对齐 ← RB_Alignment 的两行六枚（见 `TABLE_ALIGN_BUTTONS`）；
   //   · 选择 ← TableSelectMenu 的四条。
-  // RB_Table（属性/网格线）、RB_Table_Font 与 RB_Data（公式/转文字/标题行重复）要建模或对话框，
+  // RB_Table 里的「属性」、RB_Table_Font 与 RB_Data（公式/转文字/标题行重复）要建模或对话框，
   // 这一轮不摆空按钮——宁缺一条，不摆一条按下去什么也不改的。
+  // `RB_Table`（`CT_TableTools.kuip:5-9`，`groupTip="TableToolPropertyGroup"`）在 WPS 那条 `<subcommand>` 组序里排
+  // **第一**，组里两枚：`TableProperties`（:7）与 `ShowGridlines`（:8，`idMso="TableShowGridlines"`）。
+  // 这一轮只摆后者：
+  //  · 「查看网格线」说的是**屏幕上画不画导引线**这一句，文件里没有它（下面那枚 `showGridlines` 说清了为什么），
+  //    家里画得出来也回得了显，所以摆；
+  //  · 「表格属性」按下开的是对话框——那张对话框里摆哪些字段、每一字段落哪一句 OOXML，WPS 侧**未取证**，
+  //    摆一枚按下去说不出话的按钮不做（与 `m_TableTextDirection`、分栏那两枚同一口径）。
+  const props = group("table");
+  button(props, "gridlines", "查看网格线", "把文件里没说过线的那些格子边，在屏幕上画成导引线（WPS：View Gridlines）；导引线上不了纸", () => {
+    showGridlines = !showGridlines;
+    syncDocRibbon();
+  });
+
   const tbl = group("table");
   /**
    * 结构命令的答案：拒绝时把**命令自己说的那一句**摆出来，然后无论成败都重读一遍 ribbon。那一条带子上每一枚
@@ -1154,6 +1168,19 @@ let overflowAbort: AbortController | undefined;
 let tableTab: { button: HTMLButtonElement; shown: () => string; show: (key: string) => void } | undefined;
 
 /**
+ * 「查看网格线」那一档（`CT_TableTools.kuip:8` 的 `ShowGridlines`，`idMso="TableShowGridlines"`）说的是**屏幕上
+ * 画不画导引线**，不是文件里的一句话，所以它既不进 `DocEditor`、也不进撤销栈、更不把件弄脏：
+ * OOXML 里确实没有这一句——授权 46 份的 `word/settings.xml` 里带 Grid 的四族（`drawingGridVerticalSpacing` 44 枚、
+ * `displayHorizontalDrawingGridEvery` 46 枚、`displayVerticalDrawingGridEvery` 44 枚、`drawingGridHorizontalSpacing` 6 枚）
+ * 说的是**画布**那张网格，与表的格子边无关（同一趟量的，`.scratch/gridlines-audience.py`）。
+ * 落点只有容器上那一枚 `doc-grid`：`render.ts` 把「文件没说过要画线」的那几条边并成一串 `--gl` 内阴影，
+ * CSS 按这一枚挂不挂决定画不画；关掉之后那些边一条都不画——那才是文件说的样子。
+ * WPS 那一档默认开还是关**未取证**（装机件里没量过这一档）；家里默认开，理由是关掉之后一张没说过线的表
+ * 在屏幕上连地界都看不见，用户无从下手。
+ */
+let showGridlines = true;
+
+/**
  * ribbon 跟着文档读的那一趟。`force` 只在**换文档**那一趟给：上一份里打了还没落笔的那串字属于上一份文件，
  * 不搬进这一份（`buildRibbon` 同种类不重建，那几格是同一批元素，所以这一条得由这里说）。
  */
@@ -1166,6 +1193,10 @@ function syncDocRibbon(force = false): void {
   mark("italic", state?.italic ?? false);
   mark("under", state?.underline ?? false);
   mark("strike", state?.strike ?? false);
+  // 「查看网格线」那一枚回显的是**视图档**、不问文档：它不跟着光标变，也不参与「件改了没有」的判断。
+  // 容器上那一枚 `doc-grid` 也在这一趟挂/摘——换文件、开关、编辑后重读走的都是这一条路，不留第二处写法。
+  mark("gridlines", showGridlines);
+  view.classList.toggle("doc-grid", showGridlines);
   // 「没说」与「明说 left」画的是一件事（§17.3.1.13 默认左；授权 46 份里 88 段明说 left，
   // `.scratch/authorized-jc-echo.ts`），两档都该亮「左」——只亮 `undefined` 那一档，停在那 88 段上时
   // 纸面靠左、按钮上一枚都不亮，说的是谎话。

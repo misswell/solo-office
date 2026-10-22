@@ -450,7 +450,18 @@
          (`.scratch/title-css-dom.html`). */
       .page h1, .page h2, .page h3, .page h4 { font: inherit; line-height: inherit; margin: 0; }
       .page .doc-table { border-collapse: collapse; margin: 10px 0; width: auto; }
-      .page .doc-table td { border: 1px solid #b9bfc7; padding: 5px 9px; vertical-align: top; }
+      /* 这一条原来写着 `border: 1px solid #b9bfc7`——给**每一枚**格子都画一条边。文件说过边的格子被行内 style
+         盖住，没说过的那一格就归了这条 CSS：于是文件明说「这一条边不要线」（`w:val="none"`）的那些边也被画上
+         一条，而且画在往纸上落的那份墨里（打印也带）。授权 46 份里量到 44 条这样的边（2 件，同一份模板的
+         zh_CN/zh_HK 两份；`.scratch/gridlines-audience.py`）。边画不画只问文件，所以这条切掉。 */
+      .page .doc-table td { padding: 5px 9px; vertical-align: top; }
+      /* 「查看网格线」那一档（WPS：`CT_TableTools.kuip:8` 的 `ShowGridlines`）画的是**屏幕上的导引线**，不是
+         文件里说的那一句：没人替这一条边说「画线」时，`render.ts` 把缺的那几条并成一整条 `--gl` 内阴影列表，
+         画不画由容器上这枚 `doc-grid` 决定。用 box-shadow 不用 border，因为阴影不进盒模型——开与关之间纸上的
+         行高与表宽一个像素都不动（`.scratch/tbl-grid-dom.ts` 逐条量两档的 rect）。清单只能整条给：`box-shadow`
+         的列表里塞一枚 `none` 是非法值，整条声明一起作废。WPS 那一档默认开还是关**未取证**。 */
+      #view.doc-grid { --gl-ink: #c3c9d4; }
+      #view.doc-grid .page .doc-table td { box-shadow: var(--gl, none); }
       .page .bullet { display: inline-block; min-width: 22px; color: #4a5160; }
       .page .tab { display: inline-block; width: 32px; }
       .page a { color: #2b62a8; }
@@ -578,6 +589,8 @@
         main { display: block; overflow: visible !important; }
         #view { overflow: visible !important; }
         .page { box-shadow: none; margin: 0 auto; }
+        /* 导引线上不了纸：那一档只是屏幕上看格子的地界，文件里没这一句。开着那一档打印时也得一条不画。 */
+        #view .page .doc-table td { box-shadow: none !important; }
         .deck { height: auto; }
         .rail, .notes { display: none; }
         .stage { overflow: visible; background: #fff; }

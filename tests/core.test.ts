@@ -189,7 +189,9 @@ describe("docx reader", () => {
     expect(html).toContain("<h1");
     expect(html).toContain('class="doc-table"');
     expect(html).toContain("page-break-before:always");
-    expect(html).toMatch(/<td style="width:160px;background:#DEEAF6;?"/);
+    // 宽高与底纹仍旧按文件那句上身（这一条只查「按序落在同一枚 style 里」，
+    // 后面接着的是导引清单 `--gl`——那一串的形状由 tests/doc-table-gridlines.test.ts 判）。
+    expect(html).toMatch(/<td style="width:160px;background:#DEEAF6;/);
   });
 });
 

@@ -712,6 +712,33 @@ function borderCss(property: string, edge?: TableBorder): string {
 
 const isSet = (edge?: TableBorder): edge is TableBorder => edge !== undefined;
 
+/**
+ * 「查看网格线」那一档的屏幕导引线：文件里**没人替这一条边说「画一条线」**（明说 `none` 也算没人说）时，
+ * 给这一条边留一条内阴影。为什么用 `box-shadow` 不用 `border`：阴影不进盒模型，开着与关着之间纸上的行高、
+ * 表宽一个像素都不动（DOM 闸门逐条量这两档的 `getBoundingClientRect`）。这一档归容器上的 `doc-grid` 决定画不画，
+ * 所以关掉之后那些边什么都不画——那才是文件说的样子。
+ *
+ * 为什么四条文**并成一整条列表**（一枚 `--gl`）而不是四条边各一枚 `--gl-top`：`box-shadow` 的列表里塞一枚
+ * `none` 是非法值，整条声明一起作废（`.scratch/bs-td-probe.html` 那趟量到：`inset … , none` → `none`）。
+ * 按四条边分槽写，「这一格只缺两条边」的那种最常见的情形就一条也画不出来——正好是这个切片要修的那种东西。
+ */
+const GRID_EDGE: Record<"top" | "right" | "bottom" | "left", string> = {
+  top: "inset 0 1px 0 var(--gl-ink)",
+  bottom: "inset 0 -1px 0 var(--gl-ink)",
+  left: "inset 1px 0 0 var(--gl-ink)",
+  right: "inset -1px 0 0 var(--gl-ink)",
+};
+
+const gridGuides = (sides: Record<"top" | "right" | "bottom" | "left", TableBorder | undefined>): string => {
+  const guides = (Object.keys(GRID_EDGE) as (keyof typeof GRID_EDGE)[])
+    .filter((side) => {
+      const edge = sides[side];
+      return !edge || !drawsLine(edge.val);
+    })
+    .map((side) => GRID_EDGE[side]);
+  return guides.length ? `--gl:${guides.join(",")};` : "";
+};
+
 /** `w:tblW`, counted in its own type: twips, or fiftieths of a percent. */
 function tableWidth(t: Table): string {
   if (t.widthTwips === undefined) return "";
@@ -861,8 +888,30 @@ function renderTable(t: Table, doc: WordDocument, state: CommentState, gridPx?: 
       const height = rowStyle(row);
       return `<tr${carried}${height ? ` style="${height}"` : ""}${shown ? ` title="${esc(shown)}"` : ""}>${cells
         .map((c, c2) => {
-          const own = c.borders;
           const merge = merges[r][c2]!;
+          // The table's inside lines belong to the seam, so they draw on the cell that faces it, and a
+          // border the cell set for itself wins over the one the table set for the grid.
+          const seamOfCell = (rr: number, cc: number) => {
+            const cellsOf = t.rows[rr] ?? [];
+            const that = cellsOf[cc]?.borders;
+            return {
+              top: [that?.top, rr > 0 ? table?.insideH : undefined].find(isSet),
+              bottom: [that?.bottom, rr < t.rows.length - 1 ? table?.insideH : undefined].find(isSet),
+              left: [that?.left ?? that?.start, cc > 0 ? table?.insideV : undefined].find(isSet),
+              right: [that?.right ?? that?.end, cc < cellsOf.length - 1 ? table?.insideV : undefined].find(isSet),
+            };
+          };
+          const seamOf = seamOfCell(r, c2);
+          // 导引线要问的是「这一条**物理线**上有没有人画线」，所以两件事都得问：外圈那四条线是表自己说的
+          // （写在上头那枚 `<table>` 上），最外一圈的格没人说话时得替它问一句表；而内部那一条缝由贴着它的
+          // **两格任一格**说一句就画一次（collapse 把它们合成同一条线）——只问手上这一格，另一头那格画过线的
+          // 缝会被再留一条导引，同一条线上就叠了两条线。
+          const edgeOf = {
+            top: seamOf.top ?? (r > 0 ? seamOfCell(r - 1, c2).bottom : undefined) ?? (r === 0 ? table?.top : undefined),
+            bottom: seamOf.bottom ?? (r < t.rows.length - 1 ? seamOfCell(r + 1, c2).top : undefined) ?? (r === t.rows.length - 1 ? table?.bottom : undefined),
+            left: seamOf.left ?? (c2 > 0 ? seamOfCell(r, c2 - 1).right : undefined) ?? (c2 === 0 ? table?.left ?? table?.start : undefined),
+            right: seamOf.right ?? (c2 < cells.length - 1 ? seamOfCell(r, c2 + 1).left : undefined) ?? (c2 === cells.length - 1 ? table?.right ?? table?.end : undefined),
+          };
           const style = [
             merge.hidden ? "display:none;" : "",
             c.widthTwips ? `width:${c.widthType === "pct" ? `${c.widthTwips / 50}%` : `${twipsToPx(c.widthTwips)}px`};` : "",
@@ -873,12 +922,11 @@ function renderTable(t: Table, doc: WordDocument, state: CommentState, gridPx?: 
             c.noWrap ? "white-space:nowrap;" : "",
             c.textDirection ? `writing-mode:${writingMode(c.textDirection)};` : "",
             cellPaddingCss(c, t),
-            // The table's inside lines belong to the seam, so they draw on the cell that faces it, and a
-            // border the cell set for itself wins over the one the table set for the grid.
-            borderCss("border-top", [own?.top, r > 0 ? table?.insideH : undefined].find(isSet)),
-            borderCss("border-bottom", [own?.bottom, r < t.rows.length - 1 ? table?.insideH : undefined].find(isSet)),
-            borderCss("border-left", [own?.left ?? own?.start, c2 > 0 ? table?.insideV : undefined].find(isSet)),
-            borderCss("border-right", [own?.right ?? own?.end, c2 < cells.length - 1 ? table?.insideV : undefined].find(isSet)),
+            borderCss("border-top", seamOf.top),
+            borderCss("border-bottom", seamOf.bottom),
+            borderCss("border-left", seamOf.left),
+            borderCss("border-right", seamOf.right),
+            gridGuides(edgeOf),
           ].join("");
           const spans = [c.spanCols && c.spanCols > 1 ? ` colspan="${c.spanCols}"` : "", merge.rows > 1 ? ` rowspan="${merge.rows}"` : ""].join("");
           // 格那一层的结构记录（`w:cellIns` / `w:cellDel`）说的是「这一格在不在」，行那一层的记号管不着它：

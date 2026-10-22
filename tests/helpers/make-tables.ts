@@ -502,3 +502,41 @@ export function makeColumnWidthRevisionDocx(): Uint8Array {
     `</w:tbl>`;
   return pack(document);
 }
+
+/**
+ * 一张**每一边各有各说法**的表（#196，格子边的墨从哪来）：
+ * `w:tblBorders` 只说 `w:top`（单线）与 `w:insideV`（不要线）；甲格自己说左边不要线，丙格自己说底边要一条单线。
+ * 于是 16 条格边凑齐四种说法：格说的要画、格说的不要、表替这条缝/这一圈说的、两人都没说。
+ * 「查看网格线」的导引线只该落在**最后三种里的"没人画线"那两种**上，所以这份夹具的每一格都是判据。
+ */
+export function makeGridlinesDocx(): Uint8Array {
+  const border = (side: string, val: string, sz = 8, color = "FF0000"): string =>
+    `<w:${side} w:val="${val}" w:sz="${sz}" w:space="0" w:color="${color}"/>`;
+  const cell = (label: string, w: number, tcBorders = ""): string =>
+    `<w:tc><w:tcPr><w:tcW w:w="${w}" w:type="dxa"/>${tcBorders}</w:tcPr><w:p><w:r><w:t>${label}</w:t></w:r></w:p></w:tc>`;
+  const document =
+    `<w:tbl><w:tblPr><w:tblW w:w="3000" w:type="dxa"/><w:tblBorders>` +
+    `${border("top", "single")}${border("insideV", "none", 0, "auto")}</w:tblBorders></w:tblPr>` +
+    `<w:tblGrid><w:gridCol w:w="1500"/><w:gridCol w:w="1500"/></w:tblGrid>` +
+    `<w:tr>${cell("甲", 1500, `<w:tcBorders>${border("left", "none", 0, "auto")}</w:tcBorders>`)}${cell("乙", 1500)}</w:tr>` +
+    `<w:tr>${cell("丙", 1500, `<w:tcBorders>${border("bottom", "single", 6, "0070C0")}</w:tcBorders>`)}${cell("丁", 1500)}</w:tr>` +
+    `</w:tbl>`;
+  return pack(document);
+}
+
+/**
+ * 一条缝**只有一头说了要画线**的表（#196 的续）：整张表一句 `w:tblBorders` 也没有，甲格自己说底边一条单线，
+ * 它下面那一格（丙）顶边什么都没说。这一条缝在纸上是**同一条线**（`border-collapse:collapse` 把两格的边合成一条），
+ * 所以导引线要认对面那一句：丙的顶边不许再留一条导引，否则画得出的墨外侧又压一条。
+ */
+export function makeSeamInkDocx(): Uint8Array {
+  const cell = (label: string, tcBorders = ""): string =>
+    `<w:tc><w:tcPr><w:tcW w:w="1500" w:type="dxa"/>${tcBorders}</w:tcPr><w:p><w:r><w:t>${label}</w:t></w:r></w:p></w:tc>`;
+  const document =
+    `<w:tbl><w:tblPr><w:tblW w:w="3000" w:type="dxa"/></w:tblPr>` +
+    `<w:tblGrid><w:gridCol w:w="1500"/><w:gridCol w:w="1500"/></w:tblGrid>` +
+    `<w:tr>${cell("甲", `<w:tcBorders><w:bottom w:val="single" w:sz="6" w:space="0" w:color="0070C0"/></w:tcBorders>`)}${cell("乙")}</w:tr>` +
+    `<w:tr>${cell("丙")}${cell("丁")}</w:tr>` +
+    `</w:tbl>`;
+  return pack(document);
+}

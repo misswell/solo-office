@@ -116,6 +116,46 @@ describe("docx table structure commands", () => {
     expect(shape(reloaded(t))).toEqual(shape(t));
   });
 
+  it("keeps the table's own width statement equal to the grid, the way the files write it", () => {
+    // 授权口径 46 件里 58 枚 `w:tblW` 全拼 `dxa` 且等于本表网格和（`.scratch/table-width-audience.py`）：
+    // 「整表多宽」这一句是照网格算出来的，所以命令动了网格的和，这一句要跟着动。
+    const grows = grid();
+    expect(grows.tblPrXml).toContain('<w:tblW w:w="6000" w:type="dxa"/>');
+    expect(insertColumnHere(grows, { row: 0, col: 2 }, "right").ok).toBe(true);
+    expect(grows.columnWidths).toEqual([1000, 2000, 3000, 3000]);
+    expect(grows.widthTwips).toBe(9000);
+    expect(saved(withDoc(grows))).toContain('<w:tblW w:w="9000" w:type="dxa"/>');
+    expect(saved(withDoc(grows))).not.toContain('<w:tblW w:w="6000"');
+
+    const shrinks = grid();
+    expect(deleteColumnHere(shrinks, { row: 0, col: 0 }).ok).toBe(true);
+    expect(shrinks.widthTwips).toBe(5000);
+    expect(saved(withDoc(shrinks))).toContain('<w:tblW w:w="5000" w:type="dxa"/>');
+
+    // 插在两条列中间是把那一条一分为二：和没变，那一枚孩子就一个字也不许多动。
+    const halves = grid();
+    const stated = halves.tblPrXml;
+    expect(insertColumnHere(halves, { row: 0, col: 1 }, "left").ok).toBe(true);
+    expect(halves.tblPrXml).toBe(stated);
+    expect(halves.widthTwips).toBe(6000);
+
+    // `pct` 量的是纸面可用宽度的百分比、不是网格的和；没说过宽度的表也不给它造一枚。
+    const percent = grid();
+    percent.widthType = "pct";
+    percent.widthTwips = 5000;
+    percent.tblPrXml = '<w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblLayout w:type="fixed"/></w:tblPr>';
+    expect(insertColumnHere(percent, { row: 0, col: 2 }, "right").ok).toBe(true);
+    expect(percent.widthTwips).toBe(5000);
+    expect(saved(withDoc(percent))).toContain('<w:tblW w:w="5000" w:type="pct"/>');
+
+    const silent = grid();
+    silent.widthTwips = undefined;
+    silent.tblPrXml = '<w:tblPr><w:tblLayout w:type="fixed"/></w:tblPr>';
+    expect(insertColumnHere(silent, { row: 0, col: 2 }, "right").ok).toBe(true);
+    expect(silent.widthTwips).toBeUndefined();
+    expect(saved(withDoc(silent))).not.toContain("<w:tblW");
+  });
+
   it("deletes a row and hands a merge that lost its start to the row below", () => {
     const t = tableOf(open(makeMergedTableDocx()));
     insertRowHere(t, { row: 0, col: 0 }, "below");

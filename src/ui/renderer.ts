@@ -8,7 +8,7 @@ import { History } from "../core/history.js";
 import { isError } from "../core/formula.js";
 import { rangeSpec, rect, refOf, type Rect } from "../core/sheet-ops.js";
 import { SheetView } from "./sheet-view.js";
-import { DocEditor, type DocPath } from "./doc-edit.js";
+import { DocEditor, type DocPath, type TableCommandAnswer } from "./doc-edit.js";
 import type { RevisionView } from "../core/render.js";
 import { type BorderLeg, type CellLeg, cellLegPatch, legPatch, tableLegPatch, type TableLeg } from "./doc-para-border.js";
 import { DocStatusBar } from "./doc-status-bar.js";
@@ -202,6 +202,35 @@ const statusEl = (): HTMLElement | null => document.getElementById("status");
 
 const flash = (message: string): void => {
   if (statusEl()) statusEl()!.textContent = message;
+};
+
+/**
+ * 文档态没有 `#status`（那是表格壳的底栏），而结构命令的拒绝得说得出理由——「下面没有可让位的单元格」这类句子
+ * 是 `DocEditor` 算出来的，不是按钮猜的。给它一枚浮在纸面右下角的小条，四秒后退场。WPS 拒绝时画的是什么
+ * **未取证**，这一枚是本产品自己的呈报面，不按 WPS 的形状引用。
+ */
+let noticeEl: HTMLElement | undefined;
+let noticeTimer = 0;
+const notify = (message: string): void => {
+  if (statusEl()) {
+    flash(message);
+    return;
+  }
+  if (!noticeEl) {
+    noticeEl = document.createElement("div");
+    noticeEl.className = "doc-notice";
+    noticeEl.setAttribute("role", "status");
+    noticeEl.style.cssText =
+      "position:fixed;right:18px;bottom:52px;z-index:40;max-width:380px;padding:7px 11px;border-radius:6px;" +
+      'background:#2b3038;color:#e8eaed;font:12px/1.5 -apple-system,"PingFang SC",sans-serif;box-shadow:0 4px 16px #0007;pointer-events:none';
+    document.body.append(noticeEl);
+  }
+  noticeEl.textContent = message;
+  noticeEl.hidden = false;
+  window.clearTimeout(noticeTimer);
+  noticeTimer = window.setTimeout(() => {
+    if (noticeEl) noticeEl.hidden = true;
+  }, 4000);
 };
 
 function refreshChrome(): void {
@@ -511,7 +540,16 @@ const DOC_RIBBON_TABS: [string, string][] = [
   ["layout", "页面布局"],
   ["review", "审阅"],
   ["view", "视图"],
+  // 上下文页：WPS 的 `CT_TableTools` 只在光标进表时出现（`res/commands/wps/ongmani/CT_TableTools.kuip`）。
+  ["table", "表格工具"],
 ];
+
+/** 表格工具页上的命令控件：光标出表时页签退场，这几枚也一律灰着（键盘走得到，不能留一条能按的命令）。 */
+const TABLE_TOOL_KEYS = [
+  "rowAbove", "rowBelow", "colLeft", "colRight", "insertCellKind", "delRow", "delCol",
+  "mergeCells", "splitCell", "splitTable",
+  "selectCell", "selectCol", "selectRow", "selectTable",
+] as const;
 
 /**
  * `CT_PageLayout.kuip:153-166` 那一组（`RB_Page_Setup`，`needsinglerowmorebutton="true"`）里 `m_Margins` 之后
@@ -611,6 +649,9 @@ function buildDocRibbon(): void {
     tabs[key] = t;
     strip.append(t);
   }
+  // 表格工具页是**上下文页**：`syncDocRibbon` 每趟按光标问它该不该露，露着的那一页在光标离开时要退回开始页。
+  // 那个函数在模块那一层，所以开关得从这里交出去。
+  tableTab = { button: tabs.table!, shown: () => shown, show: showTab };
   showTab(shown);
   const group = (tab: string): HTMLElement => {
     const g = document.createElement("div");
@@ -805,6 +846,46 @@ function buildDocRibbon(): void {
   button(editing, "", "查找替换", "查找与替换 ⌘F", openFind);
   button(editing, "", "定位", "跳到页 / 节 / 行 / 书签 / 批注 / 表格 / 图形 / 标题 ⌘G", () => editor?.showGoTo());
 
+  // 表格工具的上下文页。WPS 的组序是 `<subcommand id="CT_TableTools">`（`CT_TableTools.kuip:180-198`）说死的：
+  // RB_Table → RB_RowsAndColumns → RB_Merge → RB_Adjust → RB_Table_Font → RB_Alignment → RB_Data → TableSelectMenu。
+  // 这里只摆家里真做得了的三组，组名用自家的话：
+  //   · 行与列 ← RB_RowsAndColumns 里的 `TableTools_Insert`（上方/下方插入行、左侧/右侧插入列、Cells…）
+  //     与 `Delete` 的行、列两条（`DeleteCells`/`DeleteTable` 还没有命令，不摆）；
+  //   · 合并与拆分 ← RB_Merge 的 Merge Cells / Split Cells / Split Table by Row（按列拆仍是 0 命令）；
+  //   · 选择 ← TableSelectMenu 的四条。
+  // RB_Table（属性/网格线）、RB_Adjust（单元格尺寸）、RB_Data（公式/转文字/标题行重复）、RB_Table_Font 与
+  // RB_Alignment 要建模或对话框，这一轮不摆空按钮——宁缺一条，不摆一条按下去什么也不改的。
+  const tbl = group("table");
+  /**
+   * 结构命令的答案：拒绝时把**命令自己说的那一句**摆出来，然后无论成败都重读一遍 ribbon。那一条带子上每一枚
+   * 命令都回这一种形状（`TableCommandAnswer`），所以这一处不需要替谁编一句兜底话——兜底只在命令确实没话说时给。
+   */
+  const tableAction = (out: TableCommandAnswer | undefined): void => {
+    if (out && !out.ok) notify(out.reason ?? "这一步在当前的表格形状里做不了");
+    syncDocRibbon();
+  };
+  button(tbl, "rowAbove", "上方插入行", "上方插入行（WPS：Rows to the Above）", () => tableAction(editor?.insertRow("above")));
+  button(tbl, "rowBelow", "下方插入行", "下方插入行（WPS：Rows to the Below）", () => tableAction(editor?.insertRow("below")));
+  button(tbl, "colLeft", "左侧插入列", "左侧插入列（WPS：Columns to the Left）", () => tableAction(editor?.insertColumn("left")));
+  button(tbl, "colRight", "右侧插入列", "右侧插入列（WPS：Columns to the Right）", () => tableAction(editor?.insertColumn("right")));
+  chooser(tbl, "insertCellKind", "插入单元格（WPS：Cells…）", [["", "插入单元格"], ["right", "右侧插入"], ["down", "下方插入"]], (v) => {
+    (ctl.insertCellKind as HTMLSelectElement).value = "";
+    if (v) tableAction(editor?.insertCell(v as "right" | "down"));
+  });
+  button(tbl, "delRow", "删除行", "删除行（WPS：Delete Rows）", () => tableAction(editor?.deleteRow()));
+  button(tbl, "delCol", "删除列", "删除列（WPS：Delete Columns）", () => tableAction(editor?.deleteColumn()));
+
+  const merges = group("table");
+  button(merges, "mergeCells", "合并单元格", "合并单元格（WPS：Merge Cells）", () => tableAction(editor?.mergeCells()));
+  button(merges, "splitCell", "拆分单元格", "拆分单元格（WPS：Split Cells）", () => tableAction(editor?.splitCell()));
+  button(merges, "splitTable", "按行拆分表格", "按行拆分表格（WPS：Split Table by Row）", () => tableAction(editor?.splitTable()));
+
+  const picking = group("table");
+  button(picking, "selectCell", "选择单元格", "选择单元格（WPS：Select Cell）", () => tableAction(editor?.selectCell()));
+  button(picking, "selectCol", "选择列", "选择列（WPS：Select Column）", () => tableAction(editor?.selectColumn()));
+  button(picking, "selectRow", "选择行", "选择行（WPS：Select Row）", () => tableAction(editor?.selectRow()));
+  button(picking, "selectTable", "选择表格", "选择表格（WPS：Select Table）", () => tableAction(editor?.selectTable()));
+
   // 插入页按 WPS 自己的**组归属**与**显示序**拆。显示序实据是 `CT_Insert.kuip:256-270` 那一段 `<subcommand id="CT_Insert">`：
   // `RB_Pages` →(sep)→ `RB_Illustrations` →(sep)→ `RB_Symbol` →(sep)→ `RB_InsertComments` →(sep)→ `RB_Links` → `RB_Text` →
   // `RB_ComplexObj` → `RB_Media`。家里只有头两档与批注那一档有命令，所以摆三组、不摆空组。
@@ -996,6 +1077,9 @@ let unitEchoOff: (() => void) | undefined;
 /** 溢出箭头的 `resize` 监听归这一枚元素自己：重建前先 `abort()`，不然每切一次文档种类就多留一个监听。 */
 let overflowAbort: AbortController | undefined;
 
+/** 表格工具那一档（上下文页）的开关：露不露、此刻停在哪一页、怎么退，都是 `buildDocRibbon` 建出来的。 */
+let tableTab: { button: HTMLButtonElement; shown: () => string; show: (key: string) => void } | undefined;
+
 /**
  * ribbon 跟着文档读的那一趟。`force` 只在**换文档**那一趟给：上一份里打了还没落笔的那串字属于上一份文件，
  * 不搬进这一份（`buildRibbon` 同种类不重建，那几格是同一批元素，所以这一条得由这里说）。
@@ -1024,6 +1108,17 @@ function syncDocRibbon(force = false): void {
     const b = ctl[key] as HTMLButtonElement | undefined;
     if (b) b.disabled = !cellState?.inTable;
     mark(key, !!want);
+  }
+  // 表格工具这一页只在光标进表时露出来。光标离开时正停在这一页，就退回开始页——留着一页没有页签的带子，
+  // 用户看不出自己在哪，也回不去（页签已经退场）。
+  const inTable = cellState?.inTable ?? false;
+  if (tableTab) {
+    tableTab.button.hidden = !inTable;
+    if (!inTable && tableTab.shown() === "table") tableTab.show("home");
+  }
+  for (const key of TABLE_TOOL_KEYS) {
+    const b = ctl[key] as HTMLButtonElement | HTMLSelectElement | undefined;
+    if (b) b.disabled = !inTable;
   }
   mark("bullet", state?.list === "bullet");
   mark("number", state?.list === "number");

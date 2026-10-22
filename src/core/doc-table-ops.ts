@@ -303,16 +303,63 @@ function gridCarried(t: Table): (string | undefined)[] {
   return kids.length === gridColumns(t) ? kids.map((k) => k.xml) : [];
 }
 
-/** The table's grid, re-laid out: a carried `w:gridCol` is reused wherever a column survived unchanged. */
+/**
+ * What the table's grid adds up to right now: the file's own `w:gridCol` set first, then the model's mirror of
+ * it. Not `gridWidths` — a command reaches here after it has already moved the row's cells, and that function
+ * falls back to measuring the columns off the rows, which would report the grid the command is *making*.
+ */
+function statedGridSum(t: Table): number {
+  const kids = t.gridXml ? childSpans(elementContent(t.gridXml)).filter((k) => k.tag === "gridCol") : [];
+  if (kids.length)
+    return Math.round(kids.reduce((sum, k) => sum + Number(/\bw:w="(-?\d+(?:\.\d+)?)"/.exec(k.xml)?.[1] ?? 0), 0));
+  return Math.round((t.columnWidths ?? []).reduce((sum, w) => sum + w, 0));
+}
+
+/**
+ * The table's grid, re-laid out: a carried `w:gridCol` is reused wherever a column survived unchanged.
+ *
+ * The grid is the table's width: when a command leaves it summing to something else, the table's own
+ * `w:tblW` is restated to the new sum. A command that keeps the sum — splitting a column in two, inserting a
+ * cell to the right — costs that property no bytes at all.
+ */
 function setGrid(t: Table, widths: number[], carried: (string | undefined)[]): void {
+  const before = statedGridSum(t);
+  const after = Math.round(widths.reduce((sum, w) => sum + w, 0));
   t.columnWidths = widths.map((w) => Math.round(w));
   t.columns = widths.length;
-  if (!t.gridXml) return;
-  const prefix = /<([A-Za-z_][-\w.]*):gridCol/.exec(t.gridXml)?.[1] ?? "w";
-  t.gridXml = withChildren(
-    t.gridXml,
-    widths.map((w, i) => carried[i] ?? `<${prefix}:gridCol w:w="${Math.round(w)}"/>`),
-  );
+  if (t.gridXml) {
+    const prefix = /<([A-Za-z_][-\w.]*):gridCol/.exec(t.gridXml)?.[1] ?? "w";
+    t.gridXml = withChildren(
+      t.gridXml,
+      widths.map((w, i) => carried[i] ?? `<${prefix}:gridCol w:w="${Math.round(w)}"/>`),
+    );
+  }
+  if (before !== after) restateTableWidth(t, after);
+}
+
+/**
+ * 网格换和之后，把表自己那句 `w:tblW w:w="…"` 改到新的和上，只动 `w:w` 这一个值，元素其余部分原样留着。
+ *
+ * 授权口径 46 件里 58 枚 `w:tbl` 全带 `w:tblPr/w:tblW w:type="dxa"`，而且 58/58 的 `w:w` 正等于本表
+ * `w:tblGrid/w:gridCol` 之和（`.scratch/table-width-audience.py`）——件写「整表多宽」就是照网格算一遍。
+ * 多一条列还留着旧的数，写出的是 WPS 不写的那一种形状；而页面按 `w:tblW` 画这只盒
+ * （`render.ts:tableWidth`），纸上的表会被压回插入前那条宽度，看着像没插进去。
+ *
+ * 只改**件自己说过 `dxa`** 的那一枚：`pct` 量的是纸面可用宽度的百分比、`auto` 与 `nil` 说的都是「不按宽度摆」，
+ * 三者都不由网格的和来定；`w:type` 没写就是写出器认的 `dxa`。本来没说过宽度的表不给它造一枚，与写出器那句
+ * 「没声明就什么都不写」同一条口径。
+ */
+function restateTableWidth(t: Table, twips: number): void {
+  const carried = t.tblPrXml ? childSpans(elementContent(t.tblPrXml)).find((k) => k.tag === "tblW")?.xml : undefined;
+  const unit = carried ? /\bw:type="(\w+)"/.exec(carried)?.[1] ?? "dxa" : t.widthType ?? "dxa";
+  if (unit !== "dxa") return;
+  if (t.widthTwips === undefined && !carried) return;
+  t.widthTwips = twips;
+  if (!carried || !t.tblPrXml) return;
+  const next = /\bw:w="[^"]*"/.test(carried)
+    ? carried.replace(/\bw:w="[^"]*"/, `w:w="${twips}"`)
+    : `<${/^<([A-Za-z_][-\w.]*):/.exec(carried)?.[1] ?? "w"}:tblW w:w="${twips}"/>`;
+  t.tblPrXml = t.tblPrXml.replace(carried, next);
 }
 
 // ------------------------------------------------------- carried property sets

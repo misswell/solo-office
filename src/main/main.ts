@@ -728,6 +728,78 @@ function smoke(): void {
         await wait(200);
         const revPaneClosed = document.querySelector(".solo-rev-panel:not([hidden])") ? 0 : 1;
         const revDirty = dirtyNow();
+        // #190 的装机那一腿：「表格工具」这一页按光标露藏，命令落下去之后纸上那只盒要跟着网格走。
+        // 只在探针自己那件（标题带 表格工具-装机）上跑：它会往表里真加一列，别的装机件各自有字节账，
+        // 被这一腿牵动就成了假红/假绿。落笔在本节后面那句 solo:save 之前，所以盘上的件由壳自己写。
+        // 这一段整篇是模板字符串里的 JS：不写类型、不写反引号、正则不带转义。
+        const ttDoc = (document.getElementById("title")?.textContent ?? "").includes("表格工具-装机");
+        let ttCmd = null;
+        if (ttDoc) {
+          // 现问：这一腿每按一次命令纸就重铺一回，开头抓住的那只盒当场离开文档——照旧引用量到的是 0 宽与旧列数。
+          const ttFind = () => [...document.querySelectorAll("#view .page table.doc-table")].find((x) => (x.textContent ?? "").includes("甲"));
+          const ttBox = () => Math.round((ttFind()?.getBoundingClientRect().width ?? 0) * 10) / 10;
+          // 两样分开报：CSS 上写的那一句是文件的数（8000 缇 ÷ 15.0001 = 533.3px），盒量到的是纸面真实那只盒——
+          // 这一页的表格带 1 px 缝线（index.html 的 doc-table td border 与 collapse），所以盒比写的数宽约 1 px。
+          const ttWritten = () => {
+            const el = ttFind();
+            return el ? Math.round(parseFloat(el.style.width || "0") * 10) / 10 : 0;
+          };
+          const ttCols = () => ttFind()?.rows[0]?.cells.length ?? 0;
+          const ttCell = ttFind()?.querySelector("tr")?.lastElementChild;
+          const ttRange = document.createRange();
+          ttRange.selectNodeContents(ttCell);
+          ttRange.collapse(true);
+          const ttSel = document.getSelection();
+          ttSel?.removeAllRanges();
+          if (ttSel) ttSel.addRange(ttRange);
+          ttCell?.focus();
+          document.dispatchEvent(new Event("selectionchange"));
+          await wait(220);
+          const ttTab = (label) => [...document.querySelectorAll(".rtabs button")].find((b) => b.textContent === label);
+          const ttRowEls = () => [...document.querySelectorAll("#ribbon .rbar[data-tab='table'] button")];
+          const ttTabHidden = ttTab("表格工具")?.hidden === true ? 1 : 0;
+          const ttTabPresent = ttTab("表格工具") ? 1 : 0;
+          // 露出来的是页签自己（renderer.ts 的 syncDocRibbon 里那句 tableTab.button.hidden = !inTable）。
+          // 点一下页签之后那一行才摆出命令——这两处各报一次：光标进表时那一行的藏露，和按页签之后它的藏露。
+          // 「上下文页自己跳上前台」是 WPS 那边未取证的一条，所以这里不照它下断言，只量产品自己说得出话的那两条。
+          // 这一段整篇在模板字符串里：注释不能带反引号。
+          const ttBarHidden = document.querySelector("#ribbon .rbar[data-tab='table']")?.hidden === true ? 1 : 0;
+          ttTab("表格工具")?.click();
+          await wait(200);
+          const ttBarOpen = document.querySelector("#ribbon .rbar[data-tab='table']")?.hidden === true ? 1 : 0;
+          const ttBtns = ttRowEls().map((b) => b.textContent).join("/");
+          const ttPxBefore = ttBox();
+          const ttWrittenBefore = ttWritten();
+          const ttColsBefore = ttCols();
+          const ttHit = ttRowEls().find((b) => b.textContent === "右侧插入列");
+          const ttDisabled = ttHit?.disabled === true ? 1 : 0;
+          ttHit?.click();
+          await wait(360);
+          const ttNotice = [...document.querySelectorAll(".doc-notice")].map((n) => (n.hidden ? "" : n.textContent ?? "")).join("");
+          const ttPxAfter = ttBox();
+          const ttWrittenAfter = ttWritten();
+          const ttColsAfter = ttCols();
+          // 光标退出表挑的是**表外那一段**，不是「第一张纸最后一个孩子」：表涨宽后会挪到别的纸上，
+          // 第一张纸的末 child 可能就是这只表——那样量到的是分页，不是那一页的退场。
+          const ttOut = [...document.querySelectorAll("#view .para")].find((el) => !el.closest("table"));
+          const ttBackRange = document.createRange();
+          ttBackRange.selectNodeContents(ttOut);
+          ttBackRange.collapse(true);
+          const ttBackSel = document.getSelection();
+          ttBackSel?.removeAllRanges();
+          if (ttBackSel) ttBackSel.addRange(ttBackRange);
+          ttOut?.focus?.();
+          document.dispatchEvent(new Event("selectionchange"));
+          await wait(260);
+          const ttTabBackHidden = ttTab("表格工具")?.hidden === true ? 1 : 0;
+          const ttHomeOn = ttTab("开始")?.classList.contains("on") ? 1 : 0;
+          const ttInTableAgain = ttOut ? 0 : 1;
+          ttCmd = {
+            ttTabPresent, ttTabHidden, ttBarHidden, ttBarOpen, ttBtns, ttHit: ttHit ? 1 : 0, ttDisabled, ttNotice,
+            ttPxBefore, ttPxAfter, ttWrittenBefore, ttWrittenAfter, ttColsBefore, ttColsAfter, ttTabBackHidden, ttHomeOn, ttInTableAgain,
+            ttDirty: (document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0,
+          };
+        }
         // 上面那些落点把光标留在了格里；后面那三条断命令与图片要按这一趟原本的位置落在正文里，所以先放回纸的末尾。
         const pageNow = document.querySelector("#view .page");
         const lastBlock = pageNow?.children[pageNow.children.length - 1];
@@ -1370,7 +1442,7 @@ function smoke(): void {
         const recovered = { cells: document.querySelectorAll(".sheet-wrap td").length, title: document.getElementById("title")?.textContent };
         // The run ends on a modified document, so quitting goes through the unsaved prompt.
         // A PDF the export asked for shows up in saveAsWrites, next to the pptx/xlsx saves.
-        return { docPart, paraBox, paraBoxCmd, tblBoxCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
+        return { docPart, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
       })()`;
       void last?.webContents
         .executeJavaScript(probe)

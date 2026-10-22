@@ -32,6 +32,12 @@ import { openGoTo } from "./doc-goto.js";
 /** What one structure command came back with, including which table it ran on and how the page names it. */
 type CommandOutcome = { ok: true; at: CellWhere; prefix: number[]; table: Table } | { ok: false; reason: string };
 
+/**
+ * 那一页命令回给页面的答案：要么落了笔，要么说得出为什么没落。「表格工具」那一条带子上的每一枚都要能说这句
+ * 话——只回一个 `false`，页面就只能替它编一句通用的，用户看不出到底是光标没在表里还是这一格不肯让位。
+ */
+export type TableCommandAnswer = { ok: boolean; reason?: string };
+
 /** 一格边框落笔的全部依据：改后的账、这一击动过的边、以及修订要记下的改前形状。 */
 type CellBoxEdit = {
   cell: TableCell;
@@ -1640,6 +1646,13 @@ export class DocEditor {
     let below: Element | null = node instanceof Element ? node : node.parentElement;
     for (let cur = below; cur && cur !== this.page; cur = cur.parentElement) {
       if (below && (cur.tagName === "TD" || cur.tagName === "TH")) {
+        // 光标容器就是这一格本身：真人点的是格里没有字的那块地方（padding、字下面那一截），浏览器铺出来的
+        // Range 起止就是 `<td>` 与它的第 k 个孩子之间。这一处不能问「below 是这格的第几个孩子」（它就是这格，
+        // 数不出下标），要问「第 k 个孩子是哪一块」——照 `pathOfPageEdge` 对纸那一条同一个走法递归进去。
+        if (below === cur) {
+          const child = cur.children[Math.min(offset, cur.children.length - 1)];
+          return child ? this.pathOf(child, offset === 0 ? 0 : child.childNodes.length) : null;
+        }
         const tr = cur.parentElement;
         // The row's own table, found through the tbody the page draws it in — `closest` stops at the innermost
         // one, which is what a cell of a nested table belongs to.
@@ -2613,21 +2626,26 @@ export class DocEditor {
    * 插入行. Word's own shortcut puts the caret in the new row's first cell; with 修订 on, the row signs itself
    * as an insertion in its `w:trPr`, which is where a row's record belongs rather than around each of its runs.
    */
-  insertRow(side: "above" | "below"): boolean {
+  insertRow(side: "above" | "below"): TableCommandAnswer {
     const caret = this.caretPath();
     const ran = this.tableCommand(caret, (table, where) => insertRowHere(table, where, side));
-    if (!ran || !ran.ok) return false;
+    if (!ran) return { ok: false, reason: "光标不在表格里" };
+    if (!ran.ok) return { ok: false, reason: ran.reason };
     if (this.trackRevisions) this.signRow(ran.table, ran.at.row, this.sign("ins"));
     this.settleTableEdit(ran.prefix, ran.at);
-    return true;
+    return { ok: true };
   }
 
-  /** 插入列: the grid gains a column and the table keeps the width it had. */
-  insertColumn(side: "left" | "right"): boolean {
+  /**
+   * 插入列: 一格劈成两半时网格和不变，那一圈也就还是那一圈；在最左/最右外面添一列时网格和涨了，
+   * 那句 `w:tblW` 跟着网格和走（`doc-table-ops.ts` 的 `setGrid` 是唯一说这话的地方）。
+   */
+  insertColumn(side: "left" | "right"): TableCommandAnswer {
     const ran = this.tableCommand(this.caretPath(), (table, where) => insertColumnHere(table, where, side));
-    if (!ran || !ran.ok) return false;
+    if (!ran) return { ok: false, reason: "光标不在表格里" };
+    if (!ran.ok) return { ok: false, reason: ran.reason };
     this.settleTableEdit(ran.prefix, ran.at);
-    return true;
+    return { ok: true };
   }
 
   /**
@@ -2636,7 +2654,7 @@ export class DocEditor {
    * no row under it — is refused with the reason, the way 合并单元格 reports it, rather than redrawn as something
    * nobody asked for.
    */
-  insertCell(shift: "right" | "down"): { ok: boolean; reason?: string } {
+  insertCell(shift: "right" | "down"): TableCommandAnswer {
     const ran = this.tableCommand(this.caretPath(), (table, where) => insertCellHere(table, where, shift));
     if (!ran) return { ok: false, reason: "光标不在表格里" };
     if (!ran.ok) return { ok: false, reason: ran.reason };
@@ -2661,7 +2679,7 @@ export class DocEditor {
    * 粘贴为嵌套表: the copied table lands inside the cell the caret sits in, below the paragraph the caret is
    * on. It is a copy, so the original stays where it was and the two never share a cell or a row record.
    */
-  pasteAsNestedTable(source?: Table): { ok: boolean; reason?: string } {
+  pasteAsNestedTable(source?: Table): TableCommandAnswer {
     const caret = this.caretPath();
     const target = this.tableAt(caret);
     if (!target) return { ok: false, reason: "光标不在表格里" };
@@ -2687,7 +2705,7 @@ export class DocEditor {
   }
 
   /** 粘贴为追加行: the copied table's rows join this table at the bottom, sized to its columns. */
-  pasteAppendTable(source?: Table): { ok: boolean; reason?: string } {
+  pasteAppendTable(source?: Table): TableCommandAnswer {
     const caret = this.caretPath();
     const clip = source ?? this.clipTable;
     if (!clip) return { ok: false, reason: "剪贴板里没有表格" };
@@ -2705,51 +2723,54 @@ export class DocEditor {
    * 删除行. With 修订 on the row stays in the file and says it was removed — `w:trPr/w:del` on the row, its
    * runs struck — because a row somebody deleted is still a row until the change is accepted.
    */
-  deleteRow(): boolean {
+  deleteRow(): TableCommandAnswer {
     const caret = this.caretPath();
     const target = this.tableAt(caret);
-    if (!target) return false;
+    if (!target) return { ok: false, reason: "光标不在表格里" };
     if (this.trackRevisions) {
       this.snapshot(caret);
       const rev = this.sign("del");
       this.signRow(target.table, target.where.row, rev);
       this.settleTableEdit(target.prefix, target.where);
-      return true;
+      return { ok: true };
     }
     const ran = this.tableCommand(caret, deleteRowHere);
-    if (!ran || !ran.ok) return false;
+    if (!ran) return { ok: false, reason: "光标不在表格里" };
+    if (!ran.ok) return { ok: false, reason: ran.reason };
     this.settleTableEdit(ran.prefix, ran.at);
-    return true;
+    return { ok: true };
   }
 
   /** 删除列. */
-  deleteColumn(): boolean {
+  deleteColumn(): TableCommandAnswer {
     const ran = this.tableCommand(this.caretPath(), deleteColumnHere);
-    if (!ran || !ran.ok) return false;
+    if (!ran) return { ok: false, reason: "光标不在表格里" };
+    if (!ran.ok) return { ok: false, reason: ran.reason };
     this.settleTableEdit(ran.prefix, ran.at);
-    return true;
+    return { ok: true };
   }
 
   /**
    * 合并单元格: the rectangle the selection covers becomes one cell. A merge that crosses a cell already
    * merged is refused by the command, and the page says why rather than redrawing a shape nobody asked for.
    */
-  mergeCells(): { ok: boolean; reason?: string } {
+  mergeCells(): TableCommandAnswer {
     const span = this.tableSpan();
-    if (!span) return { ok: false, reason: "先把光标放在一个表格里" };
+    if (!span) return { ok: false, reason: "光标不在表格里" };
     const ran = this.tableCommand(this.pageSelection?.start ?? null, (table) => mergeHere(table, span.from, span.to));
-    if (!ran) return { ok: false, reason: "先把光标放在一个表格里" };
+    if (!ran) return { ok: false, reason: "光标不在表格里" };
     if (!ran.ok) return { ok: false, reason: ran.reason };
     this.settleTableEdit(ran.prefix, ran.at);
     return { ok: true };
   }
 
   /** 拆分单元格: a merged cell back into the grid it swallowed. */
-  splitCell(): boolean {
+  splitCell(): TableCommandAnswer {
     const ran = this.tableCommand(this.caretPath(), splitHere);
-    if (!ran || !ran.ok) return false;
+    if (!ran) return { ok: false, reason: "光标不在表格里" };
+    if (!ran.ok) return { ok: false, reason: ran.reason };
     this.settleTableEdit(ran.prefix, ran.at);
-    return true;
+    return { ok: true };
   }
 
   /**
@@ -2758,7 +2779,7 @@ export class DocEditor {
    * happens wherever the caret's table lives, so in a cell it is that cell that ends up holding a paragraph
    * and two tables while the table around it keeps the rows it had.
    */
-  splitTable(): { ok: boolean; reason?: string } {
+  splitTable(): TableCommandAnswer {
     const caret = this.caretPath();
     const target = this.tableAt(caret);
     if (!target) return { ok: false, reason: "光标不在表格里" };

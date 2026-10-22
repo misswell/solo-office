@@ -3642,9 +3642,12 @@ export class DocEditor {
    * 授权 46 份里这一枚有 4,130 处（顶 1,502 / 中 1,816 / 底 812，8 个文件），渲染与写回早就有，缺的是让用户改的那条命令。
    * 与边框那一腿同一套落点与留痕：逐格比、逐格写，本来就这么说的那格一个字节不动；开着修订时逐格签一枚
    * `w:tcPrChange`（prev 集里带 `valign`，拒绝时摆回改前那一句）。
+   * 光标不在表里时这一击回绝，不写任何字节：`selectionTableSegments()` 在选区从表里伸到表外时仍会给出表里那一段，
+   * 而这一枚属于「表格工具」那一页，页签随光标退场——按下去却改了一张光标不在其上的表，就是一枚看不见却在动的按钮。
    */
-  setCellVAlign(valign: "top" | "center" | "bottom"): boolean {
+  setCellVAlign(valign: "top" | "center" | "bottom"): TableCommandAnswer {
     const caret = this.caretPath();
+    if (!this.tableAt(caret)) return { ok: false, reason: "光标不在表格里" };
     const edits: { cell: TableCell; wasShape: CellStyle; wasXml?: string }[] = [];
     for (const segment of this.selectionTableSegments()) {
       for (const where of segment.cells) {
@@ -3653,7 +3656,7 @@ export class DocEditor {
         edits.push({ cell, wasShape: cellShapeOf(cell), wasXml: cell.tcPrXml });
       }
     }
-    if (!edits.length) return false;
+    if (!edits.length) return { ok: false, reason: "这些格子已经是这个对齐" };
     this.snapshot(caret);
     for (const edit of edits) {
       edit.cell.valign = valign;
@@ -3664,15 +3667,78 @@ export class DocEditor {
       }
     }
     this.repaintWithSelection(caret);
-    return true;
+    return { ok: true };
   }
 
-  /** 竖向对齐按钮的回显：光标不在表里时三枚都该是灰的；在表里时说格自己那一句（没说就是顶部）。 */
-  cellAlignState(): { inTable: boolean; valign?: string } {
+  /**
+   * 表格工具那一页横向三枚：落的是选区盖住的**每一格里的每一段**的 `w:pPr/w:jc`，不是光标那一段。
+   * WPS 把六枚排成两行、两行各挂一条 `ksoCmd`（`CT_TableTools.kuip:156-170`：`TableCellAlignVertical` 三枚、
+   * `TableCellAlignHorizontal` 三枚），那两行说的就是这两层——竖向那句归格，横向那句归段。
+   * 「左」是这一族唯一的默认档，件里说它的方式是**什么都不写**（§17.3.1.13），所以那一枚清掉那句而不是补一句
+   * `left`——与开始页那四枚同一条口径（`setParagraph({ align: "" })`），两页对着同一份文档不写出两种字节。
+   * 已经这么说的段一个字节不动；一段都不用改时这一击回绝、不进撤销栈。开着修订时逐段签 `w:pPrChange`，
+   * 拒绝就是把改前那一句放回原处。跨表与「从表里选到表外」照 `selectionTableSegments()` 逐张分，与竖对齐同一口径。
+   */
+  setCellAlign(align: "left" | "center" | "right"): TableCommandAnswer {
+    const caret = this.caretPath();
+    if (!this.tableAt(caret)) return { ok: false, reason: "光标不在表格里" };
+    const want = align === "left" ? undefined : align;
+    const edits: { paragraph: Paragraph; was: ParaStyle; wasSlots?: PropSlot[] }[] = [];
+    for (const segment of this.selectionTableSegments()) {
+      for (const where of segment.cells) {
+        const cell = segment.table.rows[where.row]?.[where.col];
+        for (const block of cell?.paragraphs ?? []) {
+          if (block.kind !== "paragraph" || block.align === want) continue;
+          edits.push({ paragraph: block, was: paraStyleOf(block), wasSlots: block.pPrSlots });
+        }
+      }
+    }
+    if (!edits.length) return { ok: false, reason: "这些格子里的段已经是这个对齐" };
+    this.snapshot(caret);
+    for (const edit of edits) {
+      edit.paragraph.align = want;
+      syncParaSlots(edit.paragraph);
+      if (this.trackRevisions && JSON.stringify(edit.was) !== JSON.stringify(paraStyleOf(edit.paragraph))) {
+        edit.paragraph.revFormat = this.signParagraphRevision(edit.paragraph, edit.was, edit.wasSlots);
+      }
+    }
+    this.repaintWithSelection(caret);
+    return { ok: true };
+  }
+
+  /**
+   * 对齐那两行的回显，问的是**选区盖住的那几格**，不是光标那一格：命令逐格落笔（`setCellVAlign`、`setCellAlign`
+   * 都走 `selectionTableSegments()`），回显只读光标那一格就会说一句假话——选三格（顶/中/底各一）时亮着「顶端」，
+   * 而这一击会把三格都改成同一档。
+   * 竖向那句读格的 `w:vAlign`，没说就是顶部（§17.4.84 的默认值），所以「没说」与「说了 top」算同一档；
+   * 横向那句读格里每一段的 `w:pPr/w:jc`，同样把「没说」与「明说 left」并成一档（§17.3.1.13 的默认值是左，
+   * 两档画在纸上是同一张纸），其余档位各算各的——一段 center、一段没说就是两种说法。
+   * 各有 mixed：选区里出现两种说法时那一行一枚都不亮（与段距、边框两族的「各处一致才摆得出一个值」同一条口径）。
+   * 开始页那三枚与表格工具页那六枚共用这一份读数，不对着同一份文档各说一句。`inTable` 仍问**光标**在不在表里：
+   * 上下文页签的露出跟着光标走，选区从表里伸到表外不能让一页凭空出现。
+   */
+  cellAlignState(): { inTable: boolean; valign?: string; align?: string; valignMixed: boolean; alignMixed: boolean } {
     const target = this.tableAt(this.caretPath());
-    if (!target) return { inTable: false };
-    const cell = target.table.rows[target.where.row]?.[target.where.col];
-    return { inTable: true, valign: cell?.valign };
+    if (!target) return { inTable: false, valignMixed: false, alignMixed: false };
+    const caretCell = target.table.rows[target.where.row]?.[target.where.col];
+    const cells = this.selectionTableSegments().flatMap((segment) =>
+      segment.cells.map((where) => segment.table.rows[where.row]?.[where.col]).filter((cell): cell is TableCell => !!cell));
+    const listed = cells.length ? cells : caretCell ? [caretCell] : [];
+    const vals = listed.map((cell) => cell.valign ?? "top");
+    // 「没写」与「明说 left」在纸上是同一张纸（`render.ts:164` 的 ALIGN 把两档都画成左对齐；授权 46 份里光标
+    // 停得进的 2,910 段有 88 段明说 left，`.scratch/authorized-jc-echo.ts`），所以回显把两档并成一档：一排里
+    // 既有没写的、也有明说左的，算一致、亮「左」。落笔仍各按那一句走（「左」= 把 `w:jc` 取回来）。
+    const stated = listed.flatMap((cell) => cell.paragraphs.filter((block): block is Paragraph => block.kind === "paragraph"))
+      .map((paragraph) => paragraph.align ?? "left");
+    // 「各处一致」与「说不出」是两句话：值本身可能就是 `undefined`（段没写 `w:jc`），所以不一致得单独问。
+    const agrees = (values: unknown[]): boolean => values.every((value) => value === values[0]);
+    return {
+      inTable: true,
+      valign: vals.length && agrees(vals) ? vals[0] : undefined,
+      align: stated.length && agrees(stated) ? stated[0] : undefined,
+      valignMixed: vals.length > 1 && !agrees(vals),
+      alignMixed: stated.length > 1 && !agrees(stated),
+    };
   }
 
   /**

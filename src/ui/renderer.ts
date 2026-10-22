@@ -549,6 +549,7 @@ const TABLE_TOOL_KEYS = [
   "rowAbove", "rowBelow", "colLeft", "colRight", "insertCellKind", "delRow", "delCol", "delTable", "deleteCellKind",
   "mergeCells", "splitCell", "splitTable",
   "cellHeight", "cellWidth",
+  "tblTop", "tblMid", "tblBot", "tblLeft", "tblCenter", "tblRight",
   "selectCell", "selectCol", "selectRow", "selectTable",
 ] as const;
 
@@ -574,6 +575,25 @@ const PAGE_MARGIN_SPINS: [string, string, "top" | "left" | "bottom" | "right", "
 const CELL_SIZE_SPINS: [string, string, "heightTwips" | "widthTwips"][] = [
   ["cellHeight", "高度", "heightTwips"],
   ["cellWidth", "宽度", "widthTwips"],
+];
+
+/**
+ * `CT_TableTools.kuip:156-170` 的 `RB_Alignment`：两行 `KRbLayoutListCommand layoutOnly="1"`，先竖向三枚
+ * （`TableToolsAlignTop/VCenter/Bottom` = `ksoCmd="TableCellAlignVertical"` 的 index 0/1/2），再横向三枚
+ * （`AlignLeft/HCenter/Right` = `ksoCmd="TableCellAlignHorizontal"` 的 index 0/1/2）。第三枚 `m_TableTextDirection`
+ * （:169，子清单 :72 带 `dialogHint="1"`）**不摆**：`w:tcPr/w:textDirection` 在授权 46 份里 0 处，那一击落什么
+ * 字面也未取证——与 #187 页面布局那一页的文字方向同一口径，宁缺一条不摆一条按下去说不出话的。
+ * 落点两层（两行各挂一条 `ksoCmd` 说的就是这个）：竖向那句归格（`w:tcPr/w:vAlign`），横向那句归格里的每一段
+ * （`w:pPr/w:jc`）。命令各走各的（`setCellVAlign` / `setCellAlign`），回显问同一份读数（`cellAlignState`）。
+ * 字面只取到 `@Align Top` 这一族英文占位，中文措辞在 `.qm` 里读不出，所以按钮照开始页那三枚用同一副字形。
+ */
+const TABLE_ALIGN_BUTTONS: [string, string, string, string, "v" | "h"][] = [
+  ["tblTop", "↑", "顶端对齐", "top", "v"],
+  ["tblMid", "↕", "垂直居中", "center", "v"],
+  ["tblBot", "↓", "底端对齐", "bottom", "v"],
+  ["tblLeft", "左", "左对齐", "left", "h"],
+  ["tblCenter", "中", "居中", "center", "h"],
+  ["tblRight", "右", "右对齐", "right", "h"],
 ];
 
 /** 纸张方向那一格的两档；WPS 只声明了 `PageOrientation` 这一枚命令，它的Widget 是下拉还是开关**未取证**，这里按可回显的两档摆。 */
@@ -778,11 +798,12 @@ function buildDocRibbon(): void {
   button(align, "center", "中", "居中", () => editor?.setParagraph({ align: "center" }));
   button(align, "right", "右", "右对齐", () => editor?.setParagraph({ align: "right" }));
   button(align, "both", "两", "两端对齐", () => editor?.setParagraph({ align: "both" }));
-  // WPS 表格「对齐方式」的竖向那一列（`w:tcPr/w:vAlign`）：横向四枚落段上，这三枚落格上。授权 46 份里这一枚
+  // WPS 表格「对齐方式」的竖向那一列（`w:tcPr/w:vAlign`）：横向那一句落段上，这三枚落格上。授权 46 份里这一枚
   // 4,130 处，页面早就在画，缺的是改它的手。光标不在表里时三枚灰着——段落没有「格子」可竖直摆。
-  button(align, "vtop", "↑", "顶端对齐", () => { editor?.setCellVAlign("top"); syncDocRibbon(); });
-  button(align, "vmid", "↕", "垂直居中", () => { editor?.setCellVAlign("center"); syncDocRibbon(); });
-  button(align, "vbot", "↓", "底端对齐", () => { editor?.setCellVAlign("bottom"); syncDocRibbon(); });
+  // 这一页与「表格工具」那一页那六枚走同一条命令、同一份回显（`cellAlignState`），对着同一份文档不各说一句话。
+  button(align, "vtop", "↑", "顶端对齐", () => tableAction(editor?.setCellVAlign("top")));
+  button(align, "vmid", "↕", "垂直居中", () => tableAction(editor?.setCellVAlign("center")));
+  button(align, "vbot", "↓", "底端对齐", () => tableAction(editor?.setCellVAlign("bottom")));
   // WPS 把这两条放在主页段落组里（`IncreaseIndent`/`DecreaseIndent`，图标 `indent_increase_kd`/`indent_decrease_kd`，
   // Touch Bar 图标的中文标题写的就是「增加缩进量」「减少缩进量」），右键菜单里也有同名的一对。
   button(align, "outdent", "缩进−", "减少缩进量", () => editor?.shiftParagraphIndent(-1));
@@ -860,13 +881,14 @@ function buildDocRibbon(): void {
 
   // 表格工具的上下文页。WPS 的组序是 `<subcommand id="CT_TableTools">`（`CT_TableTools.kuip:180-198`）说死的：
   // RB_Table → RB_RowsAndColumns → RB_Merge → RB_Adjust → RB_Table_Font → RB_Alignment → RB_Data → TableSelectMenu。
-  // 这里摆家里真做得了的四组，组名用自家的话：
+  // 这里摆家里真做得了的五组，组名用自家的话，**位置按上面那个组序**（缺的是中间那几组，不是摆好的这几组的位）：
   //   · 行与列 ← RB_RowsAndColumns 里的 `TableTools_Insert`（上方/下方插入行、左侧/右侧插入列、Cells…）
   //     与 `Delete` 那档四条（:33-36：单元格、列、行、表格）；
   //   · 合并与拆分 ← RB_Merge 的 Merge Cells / Split Cells / Split Table by Row（按列拆仍是 0 命令）；
   //   · 单元格尺寸 ← RB_Adjust 的高度/宽度两格（见 `CELL_SIZE_SPINS`）；
+  //   · 对齐 ← RB_Alignment 的两行六枚（见 `TABLE_ALIGN_BUTTONS`）；
   //   · 选择 ← TableSelectMenu 的四条。
-  // RB_Table（属性/网格线）、RB_Data（公式/转文字/标题行重复）、RB_Table_Font 与 RB_Alignment 要建模或对话框，
+  // RB_Table（属性/网格线）、RB_Table_Font 与 RB_Data（公式/转文字/标题行重复）要建模或对话框，
   // 这一轮不摆空按钮——宁缺一条，不摆一条按下去什么也不改的。
   const tbl = group("table");
   /**
@@ -918,6 +940,17 @@ function buildDocRibbon(): void {
       // 而这一格的字面已经落笔了）：成了报刚写的数，被回绝报件里没动的那个数——两条命令共用这一条出口。
       echoSpin(ctl[key] as HTMLInputElement, editor?.cellSizeState()?.[dim]);
     });
+  }
+
+  // `RB_Alignment` 那一组的六枚按 WPS 自己的两行摆：先竖向三枚（落格），再横向三枚（落格里的段）。
+  // 组的位置照 `<subcommand id="CT_TableTools">` 的组序——`RB_Adjust` 之后、`TableSelectMenu` 之前；
+  // 中间那组 `RB_Table_Font`（字体）家里还没接，缺的是那一组，不是这一组的位置。
+  const aligns = group("table");
+  for (const [key, label, tip, value, leg] of TABLE_ALIGN_BUTTONS) {
+    button(aligns, key, label, tip, () =>
+      tableAction(leg === "v"
+        ? editor?.setCellVAlign(value as "top" | "center" | "bottom")
+        : editor?.setCellAlign(value as "left" | "center" | "right")));
   }
 
   const picking = group("table");
@@ -1133,25 +1166,37 @@ function syncDocRibbon(force = false): void {
   mark("italic", state?.italic ?? false);
   mark("under", state?.underline ?? false);
   mark("strike", state?.strike ?? false);
-  mark("left", state?.align === undefined);
+  // 「没说」与「明说 left」画的是一件事（§17.3.1.13 默认左；授权 46 份里 88 段明说 left，
+  // `.scratch/authorized-jc-echo.ts`），两档都该亮「左」——只亮 `undefined` 那一档，停在那 88 段上时
+  // 纸面靠左、按钮上一枚都不亮，说的是谎话。
+  mark("left", state?.align === undefined || state?.align === "left");
   mark("center", state?.align === "center");
   mark("right", state?.align === "right");
   mark("both", state?.align === "both");
-  // 竖向对齐回显的是**格**那一句，不是段那一句：光标在表外时三枚都灰、都不亮；在表里时格没写就是顶部
-  // （`w:vAlign` 的默认值，§17.4.84），写了哪一档就亮哪一枚。
+  // 对齐那两行回显的口径与命令的落点同一份：竖向问**格**（`w:vAlign`），横向问格里的**段**（`w:pPr/w:jc`），
+  // 两处都问选区盖住的那几格（`cellAlignState`）。光标在表外时开始页那三枚灰着、两页六枚都不亮；在表里时
+  // 格没写就是顶部（§17.4.84 的默认值）、段没写就是左（§17.3.1.13），说了哪一档就亮哪一枚。
+  // 选到顶/中/底各一格时那一行一枚都不亮——亮着「顶端」再按下去会把三格改成同一档，那一枚亮的是谎话。
+  // 开始页那三枚与表格工具页那六枚读的是同一个 `cellAlignState()`，对着同一份文档不各说一句。
   const cellState = editor?.cellAlignState();
-  for (const [key, want] of [
-    ["vtop", cellState?.inTable && (cellState.valign === undefined || cellState.valign === "top")],
-    ["vmid", cellState?.inTable && cellState.valign === "center"],
-    ["vbot", cellState?.inTable && cellState.valign === "bottom"],
-  ] as [string, boolean][]) {
+  const inTable = cellState?.inTable ?? false;
+  const lit = (keys: string[], on: boolean): void => {
+    for (const key of keys) mark(key, on);
+  };
+  const vOn = (want: string): boolean => inTable && !cellState?.valignMixed && cellState?.valign === want;
+  const hOn = (want: string): boolean => inTable && !cellState?.alignMixed && cellState?.align === want;
+  lit(["vtop", "tblTop"], vOn("top"));
+  lit(["vmid", "tblMid"], vOn("center"));
+  lit(["vbot", "tblBot"], vOn("bottom"));
+  lit(["tblLeft"], hOn("left"));
+  lit(["tblCenter"], hOn("center"));
+  lit(["tblRight"], hOn("right"));
+  for (const key of ["vtop", "vmid", "vbot"]) {
     const b = ctl[key] as HTMLButtonElement | undefined;
-    if (b) b.disabled = !cellState?.inTable;
-    mark(key, !!want);
+    if (b) b.disabled = !inTable;
   }
   // 表格工具这一页只在光标进表时露出来。光标离开时正停在这一页，就退回开始页——留着一页没有页签的带子，
   // 用户看不出自己在哪，也回不去（页签已经退场）。
-  const inTable = cellState?.inTable ?? false;
   if (tableTab) {
     tableTab.button.hidden = !inTable;
     if (!inTable && tableTab.shown() === "table") tableTab.show("home");

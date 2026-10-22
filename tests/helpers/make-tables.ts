@@ -384,6 +384,55 @@ export function makeCellVAlignDocx(): Uint8Array {
 }
 
 /**
+ * 「对齐」那一组问的两层：竖向那句归**格**（`w:tcPr/w:vAlign`），横向那句归格里的**每一段**（`w:pPr/w:jc`）。
+ * 第一行高 1440 缇、字少，三档在纸上真差得出位置。六格摆的是这一族全部五种说法形状：
+ *  · 甲一 两样都没说（顶部 + 左，§17.4.84 与 §17.3.1.13 的默认值）；
+ *  · 乙一 说了 `center` + 段说了 `center`；
+ *  · 丙一 说了 `bottom` + 段说了 `right`，且那句 `w:jc` 前面还带着 `w:spacing`（落笔时排在哪由 `CT_PPr` 的孩子序定）；
+ *  · 丁二 **一格两段**：一段说 `center`、一段没说——一格里两种说法，横向那一行说不出唯一一句；
+ *  · 戊二 段明确说了 `left`（「说了 left」与「没说」是两句话，但画出来是同一个位置）；
+ *  · 己二 段带着 `w:spacing` 而没说 `w:jc`（命令落笔要按孩子序插那一枚，`w:spacing` 原样带回）。
+ * 表外留一段，给「光标不在表格里」。
+ */
+export function makeCellAlignDocx(): Uint8Array {
+  const cell = (text: string, tcPr: string, paras: string): string =>
+    `<w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/>${tcPr}</w:tcPr>${paras}</w:tc>`;
+  const para = (text: string, pPr = ""): string => `<w:p>${pPr}<w:r><w:t>${text}</w:t></w:r></w:p>`;
+  const jc = (v: string): string => `<w:pPr><w:jc w:val="${v}"/></w:pPr>`;
+  const document = `<w:tbl><w:tblPr><w:tblW w:w="6000" w:type="dxa"/><w:tblLook w:val="04A0"/></w:tblPr><w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid>
+<w:tr><w:trPr><w:trHeight w:val="1440" w:hRule="atLeast"/></w:trPr>${cell("甲一", "", para("甲一"))}${cell("乙一", '<w:vAlign w:val="center"/>', para("乙一", jc("center")))}${cell("丙一", '<w:vAlign w:val="bottom"/>', para("丙一", `<w:pPr><w:spacing w:after="240"/><w:jc w:val="right"/></w:pPr>`))}</w:tr>
+<w:tr>${cell("丁二", "", `${para("丁二", jc("center"))}${para("丁二第二段")}`)}${cell("戊二", "", para("戊二", jc("left")))}${cell("己二", "", para("己二", '<w:pPr><w:spacing w:before="120"/></w:pPr>'))}</w:tr>
+</w:tbl><w:p><w:r><w:t>表外的一段</w:t></w:r></w:p>`;
+  return pack(document);
+}
+
+/**
+ * 装机的壳在**盘上**留下的那一形状：甲一说了 `vAlign center`，而那枚 `w:tcPrChange` 的改前没有这一句
+ * （#149 那一腿开着修订按边框时留下的记录，`w:tcBorders`/`w:shd` 是同格邻居）。第二趟开的就是这一件，
+ * 于是「回显说的 ↔ 盘上写的那句」第一次要跨一趟对账。
+ *
+ * 这一形状此前只在装机往返里出现过（`makeCellAlignDocx` 的格不带记录），单测与 DOM 探针都摸不到它，
+ * 而装机的壳量出「甲一那格读回来的竖向是顶部、`w:jc` 那句倒还在」。这里把它钉下来：改前说了什么不该被
+ * 当成格现在说的话，读回来必须是 `center`。
+ */
+export function makeCellAlignRevisionDocx(): Uint8Array {
+  const border = (side: string): string => `<w:${side} w:val="single" w:sz="4" w:space="0" w:color="auto"/>`;
+  const borders = (sides: string[]): string => `<w:tcBorders>${sides.map(border).join("")}</w:tcBorders>`;
+  const shd = '<w:shd w:val="clear" w:color="auto" w:fill="C00000"/>';
+  const tcPrChange = (id: number): string =>
+    `<w:tcPrChange ${REV_ATTRS(id, "林晓")}><w:tcPr><w:tcW w:w="2000" w:type="dxa"/>${borders(["top", "left"])}${shd}</w:tcPr></w:tcPrChange>`;
+  const cell = (tcPr: string, paras: string): string =>
+    `<w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/>${tcPr}</w:tcPr>${paras}</w:tc>`;
+  const para = (text: string, pPr = ""): string => `<w:p>${pPr}<w:r><w:t>${text}</w:t></w:r></w:p>`;
+  const jc = (v: string): string => `<w:pPr><w:jc w:val="${v}"/></w:pPr>`;
+  const document = `<w:tbl><w:tblPr><w:tblW w:w="4000" w:type="dxa"/><w:tblLook w:val="04A0"/></w:tblPr><w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid>
+<w:tr><w:trPr><w:trHeight w:val="1440" w:hRule="atLeast"/></w:trPr>${cell(`${borders(["top", "left", "bottom"])}${shd}<w:vAlign w:val="center"/>${tcPrChange(2)}`, para("甲一", jc("center")))}${cell("", para("乙一"))}</w:tr>
+<w:tr>${cell('<w:vAlign w:val="bottom"/>', para("丙二", jc("right")))}${cell("", para("丁二"))}</w:tr>
+</w:tbl><w:p><w:r><w:t>表外的一段</w:t></w:r></w:p>`;
+  return pack(document);
+}
+
+/**
  * 合并记录的两套范围：三行两列。第一列在「现在」是 1 行 + 2 行两段合并（第二行重启），而第二行那格挂着一枚
  * `w:cellMerge`，记录的改前是「继续上面」——原文态整列是一整块 3 行。原文与最终态各画哪一套范围、差几行，
  * 都从这里量。第二列每行一格，用来认「行还在、只有第一列的范围变了」。

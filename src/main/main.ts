@@ -1001,6 +1001,129 @@ function smoke(): void {
           const ttHeightEchoRefused = ttSpin("高度")?.value ?? "?";
           const ttRowHRefused = ttRowH();
           const ttBoxRefused = ttBox();
+          // 「对齐」那一组六枚（CT_TableTools.kuip:156-170 的 RB_Alignment，WPS 自己摆成两行）在装机这一趟量五条：
+          // 起手回显、落笔、回绝、撤销、两页同源。落点两层是这一组的要害：竖向那三枚归**格**（w:tcPr/w:vAlign），
+          // 横向那三枚归格里的**每一段**（w:pPr/w:jc）——所以纸上跟着动的是两样东西（td 的 vertical-align 与
+          // 那一段的 text-align），件里跟着动的是两句话，各按各的落笔都量一次。
+          // 头一步按产品**自己的回显**挑一格：第一行**从右往左**第一枚「↑ 与 左 都亮」的。为什么从右往左——
+          // 这一腿最后那一击不落撤销，要交本节末尾那句 solo:save 写回盘上，让第二趟把它读回来；而上面 #149 那一腿
+          // 在第二趟会按一次「单元格属性 → 拒绝」，那句 w:tcPrChange 记的是**整套 tcPr**，拒绝就是把那一套整个
+          // 退回「改前」——连本腿上一趟在跟踪关着时临时补上的那句 w:vAlign 一起退掉（装机的壳与 .scratch/
+          // valign-readback-dom.ts 各量到一次：竖向那句随整套退了、段里那句 w:jc 还在，因为 jc 归段不归格；
+          // WPS/Word 对「记录之后非跟踪补上的那一句」该退到哪一档 未取证）。所以跨趟那句证据只能压在
+          // **修订那一腿不签名的格子**上：它锚在甲、范围到末，而每趟「右侧插入列」刚插出来的最右那一格谁也不签。
+          // 第一趟落第 3 格（新插的空格），第二趟落第 4 格（这一趟新插的），它左边那一格（第 3 格）就是上一趟留下的：
+          // 装机的壳在第二趟开头把上一趟写回的那两句读回来、照它亮 ↕ 与 中，那才是
+          // 「装机的壳把装机的壳写下的那两句话读回来并照它亮」（与上面宽度那一腿的第二趟起手读数同一条口径）。
+          // 空格也落得下去：它带一段空段（纸上有占位），按 ↕ 与 中 之后件里多出 w:vAlign center 与 w:jc center 各一枚。
+          // 「没说」与「明说左」在纸上是同一张纸（render.ts 把两档都画成左；授权 46 份里光标停得进的 2,910 段有
+          // 88 段明说 left，.scratch/authorized-jc-echo.ts），所以起手亮的那枚「左」读的是并成一档的两样。
+          // 小条是四秒后退场的浮层：上一腿（尺寸）在表外按下的那句回绝还挂着，不先等它退干净，
+          // 「这一击没被回绝」就成了假绿。这一段整篇在模板字符串里：不写类型、不写反引号、注释不带转义。
+          await wait(4200);
+          const ttAlignKeys = ["↑", "↕", "↓", "左", "中", "右"];
+          const ttAlignBtn = (label) => ttRowEls().find((b) => b.textContent === label);
+          const ttHomeBtn = (label) => [...document.querySelectorAll("#ribbon .rbar[data-tab='home'] button")]
+            .find((b) => b.textContent === label);
+          const ttLitIn = (btn) => (btn && btn.classList.contains("on") ? 1 : 0);
+          const ttAlignLit = () => ttAlignKeys.filter((k) => ttLitIn(ttAlignBtn(k)) === 1).join("");
+          const ttHomeLit = () => ["↑", "↕", "↓"].filter((k) => ttLitIn(ttHomeBtn(k)) === 1).join("");
+          const ttRow0N = () => ttFind()?.rows[0]?.cells.length ?? 0;
+          const ttRow0Cell = (i) => (i < 0 || i >= ttRow0N() ? null : ttFind()?.rows[0]?.cells[i] ?? null);
+          let ttAlignCol = -1;
+          const ttAlignTd = () => (ttAlignCol < 0 ? null : ttRow0Cell(ttAlignCol));
+          const ttAlignPara = () => ttAlignTd()?.querySelector(".para") ?? ttAlignTd();
+          const ttValign = () => cssOf(ttAlignTd(), "verticalAlign");
+          const ttTextAlign = () => cssOf(ttAlignPara(), "textAlign");
+          const ttPress = (label) => {
+            const b = ttAlignBtn(label);
+            if (!b) return 0;
+            b.click();
+            return 1;
+          };
+          for (let i = ttRow0N() - 1; i >= 0; i--) {
+            const el = ttRow0Cell(i);
+            if (!el) continue;
+            ttPut(el);
+            await wait(240);
+            if (ttLitIn(ttAlignBtn("↑")) === 1 && ttLitIn(ttAlignBtn("左")) === 1) {
+              ttAlignCol = i;
+              break;
+            }
+          }
+          const ttAlignTrack = revBtn()?.classList.contains("on") ? 1 : 0;
+          const ttAlignTabShow = ttTab("表格工具") ? 1 : 0;
+          ttTab("表格工具")?.click();
+          await wait(200);
+          const ttAlignGroups = [...document.querySelectorAll("#ribbon .rbar[data-tab='table'] .grp")];
+          const ttAlignGroupIdx = ttAlignGroups.findIndex((g) => [...g.querySelectorAll("button")].map((b) => b.textContent).join("|") === "↑|↕|↓|左|中|右");
+          const ttAlignGroupN = ttAlignGroupIdx < 0 ? 0 : ttAlignGroups[ttAlignGroupIdx].querySelectorAll("button").length;
+          const ttAlignSpinN = ttAlignGroupIdx < 0 ? -1 : ttAlignGroups[ttAlignGroupIdx].querySelectorAll(".rspin").length;
+          const ttAlignBarShown = document.querySelector("#ribbon .rbar[data-tab='table']")?.hidden === true ? 0 : 1;
+          const ttAlignCellText = ttAlignTd()?.textContent ?? "";
+          const ttStartLit = ttAlignLit();
+          const ttStartHome = ttHomeLit();
+          const ttValign0 = ttValign();
+          const ttTextAlign0 = ttTextAlign();
+          const ttNoticeV0 = ttNoticeSel();
+          const ttPressMid = ttPress("↕");
+          await wait(360);
+          const ttLitAfterV = ttAlignLit();
+          const ttHomeAfterV = ttHomeLit();
+          const ttValignAfterV = ttValign();
+          const ttTextAlignAfterV = ttTextAlign();
+          const ttNoticeAfterV = ttNoticeSel();
+          const ttDisabledAfterV = ttAlignBtn("↕")?.disabled === true ? 1 : 0;
+          await wait(4200);
+          const ttRefuseV = ttPress("↕");
+          await wait(360);
+          const ttNoticeRefuseV = ttNoticeSel();
+          const ttLitRefuseV = ttAlignLit();
+          const ttValignRefuseV = ttValign();
+          ttUndoKey();
+          await wait(360);
+          const ttLitUndoV = ttAlignLit();
+          const ttValignUndoV = ttValign();
+          await wait(4200);
+          const ttPressCenter = ttPress("中");
+          await wait(360);
+          const ttLitAfterH = ttAlignLit();
+          const ttHomeAfterH = ttHomeLit();
+          const ttTextAlignAfterH = ttTextAlign();
+          const ttValignAfterH = ttValign();
+          const ttNoticeAfterH = ttNoticeSel();
+          await wait(4200);
+          const ttRefuseH = ttPress("中");
+          await wait(360);
+          const ttNoticeRefuseH = ttNoticeSel();
+          const ttLitRefuseH = ttAlignLit();
+          const ttTextAlignRefuseH = ttTextAlign();
+          ttUndoKey();
+          await wait(360);
+          const ttLitUndoH = ttAlignLit();
+          const ttTextAlignUndoH = ttTextAlign();
+          await wait(4200);
+          // 最后这一击不落撤销：交本节末尾那句 solo:save 写回盘上，好让第二趟的起手与 disk() 各读到自己那一句。
+          ttPress("↕");
+          await wait(360);
+          ttPress("中");
+          await wait(360);
+          const ttLitEnd = ttAlignLit();
+          const ttHomeEnd = ttHomeLit();
+          const ttValignEnd = ttValign();
+          const ttTextAlignEnd = ttTextAlign();
+          const ttNoticeEnd = ttNoticeSel();
+          // 上一趟留下的那一格（这一趟新插的空格左边那一个；第一趟它左边是丙，件里两句话都没说，读不到 ↕ 与 中）：
+          // 第二趟该读回上一趟壳自己写回盘上的那两句，回显是 ↕ 与 中 两枚同亮。
+          const ttPrevCol = ttAlignCol - 1;
+          let ttPrevLit = "";
+          if (ttPrevCol >= 0) {
+            ttPut(ttRow0Cell(ttPrevCol));
+            await wait(240);
+            ttPrevLit = ttAlignLit();
+          }
+          // 光标交回表外：下面那一段量的还是「表一退场、页签跟着退、档回到开始」，与这一腿各说各的。
+          const ttCursorBackInCell = ttAlignTd() ? 1 : 0;
           // 光标退出表挑的是**表外那一段**，不是「第一张纸最后一个孩子」：表涨宽后会挪到别的纸上，
           // 第一张纸的末 child 可能就是这只表——那样量到的是分页，不是那一页的退场。
           const ttOut = [...document.querySelectorAll("#view .para")].find((el) => !el.closest("table"));
@@ -1016,6 +1139,10 @@ function smoke(): void {
           const ttTabBackHidden = ttTab("表格工具")?.hidden === true ? 1 : 0;
           const ttHomeOn = ttTab("开始")?.classList.contains("on") ? 1 : 0;
           const ttInTableAgain = ttOut ? 0 : 1;
+          // 光标退到表外之后那六枚该一起灰着、一枚都不亮（表外没有格子可摆），开始页那三枚同样灰着。
+          const ttAlignOutLit = ttAlignLit();
+          const ttAlignOutDisabled = ttAlignKeys.filter((k) => ttAlignBtn(k)?.disabled === true).length;
+          const ttHomeOutDisabled = ["↑", "↕", "↓"].filter((k) => ttHomeBtn(k)?.disabled === true).length;
           ttCmd = {
             ttTabPresent, ttTabHidden, ttBarHidden, ttBarOpen, ttBtns, ttHit: ttHit ? 1 : 0, ttDisabled, ttNotice,
             ttPxBefore, ttPxAfter, ttWrittenBefore, ttWrittenAfter, ttColsBefore, ttColsAfter, ttTabBackHidden, ttHomeOn, ttInTableAgain,
@@ -1031,6 +1158,14 @@ function smoke(): void {
             ttRowHUndone, ttHeightEcho2, ttBoxBeforeW, ttCol0BeforeW, ttCol1BeforeW, ttWidthPress, ttBoxAfterW,
             ttCol0AfterW, ttCol1AfterW, ttWidthEcho1, ttBoxUndoneW, ttHeightEchoOut, ttWidthEchoOut,
             ttOutPress, ttOutNotice, ttHeightEchoRefused, ttRowHRefused, ttBoxRefused,
+            ttAlignTrack, ttAlignTabShow, ttAlignBarShown, ttAlignGroupIdx, ttAlignGroupN, ttAlignSpinN,
+            ttAlignCol, ttRow0N: ttRow0N(), ttAlignCellText, ttStartLit, ttStartHome, ttValign0, ttTextAlign0, ttNoticeV0,
+            ttPressMid, ttDisabledAfterV, ttLitAfterV, ttHomeAfterV, ttValignAfterV, ttTextAlignAfterV, ttNoticeAfterV,
+            ttRefuseV, ttNoticeRefuseV, ttLitRefuseV, ttValignRefuseV, ttLitUndoV, ttValignUndoV,
+            ttPressCenter, ttLitAfterH, ttHomeAfterH, ttTextAlignAfterH, ttValignAfterH, ttNoticeAfterH,
+            ttRefuseH, ttNoticeRefuseH, ttLitRefuseH, ttTextAlignRefuseH, ttLitUndoH, ttTextAlignUndoH,
+            ttLitEnd, ttHomeEnd, ttValignEnd, ttTextAlignEnd, ttNoticeEnd, ttPrevLit, ttCursorBackInCell,
+            ttAlignOutLit, ttAlignOutDisabled, ttHomeOutDisabled,
             ttDirty: (document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0,
           };
         }

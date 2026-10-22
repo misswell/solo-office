@@ -51,9 +51,21 @@ export function changeRecordXml(
   prefix = "w",
 ): string {
   const setTag = WRAPPER[tag]!;
-  const attrs = `${prefix}:id="${sign.id}" ${prefix}:author="${ATTR_ESC(sign.author)}"${sign.date ? ` ${prefix}:date="${ATTR_ESC(sign.date)}"` : ""}`;
+  const attrs = signAttrs(sign, prefix);
   const set = recorded ? `<${prefix}:${setTag}>${recorded}</${prefix}:${setTag}>` : `<${prefix}:${setTag}/>`;
   return `<${prefix}:${tag} ${attrs}>${set}</${prefix}:${tag}>`;
+}
+
+const signAttrs = (sign: { id: number; author: string; date?: string }, prefix: string): string =>
+  `${prefix}:id="${sign.id}" ${prefix}:author="${ATTR_ESC(sign.author)}"${sign.date ? ` ${prefix}:date="${ATTR_ESC(sign.date)}"` : ""}`;
+
+/**
+ * A record that names a cell's **place** rather than a property set: `w:cellIns` (§17.4.66) and `w:cellDel`
+ * (§17.4.67) carry only the signature, so they are self-closed and have no wrapped set inside. Refusing or
+ * accepting one decides whether the cell is there, which is why they get no `w:tcPr` of their own to put back.
+ */
+export function placeRecordXml(tag: "cellIns" | "cellDel", sign: { id: number; author: string; date?: string }, prefix = "w"): string {
+  return `<${prefix}:${tag} ${signAttrs(sign, prefix)}/>`;
 }
 
 /**

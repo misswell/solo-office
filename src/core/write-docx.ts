@@ -3,7 +3,7 @@ import type { Block, BorderSet, CellStyle, Inline, ListAddition, ParaStyle, Para
 import { bytesOfDataUrl } from "./media.js";
 import { BORDER_ORDER, PBDR_ORDER, ROW_REVISION_TAGS, ownParaStyle, ownRunStyle, paraBorderChanges, paraStyleOf, preserve, revisionTag, runStyleOf, samePropValue, shadingFillToken } from "./docx.js";
 import { childSpans, elementContent } from "./opc.js";
-import { changeRecordXml, setChildren } from "./doc-table-revisions.js";
+import { changeRecordXml, placeRecordXml, setChildren } from "./doc-table-revisions.js";
 import { commentDirty, commentElement, commentParaIds, commentsRootInfo, type DocComment } from "./comments.js";
 
 /**
@@ -703,7 +703,12 @@ const bordersXml = (tag: string, set?: BorderSet): string => {
 function cellPropsXml(cell: TableCell): string {
   if (cell.tcPrXml) return cell.tcPrXml;
   const props = cellPropsInner(cell);
-  // 没有 `w:tcPr` 的格子（编辑器自己造的）没有原件文字可挂记录，这一击签下的 `w:tcPrChange` 就拼在这里。
+  // 没有 `w:tcPr` 的格子（编辑器自己造的）没有原件文字可挂记录，这一击签下的记录就拼在这里。
+  // 「在不在」那一族（`w:cellIns`/`w:cellDel`）只署名、不带改前的属性集，序上在 `w:tcPrChange` 之前。
+  for (const tag of ["cellIns", "cellDel"] as const) {
+    const place = cell.revs?.find((r) => r.tag === tag);
+    if (place) props.push(placeRecordXml(tag, place));
+  }
   const rec = cell.revs?.find((r) => r.tag === "tcPrChange");
   if (rec) props.push(changeRecordXml("tcPrChange", rec, slotsXml(rec.prevSlots) || cellPropsInner(rec.prev).join("")));
   return props.length ? `<w:tcPr>${props.join("")}</w:tcPr>` : "";

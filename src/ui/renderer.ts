@@ -546,7 +546,7 @@ const DOC_RIBBON_TABS: [string, string][] = [
 
 /** 表格工具页上的命令控件：光标出表时页签退场，这几枚也一律灰着（键盘走得到，不能留一条能按的命令）。 */
 const TABLE_TOOL_KEYS = [
-  "rowAbove", "rowBelow", "colLeft", "colRight", "insertCellKind", "delRow", "delCol", "delTable",
+  "rowAbove", "rowBelow", "colLeft", "colRight", "insertCellKind", "delRow", "delCol", "delTable", "deleteCellKind",
   "mergeCells", "splitCell", "splitTable",
   "selectCell", "selectCol", "selectRow", "selectTable",
 ] as const;
@@ -850,7 +850,7 @@ function buildDocRibbon(): void {
   // RB_Table → RB_RowsAndColumns → RB_Merge → RB_Adjust → RB_Table_Font → RB_Alignment → RB_Data → TableSelectMenu。
   // 这里只摆家里真做得了的三组，组名用自家的话：
   //   · 行与列 ← RB_RowsAndColumns 里的 `TableTools_Insert`（上方/下方插入行、左侧/右侧插入列、Cells…）
-  //     与 `Delete` 那档四条里的三条（行、列、表格；第四条「删除单元格」还没接，不摆）；
+  //     与 `Delete` 那档四条（:33-36：单元格、列、行、表格）；
   //   · 合并与拆分 ← RB_Merge 的 Merge Cells / Split Cells / Split Table by Row（按列拆仍是 0 命令）；
   //   · 选择 ← TableSelectMenu 的四条。
   // RB_Table（属性/网格线）、RB_Adjust（单元格尺寸）、RB_Data（公式/转文字/标题行重复）、RB_Table_Font 与
@@ -874,10 +874,14 @@ function buildDocRibbon(): void {
   });
   button(tbl, "delRow", "删除行", "删除行（WPS：Delete Rows）", () => tableAction(editor?.deleteRow()));
   button(tbl, "delCol", "删除列", "删除列（WPS：Delete Columns）", () => tableAction(editor?.deleteColumn()));
-  // `CT_TableTools.kuip:36` 是 `Delete` 那一档（:32-36）的第四条：前三条家里已经接上，第四条没有。
-  // 「删除单元格」（:33 `DeleteCells`）仍不摆：WPS 落下的形状（左移还是下移、`w:gridSpan`/`w:vMerge` 怎么动）
-  // 未取证，摆一条按下去只会猜的按钮不如不摆。
+  // `CT_TableTools.kuip:32-36` 那一档四条现在接齐了：行、列、表格、单元格。第四条与「插入单元格」同形状——
+  // WPS 那一枚带 `dialogHint="1"`（:33 `DeleteCells`），家里没有对话框，就照插入那一条做一枚选方向的格子。
+  // 落下的形状按自家已经说出的那句话定（不跟踪=行内吸收，跟踪=一句 `w:cellDel` 待点头）；WPS 自己写什么字节仍未取证。
   button(tbl, "delTable", "删除表格", "删除表格（WPS：Delete Table）", () => tableAction(editor?.deleteTable()));
+  chooser(tbl, "deleteCellKind", "删除单元格（WPS：Delete Cells）", [["", "删除单元格"], ["left", "右侧左移补上"], ["up", "下方上移补上"]], (v) => {
+    (ctl.deleteCellKind as HTMLSelectElement).value = "";
+    if (v) tableAction(editor?.deleteCell(v as "left" | "up"));
+  });
 
   const merges = group("table");
   button(merges, "mergeCells", "合并单元格", "合并单元格（WPS：Merge Cells）", () => tableAction(editor?.mergeCells()));

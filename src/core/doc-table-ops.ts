@@ -842,6 +842,70 @@ export function insertCellHere(t: Table, where: CellWhere, shift: CellShift): Ta
   return shift === "right" ? insertCellRight(t, where) : insertCellDown(t, where);
 }
 
+/** 删除单元格的方向: the cells to the right move into its place, or the ones below move up. */
+export type CellDeleteShift = "left" | "up";
+
+/**
+ * 删除单元格, 单元格左移: the caret cell leaves and that row's cells to its right move into its place, so the row
+ * ends one cell short and its last cell takes over the columns that came free — `removeCell`, which is also
+ * exactly what an accepted `w:cellDel` already lands on (`docx.ts` 的 `resolveTableParts`). The grid and every
+ * other row are untouched: one cell asked to leave one row.
+ *
+ * A cell that is one link of a vertical merge refuses: the band above and below it belongs together, and pulling
+ * one link out leaves a continuation with nothing to continue. WPS's own bytes for this command are 未取证, so
+ * the shape is judged against the sentence the product already says when it accepts a removal.
+ */
+function deleteCellLeft(t: Table, where: CellWhere): TableEdit {
+  const row = t.rows[where.row];
+  const cell = row?.[where.col];
+  if (!cell) return refused("这里没有单元格");
+  if (cell.spanRows !== undefined) return refused("这一格是纵向合并的一部分，删掉会让那条带断在半路");
+  if (row.length === 1) return refused("这一行只有一个单元格，删掉它就空了");
+  removeCell(row, where.col);
+  return landed(where.row, Math.min(where.col, row.length - 1));
+}
+
+/**
+ * 删除单元格, 单元格上移: the caret cell leaves and the cells below it in the same grid column move up into its
+ * place, so the column loses one cell at the bottom. The cells move, their properties do not — each keeps the
+ * `w:tcPr` it already had, the same rule 单元格下移 draws with, because the command takes a cell out of a column,
+ * not a row out of the table. The row that loses a cell absorbs it the way 左移 does.
+ *
+ * With nothing below to pull up the command has nothing to do, and a merge anywhere in that column band is
+ * refused rather than untangled: a horizontally merged cell has no cell starting on this grid column to move
+ * into, and a vertical band's link belongs to the rows on both sides of the caret.
+ */
+function deleteCellUp(t: Table, where: CellWhere): TableEdit {
+  const rect = cellRect(t, where);
+  if (!rect) return refused("这里没有单元格");
+  const last = t.rows.length - 1;
+  if (where.row >= last) return refused("下面没有可补上来的单元格");
+  const seam = rect.c0;
+  const places: number[] = [];
+  for (let r = where.row; r <= last; r++) {
+    const at = columnStarts(t.rows[r]).indexOf(seam);
+    if (at < 0) return refused("这一列上有横向合并的单元格，上移会让它装不进来");
+    if (t.rows[r][at].spanRows !== undefined) return refused("这一列上有纵向合并的单元格，上移会把它挪位");
+    places.push(at);
+  }
+  const tail = t.rows[last];
+  if (tail.length === 1) return refused("最后一行只有一个单元格，删掉它就空了");
+  const offset = (r: number): number => places[r - where.row];
+  for (let r = where.row; r < last; r++) t.rows[r][offset(r)].paragraphs = t.rows[r + 1][offset(r + 1)].paragraphs;
+  removeCell(tail, offset(last));
+  return landed(where.row, places[0]);
+}
+
+/**
+ * 删除单元格: which way the remaining cells fill in. `left` empties the caret cell's place within its row, `up`
+ * within its grid column — the two options WPS's 「删除单元格」 dialog offers (`CT_TableTools.kuip:33`,
+ * `ksoCmd="DeleteCells"`, `dialogHint="1"`), which are the inverses of 插入单元格's two options. The caret ends on
+ * the cell that took the caret cell's place.
+ */
+export function deleteCellHere(t: Table, where: CellWhere, shift: CellDeleteShift): TableEdit {
+  return shift === "left" ? deleteCellLeft(t, where) : deleteCellUp(t, where);
+}
+
 // ------------------------------------------------- 粘贴为嵌套表 / 粘贴为追加行
 
 /** What 粘贴为嵌套表 reports: where the new table landed inside the cell, or why the cell would not take it. */

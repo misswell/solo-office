@@ -865,6 +865,89 @@ function smoke(): void {
           revBtn()?.click();
           await wait(160);
           const ttTrackEnd = revBtn()?.classList.contains("on") ? 1 : 0;
+          // 「删除单元格」（CT_TableTools.kuip:33 的 DeleteCells，Delete 那一档四条里的第一条）在装机这一趟量三条：
+          // 最末一行选「上移」是命令自己算出来的回绝（小条要说那一句、这一行少不得一格）；第一行选「左移」按得下去，
+          // 那一行少一格、被删那格的字离开这一行，撤销回得来；开着修订按同一条时那一格不许没——它只是自己说一句
+          // 被删，「审阅窗格」里多出一行「删除单元格」，撤销之后那一行跟着退。三条都按完就撤销，不动盘上那件的字节账。
+          // 下拉在产品自己那一页上，按 title 找；每按一次纸重铺一回，光标每次现问，不照旧引用。
+          const ttPut = (el) => {
+            if (!el) return;
+            const r = document.createRange();
+            r.selectNodeContents(el);
+            r.collapse(true);
+            const s = document.getSelection();
+            s?.removeAllRanges();
+            if (s) s.addRange(r);
+            el.focus?.();
+            document.dispatchEvent(new Event("selectionchange"));
+          };
+          const ttUndoKey = () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true }));
+          const ttCellChooser = () => [...document.querySelectorAll("#ribbon .rbar[data-tab='table'] select")]
+            .find((x) => (x.title || "").indexOf("删除单元格") === 0);
+          const ttChooseCell = (value) => {
+            const s = ttCellChooser();
+            if (!s) return 0;
+            s.value = value;
+            s.dispatchEvent(new Event("change"));
+            return 1;
+          };
+          const ttRow0 = () => ttFind()?.rows[0] ?? null;
+          const ttRow0Cells = () => ttRow0()?.cells.length ?? 0;
+          const ttRow0Text = () => ttRow0()?.textContent ?? "";
+          const ttBottomRow = () => { const t = ttFind(); return t ? t.rows[t.rows.length - 1] : null; };
+          const ttPaneOpen = () => (document.querySelector(".solo-rev-panel:not([hidden])") ? 1 : 0);
+          const ttCellDelItems = () => [...document.querySelectorAll(".solo-rev-item")]
+            .filter((it) => (it.querySelector(".solo-rev-kind")?.textContent ?? "") === "删除单元格").length;
+          const ttChooserHit = ttCellChooser() ? 1 : 0;
+          const ttChooserDisabled = ttCellChooser()?.disabled === true ? 1 : 0;
+          const ttNoticeBeforeUp = ttNoticeSel();
+          const ttBottom = () => { const r = ttBottomRow(); return r ? r.cells.length : 0; };
+          const ttBottomBefore = ttBottom();
+          ttPut(ttBottomRow()?.cells[0]);
+          await wait(220);
+          const ttUpPick = ttChooseCell("up");
+          await wait(360);
+          const ttUpNotice = ttNoticeSel();
+          const ttBottomAfterUp = ttBottom();
+          // 小条是四秒后退场的浮层：上一击那句拒绝还没退就按下一击，「这一击没被回绝」就成了一条假绿。等它退干净再按。
+          await wait(4200);
+          const ttLeftTarget = ttFind()?.rows[0]?.cells[1] ?? null;
+          const ttTargetText = ttLeftTarget?.textContent ?? "";
+          ttPut(ttLeftTarget);
+          await wait(220);
+          const ttRow0Before = ttRow0Cells();
+          const ttTextBefore = ttRow0Text();
+          const ttLeftPick = ttChooseCell("left");
+          await wait(360);
+          const ttRow0AfterLeft = ttRow0Cells();
+          const ttTextAfterLeft = ttRow0Text();
+          const ttLeftNotice = ttNoticeSel();
+          ttUndoKey();
+          await wait(360);
+          const ttRow0Back = ttRow0Cells();
+          const ttTextBack = ttRow0Text();
+          revBtn()?.click();
+          await wait(200);
+          const ttCellTrackOn = revBtn()?.classList.contains("on") ? 1 : 0;
+          if (!ttPaneOpen()) rb("审阅窗格")?.click();
+          await wait(260);
+          const ttPaneRead = ttPaneOpen();
+          const ttCellDelBefore = ttCellDelItems();
+          ttPut(ttFind()?.rows[0]?.cells[1]);
+          await wait(220);
+          const ttSignPick = ttChooseCell("left");
+          await wait(360);
+          const ttRow0Signed = ttRow0Cells();
+          const ttTextSigned = ttRow0Text();
+          const ttCellDelSigned = ttCellDelItems();
+          const ttSignedNotice = ttNoticeSel();
+          ttUndoKey();
+          await wait(360);
+          const ttCellDelAfterUndo = ttCellDelItems();
+          const ttRow0AfterUndo = ttRow0Cells();
+          revBtn()?.click();
+          await wait(160);
+          const ttCellTrackEnd = revBtn()?.classList.contains("on") ? 1 : 0;
           // 光标退出表挑的是**表外那一段**，不是「第一张纸最后一个孩子」：表涨宽后会挪到别的纸上，
           // 第一张纸的末 child 可能就是这只表——那样量到的是分页，不是那一页的退场。
           const ttOut = [...document.querySelectorAll("#view .para")].find((el) => !el.closest("table"));
@@ -887,6 +970,10 @@ function smoke(): void {
             ttDelNotice, ttPages, ttPageKids, ttTablesInfo,
             ttTrackBefore, ttTrackOff, ttTrackOn, ttDel2Hit: ttDel2 ? 1 : 0, ttDel2Disabled, ttTrackTable, ttStruck, ttTrackNotice,
             ttTrackUndoTable, ttStruckBack, ttTrackEnd,
+            ttChooserHit, ttChooserDisabled, ttNoticeBeforeUp, ttBottomBefore, ttUpPick, ttUpNotice, ttBottomAfterUp,
+            ttLeftPick, ttTargetText, ttRow0Before, ttTextBefore, ttRow0AfterLeft, ttTextAfterLeft, ttLeftNotice, ttRow0Back, ttTextBack,
+            ttCellTrackOn, ttPaneRead, ttCellDelBefore, ttSignPick, ttRow0Signed, ttTextSigned, ttCellDelSigned, ttSignedNotice,
+            ttCellDelAfterUndo, ttRow0AfterUndo, ttCellTrackEnd,
             ttDirty: (document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0,
           };
         }

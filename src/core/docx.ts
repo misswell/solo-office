@@ -2,7 +2,7 @@ import { OpcPackage, asArray, childSpans, children, decodeEntities, elementConte
 import { ThemeFonts, themeFontScript } from "./theme-fonts.js";
 import { isMark } from "./run-identity.js";
 import { dataUrl } from "./media.js";
-import { TABLE_RECORD_TAGS, changeRecordXml, coversWholeSet, decideSetXml, decideSlots, isPropertyRecord, recordedSlots, setChildren } from "./doc-table-revisions.js";
+import { TABLE_RECORD_TAGS, changeRecordXml, coversWholeSet, decideSetXml, decideSlots, isPropertyRecord, placeRecordXml, recordedSlots, setChildren } from "./doc-table-revisions.js";
 import { cellCovering, columnStarts, deleteColumn, gridColumns, removeCell, repairMerges } from "./doc-table-ops.js";
 import {
   allocIds,
@@ -5576,6 +5576,25 @@ export function signCellRevision(cell: TableCell, sign: { id: number; author: st
     cell.tcPrXml = replaceElementChild(cell.tcPrXml, "tcPrChange", changeRecordXml("tcPrChange", sign, recorded, tagPrefix(cell.tcPrXml)), TCPR_CHILD_ORDER);
   }
   cell.revs = [...(cell.revs ?? []).filter((r) => r.tag !== "tcPrChange"), rec];
+  return rec;
+}
+
+/**
+ * 一格「在不在」的记录：`w:cellIns`（§17.4.66）与 `w:cellDel`（§17.4.67）只署名，不带改前的属性集，判定它们
+ * 的那条路（`resolveTableParts`）读的就是这一枚孩子本身。与 `signCellRevision` 同一分工：原件写过 `w:tcPr` 的
+ * 格子按 `CT_TcPr` 的孩子序把字节插进原件（别的孩子一个字节不动），没写过的格子留 `cell.revs` 给写出器去拼——
+ * 那一处也认这两枚记录，否则这一句「不在了」就只活在内存里，存盘即蒸发。
+ *
+ * 同一格上同一句话只签一枚：已经挂着 `cellDel` 的格再点一次，不该多出一个 id 让审核者摇头两遍。
+ */
+export function signCellPlaceRevision(cell: TableCell, sign: { id: number; author: string; date?: string }, tag: "cellIns" | "cellDel"): CellRevision {
+  const mine = (cell.revs ?? []).find((r) => r.tag === tag);
+  if (mine) return mine;
+  const rec: CellRevision = { tag, ...sign, prev: {}, prevSlots: [] };
+  if (cell.tcPrXml) {
+    cell.tcPrXml = replaceElementChild(cell.tcPrXml, tag, placeRecordXml(tag, sign, tagPrefix(cell.tcPrXml)), TCPR_CHILD_ORDER);
+  }
+  cell.revs = [...(cell.revs ?? []), rec];
   return rec;
 }
 

@@ -1,9 +1,9 @@
 import type { Block, BorderSet, Carried, CarriedInline, CellStyle, FormatRevision, HeaderFooter, HfSegment, Inline, LineSpacingRule, ParaStyle, PageGeometry, PageSetup, Paragraph, ParagraphFormatRevision, PropSlot, Revision, RevisionEntry, RowInfo, RunStyle, Section, Table, TableBorder, TableCell, TableStyle, WordDocument } from "../core/docx.js";
 import type { CommentAnchor, DocComment } from "../core/comments.js";
 import { bodyShape, commentTexts } from "../core/comments.js";
-import { DEFAULT_SECTION, EAST_ASIAN_TEXT, RUN_STYLE_KEYS, applyFacePick, applyRunPatch, borderDelta, carriedShape, cellShapeOf, countTexts, lineGridPitchTwips, ownParaStyle, ownRunStyle, paraSpacingPitch, paraStyleOf, paragraphTextsOf, runStyleOf, samePropValue, sectionEndsOf, signCellRevision, signTableRevision, stampNow, syncCellBox, syncCellVAlign, syncParaSlots, syncTableBox, tableShapeOf, twipsToPx } from "../core/docx.js";
+import { DEFAULT_SECTION, EAST_ASIAN_TEXT, RUN_STYLE_KEYS, applyFacePick, applyRunPatch, borderDelta, carriedShape, cellShapeOf, countTexts, lineGridPitchTwips, ownParaStyle, ownRunStyle, paraSpacingPitch, paraStyleOf, paragraphTextsOf, runStyleOf, samePropValue, sectionEndsOf, signCellPlaceRevision, signCellRevision, signTableRevision, stampNow, syncCellBox, syncCellVAlign, syncParaSlots, syncTableBox, tableShapeOf, twipsToPx } from "../core/docx.js";
 import type { CellWhere, TableEdit } from "../core/doc-table-ops.js";
-import { allCells, cellOuterSides, cellRangeFor, cellRect, cellsInRect, cellsInSweep, deleteColumnHere, deleteRowHere, deleteTableBlock, gridColumns, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, splitHere, splitTableAt } from "../core/doc-table-ops.js";
+import { allCells, cellOuterSides, cellRangeFor, cellRect, cellsInRect, cellsInSweep, deleteCellHere, deleteColumnHere, deleteRowHere, deleteTableBlock, gridColumns, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, splitHere, splitTableAt } from "../core/doc-table-ops.js";
 import { IMAGE_EXT_BY_MIME } from "../core/media.js";
 import { BAND_SOURCE_CLASS, CARRY_CLASS, CARRY_STYLE, BAND_MASTER_CLASS, PAGE_BORDER_CLASS, RUN_CARRY_CLASS, type RevisionView, fontStack, highlightColor, renderWord } from "../core/render.js";
 import { flatOf, inlineLength, isMark, keepRunIdentity } from "../core/run-identity.js";
@@ -2656,6 +2656,38 @@ export class DocEditor {
    */
   insertCell(shift: "right" | "down"): TableCommandAnswer {
     const ran = this.tableCommand(this.caretPath(), (table, where) => insertCellHere(table, where, shift));
+    if (!ran) return { ok: false, reason: "光标不在表格里" };
+    if (!ran.ok) return { ok: false, reason: ran.reason };
+    this.settleTableEdit(ran.prefix, ran.at);
+    return { ok: true };
+  }
+
+  /**
+   * 删除单元格: the caret cell leaves and its neighbours fill in — 左移 within its own row, 上移 within its grid
+   * column (`CT_TableTools.kuip:33`, the fourth leg of WPS's 「删除」 dropdown, and the inverse of 插入单元格's
+   * two options).
+   *
+   * 开着修订 is a different landing, and it is the model's, not a guess at WPS: `w:cellDel`（§17.4.67）says only
+   * 「这一格不在了」 — no direction, no property set — so the cell stays on the paper carrying that sentence and
+   * the fill-in happens when the reviewer accepts it, through the same `removeCell` absorption the untracked
+   * click applies. WPS's own bytes for this command remain 未取证.
+   */
+  deleteCell(shift: "left" | "up"): TableCommandAnswer {
+    const caret = this.caretPath();
+    const target = this.tableAt(caret);
+    if (!target) return { ok: false, reason: "光标不在表格里" };
+    const cell = target.table.rows[target.where.row]?.[target.where.col];
+    if (!cell) return { ok: false, reason: "这里没有单元格" };
+    if (this.trackRevisions) {
+      if ((cell.revs ?? []).some((r) => r.tag === "cellDel")) return { ok: false, reason: "这一格已经有一句待定的删除" };
+      this.snapshot(caret);
+      this.revSeq += 1;
+      signCellPlaceRevision(cell, { id: this.revSeq, author: this.authorName, date: stampNow() }, "cellDel");
+      this.repaintWithSelection(caret);
+      this.hooks.changed();
+      return { ok: true };
+    }
+    const ran = this.tableCommand(caret, (table, where) => deleteCellHere(table, where, shift));
     if (!ran) return { ok: false, reason: "光标不在表格里" };
     if (!ran.ok) return { ok: false, reason: ran.reason };
     this.settleTableEdit(ran.prefix, ran.at);

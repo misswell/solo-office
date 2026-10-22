@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { Block, Table, TableCell } from "../src/core/docx.js";
-import { WordDocument } from "../src/core/docx.js";
+import { WordDocument, signCellPlaceRevision } from "../src/core/docx.js";
 import { writeDocx } from "../src/core/write-docx.js";
 import { renderWord } from "../src/core/render.js";
 import { OpcPackage, text } from "../src/core/opc.js";
 import {
   cellRect,
   columnStarts,
+  deleteCellHere,
   deleteColumnHere,
   deleteRowHere,
   deleteTableBlock,
@@ -258,6 +259,96 @@ describe("docx table structure commands", () => {
     const row = { keepTogether: true, heightTwips: 600, heightRule: "atLeast", header: true };
     t.rows[1].forEach((c) => (c.row = row));
     expect(saved(withDoc(t))).toContain('<w:trPr><w:cantSplit/><w:trHeight w:val="600" w:hRule="atLeast"/><w:tblHeader/></w:trPr>');
+  });
+});
+
+describe("删除单元格（DeleteCells）：一格离开，旁边的格补进来", () => {
+  it("左移：这一行少一格，末格接管腾出来的列，别的行一格不动", () => {
+    const t = grid();
+    expect(deleteCellHere(t, { row: 0, col: 1 }, "left")).toEqual({ ok: true, at: { row: 0, col: 1 } });
+    expect(gridColumns(t)).toBe(3);
+    expect(t.rows[0].map((c) => c.widthTwips)).toEqual([1000, 5000]);
+    expect(t.rows[0].map((c) => c.spanCols ?? 1)).toEqual([1, 2]);
+    expect(columnStarts(t.rows[0])).toEqual([0, 1]);
+    expect(tilesTheGrid(t)).toBe(true);
+    expect(shape(reloaded(t))).toEqual(shape(t));
+  });
+
+  it("左移不动别的行，也不腾网格：一格要走的是一行的位子，不是一列", () => {
+    const t = grid();
+    const others = t.rows.slice(1).map((_, r) => shape(t)[r + 1]);
+    const widths = [...(t.columnWidths ?? [])];
+    deleteCellHere(t, { row: 0, col: 0 }, "left");
+    expect(t.rows.slice(1).map((_, r) => shape(t)[r + 1])).toEqual(others);
+    expect(t.columnWidths).toEqual(widths);
+  });
+
+  it("上移：下面那格的字补进光标那一格，末行少一格并自己接管", () => {
+    const t = grid();
+    const last = t.rows.length - 1;
+    const band = (r: number): number => columnStarts(t.rows[r]).indexOf(2);
+    const below = body(t.rows[1][band(1)]!);
+    const tailBody = body(t.rows[last][band(last)]!);
+    const widths = t.rows[0].map((c) => c.widthTwips);
+    expect(deleteCellHere(t, { row: 0, col: 2 }, "up")).toEqual({ ok: true, at: { row: 0, col: 2 } });
+    // 一格走了，这一条带上的字一路往上补；格子自己不动，动的只有字——与「下方插入」同一条规矩
+    expect(body(t.rows[0][2]!)).toBe(below);
+    expect(body(t.rows[1][band(1)]!)).toBe(tailBody);
+    expect(t.rows[0].map((c) => c.widthTwips)).toEqual(widths);
+    expect(gridColumns(t)).toBe(3);
+    expect(t.rows[last]).toHaveLength(1);
+    expect(t.rows[last][0]!.spanCols ?? 1).toBe(3);
+    expect(tilesTheGrid(t)).toBe(true);
+    expect(shape(reloaded(t))).toEqual(shape(t));
+  });
+
+  it("形状说不出来就回绝，不硬画", () => {
+    expect(deleteCellHere(grid(), { row: 9, col: 0 }, "left")).toEqual({ ok: false, reason: "这里没有单元格" });
+    expect(deleteCellHere(grid(), { row: 9, col: 0 }, "up")).toEqual({ ok: false, reason: "这里没有单元格" });
+    // 最后一行下面没有可补上来的
+    const last = grid();
+    expect(deleteCellHere(last, { row: last.rows.length - 1, col: 0 }, "up")).toEqual({
+      ok: false,
+      reason: "下面没有可补上来的单元格",
+    });
+    // 那一列上有横向合并的格：这一带没有格子接得住，回绝而不是把它压扁
+    expect(deleteCellHere(grid(), { row: 0, col: 1 }, "up")).toEqual({
+      ok: false,
+      reason: "这一列上有横向合并的单元格，上移会让它装不进来",
+    });
+  });
+
+  it("一句 w:cellDel 落到件上、读回来还在，接受后与不跟踪那一击同一个形状", () => {
+    const t = grid();
+    const doc = withDoc(t);
+    signCellPlaceRevision(t.rows[0][1]!, { id: 7, author: "甲", date: "2026-10-22T00:00:00Z" }, "cellDel");
+    const xml = saved(doc);
+    expect(xml).toContain('<w:cellDel w:id="7" w:author="甲"');
+    const back = tableOf(open(writeDocx(doc)));
+    expect(back.rows[0][1]!.revs?.map((r) => r.tag)).toEqual(["cellDel"]);
+    expect(back.rows[0][1]!.revs?.[0]?.prev).toEqual({});
+
+    const plain = grid();
+    deleteCellHere(plain, { row: 0, col: 1 }, "left");
+    doc.resolveRevisions("accept");
+    expect(shape(tableOf(doc))).toEqual(shape(plain));
+
+    const refusedTwice = grid();
+    const again = withDoc(refusedTwice);
+    const cell = refusedTwice.rows[0][0]!;
+    signCellPlaceRevision(cell, { id: 8, author: "甲", date: "2026-10-22T00:00:00Z" }, "cellDel");
+    expect(signCellPlaceRevision(cell, { id: 9, author: "甲", date: "2026-10-22T00:00:00Z" }, "cellDel").id).toBe(8);
+    expect(saved(again).match(/<w:cellDel/g)).toHaveLength(1);
+  });
+
+  it("拒绝这一句：格子留在原处，那一句离开件", () => {
+    const t = grid();
+    const doc = withDoc(t);
+    const kept = shape(t);
+    signCellPlaceRevision(t.rows[0][1]!, { id: 7, author: "甲", date: "2026-10-22T00:00:00Z" }, "cellDel");
+    doc.resolveRevisions("reject");
+    expect(shape(tableOf(doc))).toEqual(kept);
+    expect(saved(doc)).not.toContain("<w:cellDel");
   });
 });
 

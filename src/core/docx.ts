@@ -3425,7 +3425,9 @@ export class WordDocument {
    * accepted and goes when it is refused; a deleted row goes when it is accepted and stays when it is
    * refused — and its cells keep whatever marks the file gave their text, because those are separate
    * signatures with separate `w:id`s that the reviewer decides for themselves. A table whose last row
-   * goes is no longer a table: an empty `w:tbl` is not something Word writes or reads back.
+   * goes is no longer a table: an empty `w:tbl` is not something Word writes or reads back, so the slot
+   * keeps an empty paragraph instead of nothing — the same shape 删除表格 leaves, and the one a block list
+   * needs to have a line the caret can sit on.
    */
   private resolveRows(outcome: "accept" | "reject", id?: number): number {
     let touched = 0;
@@ -3449,7 +3451,7 @@ export class WordDocument {
         b.rows = stays;
         b.columns = Math.max(1, ...stays.map((r) => r.length));
         // A table whose last row went is no longer a table: an empty `w:tbl` is not something Word writes.
-        if (!stays.length) return [];
+        if (!stays.length) return [{ kind: "paragraph", inlines: [] }];
         for (const row of stays) for (const cell of row) cell.paragraphs = walk(cell.paragraphs);
         return [b];
       });

@@ -1029,3 +1029,28 @@ export function splitTableAt(t: Table, atRow: number): SplitOutcome {
   repairMerges(tail);
   return { ok: true, tail };
 }
+
+/** What 删除表格 reports: the slot the table left, now an empty paragraph, or why nothing was there. */
+export type DeleteTableOutcome = { ok: true; at: number } | { ok: false; reason: string };
+
+/**
+ * 删除表格 (`CT_TableTools.kuip:36`: `ksoCmd="DeleteTable"`, `idMso="TableDelete"`, the fourth leg of the `Delete`
+ * menu at :32-36): the table at `index` leaves the block list it sits in — the body's, or one cell's — and one
+ * empty paragraph takes its place.
+ *
+ * The paragraph is not decoration. A list with nothing left in it has no line for the caret to sit on, and two
+ * tables with nothing between them are read back as one table — the same two rules `cellBlocksXml` spells for a
+ * cell and `pasteAsNestedTableHere` keeps when it lays a copy down. Replacing the block instead of splicing it
+ * out also leaves every other index where the page had it, so the path a command reports after this one still
+ * names the same blocks.
+ *
+ * A tracked deletion ends here too: 修订 signs each row `w:trPr/w:del` and leaves the table standing until the
+ * reviewer accepts it, and `WordDocument.resolveRows` — which has to drop a table whose last row went — puts
+ * this same empty paragraph in the slot. What WPS's own 删除表格 leaves behind is 未取证（装机件那一条点不到）,
+ * so the shape here is the one the format owes rather than a copy of a screen nobody has seen.
+ */
+export function deleteTableBlock(blocks: Block[], index: number): DeleteTableOutcome {
+  if (blocks[index]?.kind !== "table") return { ok: false, reason: "这里没有表格" };
+  blocks.splice(index, 1, blank());
+  return { ok: true, at: index };
+}

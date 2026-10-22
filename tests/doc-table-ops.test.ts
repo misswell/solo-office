@@ -9,6 +9,7 @@ import {
   columnStarts,
   deleteColumnHere,
   deleteRowHere,
+  deleteTableBlock,
   gridColumns,
   insertCellHere,
   insertColumnHere,
@@ -380,5 +381,62 @@ describe("cell geometry", () => {
     const merged = tableOf(open(makeMergedTableDocx()));
     expect(cellRect(merged, { row: 0, col: 0 })).toEqual({ c0: 0, c1: 1, r0: 0, r1: 2 });
     expect(cellRect(merged, { row: 1, col: 0 })).toEqual({ c0: 0, c1: 1, r0: 1, r1: 2 });
+  });
+});
+
+describe("docx 删除表格（块表里的那一张离开）", () => {
+  /** 一张表换成一段空行：表没了，块序还在原来的位子上。 */
+  const kinds = (blocks: Block[]): string[] => blocks.map((b) => b.kind);
+  const para = (text: string): Block => ({ kind: "paragraph", inlines: [{ text }] });
+
+  it("leaves one empty paragraph in the slot and reports where it landed", () => {
+    const blocks: Block[] = [para("表前"), grid(), para("表后")];
+    expect(deleteTableBlock(blocks, 1)).toEqual({ ok: true, at: 1 });
+    expect(kinds(blocks)).toEqual(["paragraph", "paragraph", "paragraph"]);
+    expect(blocks[1]).toEqual({ kind: "paragraph", inlines: [] });
+    // 那一段两边的正文各归各，删表不碰别人的字。
+    expect(blocks.map((b) => (b.kind === "paragraph" ? b.inlines.map((i) => i.text).join("") : "")).join("/")).toBe("表前//表后");
+  });
+
+  it("keeps the list something the caret can sit on: one table alone leaves a paragraph, not nothing", () => {
+    const blocks: Block[] = [grid()];
+    expect(deleteTableBlock(blocks, 0)).toEqual({ ok: true, at: 0 });
+    expect(kinds(blocks)).toEqual(["paragraph"]);
+  });
+
+  it("never leaves two tables side by side, which is the shape a reader counts as one table", () => {
+    const blocks: Block[] = [grid(), grid()];
+    expect(deleteTableBlock(blocks, 0).ok).toBe(true);
+    expect(kinds(blocks)).toEqual(["paragraph", "table"]);
+  });
+
+  it("refuses a slot that holds no table and changes nothing when it does", () => {
+    const blocks: Block[] = [{ kind: "paragraph", inlines: [{ text: "正文" }] }];
+    expect(deleteTableBlock(blocks, 0)).toEqual({ ok: false, reason: "这里没有表格" });
+    expect(deleteTableBlock(blocks, 7)).toEqual({ ok: false, reason: "这里没有表格" });
+    expect(blocks).toEqual([{ kind: "paragraph", inlines: [{ text: "正文" }] }]);
+  });
+
+  it("deletes a nested table out of the cell that holds it and leaves the outer table standing", () => {
+    const doc = open(makeNestedTableDocx());
+    const outer = tableOf(doc);
+    const holder = outer.rows.flatMap((row) => row).find((cell) => cell.paragraphs.some((b) => b.kind === "table"));
+    expect(holder).toBeDefined();
+    const at = holder!.paragraphs.findIndex((b) => b.kind === "table");
+    expect(deleteTableBlock(holder!.paragraphs, at)).toEqual({ ok: true, at });
+    expect(holder!.paragraphs[at]).toEqual({ kind: "paragraph", inlines: [] });
+    expect(outer.rows.length).toBeGreaterThan(0);
+    expect(holder!.paragraphs.some((b) => b.kind === "table")).toBe(false);
+  });
+
+  it("writes the deletion out and reads it back with the paragraph already in the model", () => {
+    const doc = WordDocument.blank();
+    const t = grid();
+    doc.blocks.push(t);
+    // blank() 起头就留了一段可落的光标行，删表再把表自己的那位子也换成一段，读回来是两段。
+    const at = doc.blocks.indexOf(t);
+    expect(deleteTableBlock(doc.blocks, at)).toEqual({ ok: true, at });
+    expect(saved(doc)).not.toContain("<w:tbl>");
+    expect(kinds(open(writeDocx(doc)).blocks)).toEqual(["paragraph", "paragraph"]);
   });
 });

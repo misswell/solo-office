@@ -884,9 +884,13 @@ describe("docx 修订：表格行自己的记录（w:trPr/w:ins、w:trPr/w:del�
     const doc = open(makeLastRowDeletedDocx());
     expect(doc.resolveRevisions("accept", 41)).toBeGreaterThan(0);
     expect(doc.blocks.some((b) => b.kind === "table")).toBe(false);
+    // The slot keeps a line rather than nothing: this is where 删除表格 lands too, and a block list with
+    // nothing in it has no place for the caret.
+    expect(doc.blocks.map((b) => b.kind)).toEqual(["paragraph", "paragraph"]);
     const xml = body(doc);
     expect(xml).not.toContain("<w:tbl>");
-    expect(said(open(writeDocx(doc)))).toEqual(["唯一的行被删了"]);
+    // The line that stands in for the table goes out to the file and comes back: two paragraphs, the second with no text.
+    expect(said(open(writeDocx(doc)))).toEqual(["唯一的行被删了", ""]);
   });
 
   it("renders the row's change as a class and data attributes, never as a style", () => {

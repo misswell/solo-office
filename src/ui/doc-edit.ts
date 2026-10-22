@@ -3,7 +3,7 @@ import type { CommentAnchor, DocComment } from "../core/comments.js";
 import { bodyShape, commentTexts } from "../core/comments.js";
 import { DEFAULT_SECTION, EAST_ASIAN_TEXT, RUN_STYLE_KEYS, applyFacePick, applyRunPatch, borderDelta, carriedShape, cellShapeOf, countTexts, lineGridPitchTwips, ownParaStyle, ownRunStyle, paraSpacingPitch, paraStyleOf, paragraphTextsOf, runStyleOf, samePropValue, sectionEndsOf, signCellRevision, signTableRevision, stampNow, syncCellBox, syncCellVAlign, syncParaSlots, syncTableBox, tableShapeOf, twipsToPx } from "../core/docx.js";
 import type { CellWhere, TableEdit } from "../core/doc-table-ops.js";
-import { allCells, cellOuterSides, cellRangeFor, cellRect, cellsInRect, cellsInSweep, deleteColumnHere, deleteRowHere, gridColumns, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, splitHere, splitTableAt } from "../core/doc-table-ops.js";
+import { allCells, cellOuterSides, cellRangeFor, cellRect, cellsInRect, cellsInSweep, deleteColumnHere, deleteRowHere, deleteTableBlock, gridColumns, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, splitHere, splitTableAt } from "../core/doc-table-ops.js";
 import { IMAGE_EXT_BY_MIME } from "../core/media.js";
 import { BAND_SOURCE_CLASS, CARRY_CLASS, CARRY_STYLE, BAND_MASTER_CLASS, PAGE_BORDER_CLASS, RUN_CARRY_CLASS, type RevisionView, fontStack, highlightColor, renderWord } from "../core/render.js";
 import { flatOf, inlineLength, isMark, keepRunIdentity } from "../core/run-identity.js";
@@ -2747,6 +2747,43 @@ export class DocEditor {
     if (!ran) return { ok: false, reason: "光标不在表格里" };
     if (!ran.ok) return { ok: false, reason: ran.reason };
     this.settleTableEdit(ran.prefix, ran.at);
+    return { ok: true };
+  }
+
+  /**
+   * 删除表格: the whole table leaves the document and an empty paragraph takes its place, which is where the
+   * caret goes. It goes wherever the caret's table lives, so a nested one leaves the cell that held it and the
+   * table around that cell keeps its rows.
+   *
+   * With 修订 on the table stays in the file and every row says it was removed: 删除行 that one rule, spread over
+   * the whole table, one `w:trPr/w:del` per row rather than one shared record, because a `w:id` speaks for the
+   * row it sits on and deciding one row must not decide the others. The reviewer accepting them one by one ends
+   * where this untracked path ends: `resolveRows` drops a table whose last row went and leaves the same empty
+   * paragraph in its slot.
+   */
+  deleteTable(): TableCommandAnswer {
+    const caret = this.caretPath();
+    const target = this.tableAt(caret);
+    if (!target) return { ok: false, reason: "光标不在表格里" };
+    const blocks = this.containerBlocks(target.prefix);
+    const index = target.prefix[target.prefix.length - 1];
+    // Same guard 拆分表格 puts up: a caret left over from an earlier render must not delete a table that is no
+    // longer the one the user was in.
+    if (!blocks || blocks[index] !== target.table) return { ok: false, reason: "这张表已经不在原来的位置" };
+    this.snapshot(caret);
+    if (this.trackRevisions) {
+      target.table.rows.forEach((_row, r) => this.signRow(target.table, r, this.sign("del")));
+      this.settleTableEdit(target.prefix, target.where);
+      return { ok: true };
+    }
+    const ran = deleteTableBlock(blocks, index);
+    if (!ran.ok) {
+      this.undoStack.pop();
+      return ran;
+    }
+    this.render();
+    this.setCaret({ path: [...target.prefix.slice(0, -1), ran.at, 0], offset: 0 });
+    this.hooks.changed();
     return { ok: true };
   }
 

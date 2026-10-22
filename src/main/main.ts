@@ -735,6 +735,14 @@ function smoke(): void {
         const ttDoc = (document.getElementById("title")?.textContent ?? "").includes("表格工具-装机");
         let ttCmd = null;
         if (ttDoc) {
+          // 上一腿（#149）把「修订」点开着交过来的，而这一腿要量的第一条落法是**没跟踪**那一种：表整张离开纸、
+          // 位子上留一段可落的光标行。所以先按一次把跟踪关掉，量完这一条再按回去量第二种落法（表还站着，
+          // 每一行自己说一句被删）。开关本身不写字节，关掉之后那两条宽度读数量的仍是未跟踪那一笔。
+          const revBtn = () => [...document.querySelectorAll("#ribbon button.rb")].find((b) => b.textContent === "修订");
+          const ttTrackBefore = revBtn()?.classList.contains("on") ? 1 : 0;
+          if (ttTrackBefore) revBtn()?.click();
+          await wait(200);
+          const ttTrackOff = revBtn()?.classList.contains("on") ? 1 : 0;
           // 现问：这一腿每按一次命令纸就重铺一回，开头抓住的那只盒当场离开文档——照旧引用量到的是 0 宽与旧列数。
           const ttFind = () => [...document.querySelectorAll("#view .page table.doc-table")].find((x) => (x.textContent ?? "").includes("甲"));
           const ttBox = () => Math.round((ttFind()?.getBoundingClientRect().width ?? 0) * 10) / 10;
@@ -779,6 +787,84 @@ function smoke(): void {
           const ttPxAfter = ttBox();
           const ttWrittenAfter = ttWritten();
           const ttColsAfter = ttCols();
+          // 「删除表格」（CT_TableTools.kuip:36 的 DeleteTable）在装机这一趟按两种落法各一次：先把光标放回这只表，
+          // 跟踪关着时按下之后纸上这只表要没了、⌘Z 之后要回来；跟踪开着时按下表不得没，改成每一行说一句被删。
+          // 量的是命令接在产品自己的 ribbon 上、落点算得对，与 DOM 页里那一趟模拟各说各话。
+          // 盘上的字节由本节末尾那句 solo:save 写，这两次都撤销干净所以不动那一件。
+          const ttAgainCell = ttFind()?.querySelector("tr")?.lastElementChild;
+          if (ttAgainCell) {
+            const ttAgainRange = document.createRange();
+            ttAgainRange.selectNodeContents(ttAgainCell);
+            ttAgainRange.collapse(true);
+            const ttAgainSel = document.getSelection();
+            ttAgainSel?.removeAllRanges();
+            if (ttAgainSel) ttAgainSel.addRange(ttAgainRange);
+            ttAgainCell.focus();
+            document.dispatchEvent(new Event("selectionchange"));
+          }
+          await wait(220);
+          // 只数**这一件那一张**：#view 里可能同时摆着别处的纸，全局表数说不出这一次按没按下。
+          const ttJiaSel = () => [...document.querySelectorAll("#view .page table.doc-table")].filter((x) => (x.textContent ?? "").includes("甲")).length;
+          // 段数只数**表外**的那些：这一趟之前别的装机腿（#158 那一枚 3×2 网格 picker）在同一件纸上插过空表，
+          // 全局段数把那些格子里的行也算进来，删表留下的那一段就被淹在里头。
+          const ttOutLines = () => [...document.querySelectorAll("#view .page .para")].filter((p) => !p.closest("table")).length;
+          const ttNoticeSel = () => [...document.querySelectorAll(".doc-notice")].map((n) => (n.hidden ? "" : n.textContent ?? "")).join("");
+          const ttDelBtn = ttRowEls().find((b) => b.textContent === "删除表格");
+          const ttDelDisabled = ttDelBtn?.disabled === true ? 1 : 0;
+          const ttPages = document.querySelectorAll("#view .page").length;
+          // 先把这一页到底摆着什么读出来再说别的：纸上如果有第二只表，全局的表数与段数就说不出这一次按没按下。
+          const ttPageKids = [...(document.querySelector("#view .page")?.children ?? [])]
+            .map((c) => String(c.tagName) + "." + (c.className || ""))
+            .join("|")
+            .slice(0, 260);
+          const ttTablesInfo = [...document.querySelectorAll("#view .page table.doc-table")]
+            .map((t) => "[摆" + (t.parentElement?.className || t.parentElement?.tagName || "") + " " + t.rows.length + "行" + (t.rows[0] ? t.rows[0].cells.length : 0) + "格 " + (t.textContent || "").slice(0, 12) + "]")
+            .join("");
+          const ttJiaBefore = ttJiaSel();
+          const ttJiaLinesBefore = ttFind()?.querySelectorAll(".para").length ?? 0;
+          const ttOutBefore = ttOutLines();
+          ttDelBtn?.click();
+          await wait(360);
+          const ttJiaGone = ttJiaSel();
+          const ttOutAfter = ttOutLines();
+          const ttDelNotice = ttNoticeSel();
+          window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true }));
+          await wait(360);
+          const ttJiaBack = ttJiaSel();
+          const ttOutBack = ttOutLines();
+          // 第二种落法：修订开着时按同一条命令，表不得离开纸——每一行自己说一句被删（纸上一行一枚划掉的行），
+          // 审核时逐行点头或摇头，全部点头之后收到的才是上面那一种形状。按下之前光标得重新放回这只表：
+          // 撤销把纸重铺了一回，上一趟抓住的那只格当场离开文档。
+          revBtn()?.click();
+          await wait(200);
+          const ttTrackOn = revBtn()?.classList.contains("on") ? 1 : 0;
+          const ttAgain2 = ttFind()?.querySelector("tr")?.lastElementChild;
+          if (ttAgain2) {
+            const t2r = document.createRange();
+            t2r.selectNodeContents(ttAgain2);
+            t2r.collapse(true);
+            const t2s = document.getSelection();
+            t2s?.removeAllRanges();
+            if (t2s) t2s.addRange(t2r);
+            ttAgain2.focus();
+            document.dispatchEvent(new Event("selectionchange"));
+          }
+          await wait(220);
+          const ttDel2 = ttRowEls().find((b) => b.textContent === "删除表格");
+          const ttDel2Disabled = ttDel2?.disabled === true ? 1 : 0;
+          ttDel2?.click();
+          await wait(360);
+          const ttTrackTable = ttJiaSel();
+          const ttStruck = ttFind()?.querySelectorAll("tr.rev-row.rev-del").length ?? 0;
+          const ttTrackNotice = ttNoticeSel();
+          window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true }));
+          await wait(360);
+          const ttTrackUndoTable = ttJiaSel();
+          const ttStruckBack = ttFind()?.querySelectorAll("tr.rev-row.rev-del").length ?? 0;
+          // 交还给后面的腿：跟踪保持关着——这一趟不该在盘上留下待判记录。
+          revBtn()?.click();
+          await wait(160);
+          const ttTrackEnd = revBtn()?.classList.contains("on") ? 1 : 0;
           // 光标退出表挑的是**表外那一段**，不是「第一张纸最后一个孩子」：表涨宽后会挪到别的纸上，
           // 第一张纸的末 child 可能就是这只表——那样量到的是分页，不是那一页的退场。
           const ttOut = [...document.querySelectorAll("#view .para")].find((el) => !el.closest("table"));
@@ -797,6 +883,10 @@ function smoke(): void {
           ttCmd = {
             ttTabPresent, ttTabHidden, ttBarHidden, ttBarOpen, ttBtns, ttHit: ttHit ? 1 : 0, ttDisabled, ttNotice,
             ttPxBefore, ttPxAfter, ttWrittenBefore, ttWrittenAfter, ttColsBefore, ttColsAfter, ttTabBackHidden, ttHomeOn, ttInTableAgain,
+            ttDelHit: ttDelBtn ? 1 : 0, ttDelDisabled, ttJiaBefore, ttJiaGone, ttJiaBack, ttJiaLinesBefore, ttOutBefore, ttOutAfter, ttOutBack,
+            ttDelNotice, ttPages, ttPageKids, ttTablesInfo,
+            ttTrackBefore, ttTrackOff, ttTrackOn, ttDel2Hit: ttDel2 ? 1 : 0, ttDel2Disabled, ttTrackTable, ttStruck, ttTrackNotice,
+            ttTrackUndoTable, ttStruckBack, ttTrackEnd,
             ttDirty: (document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0,
           };
         }

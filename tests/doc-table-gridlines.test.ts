@@ -103,7 +103,8 @@ describe("docx 格子边的墨：只按文件说的那句画", () => {
     }
   });
 
-  it("导引线不落进件里：渲染过一趟之后，写出的字节一句 `--gl` 也没有", () => {    const doc = open(makeGridlinesDocx());
+  it("导引线不落进件里：渲染过一趟之后，写出的字节一句 `--gl` 也没有", () => {
+    const doc = open(makeGridlinesDocx());
     renderWord(doc);
     const xml = text(OpcPackage.from(writeDocx(doc)).bytes("word/document.xml")!);
     expect(xml).not.toContain("--gl");

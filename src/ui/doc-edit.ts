@@ -1,7 +1,7 @@
-import type { Block, BorderSet, Carried, CarriedInline, CellStyle, FormatRevision, HeaderFooter, HfSegment, Inline, LineSpacingRule, ParaStyle, PageGeometry, PageSetup, Paragraph, ParagraphFormatRevision, PropSlot, Revision, RevisionEntry, RowInfo, RowStyle, RunStyle, Section, Table, TableBorder, TableCell, TableStyle, WordDocument } from "../core/docx.js";
+import type { Block, BorderSet, Carried, CarriedInline, CellStyle, FormatRevision, HeaderFooter, HfSegment, Inline, LineSpacingRule, MarginTwips, ParaStyle, PageGeometry, PageSetup, Paragraph, ParagraphFormatRevision, PropSlot, Revision, RevisionEntry, RowInfo, RowStyle, RunStyle, Section, Table, TableBorder, TableCell, TablePropsPatch, TableStyle, WordDocument } from "../core/docx.js";
 import type { CommentAnchor, DocComment } from "../core/comments.js";
 import { bodyShape, commentTexts } from "../core/comments.js";
-import { DEFAULT_SECTION, EAST_ASIAN_TEXT, RUN_STYLE_KEYS, applyFacePick, applyRunPatch, borderDelta, carriedShape, cellShapeOf, countTexts, lineGridPitchTwips, ownParaStyle, ownRunStyle, paraSpacingPitch, paraStyleOf, paragraphTextsOf, rowShapeOf, runStyleOf, samePropValue, sectionEndsOf, signCellPlaceRevision, signCellRevision, signRowRevision, signTableRevision, stampNow, syncCellBox, syncCellVAlign, syncParaSlots, syncRowHeight, syncTableBox, tableShapeOf, twipsToPx } from "../core/docx.js";
+import { DEFAULT_SECTION, EAST_ASIAN_TEXT, MARGIN_SIDES, RUN_STYLE_KEYS, applyFacePick, applyRunPatch, borderDelta, carriedShape, cellShapeOf, countTexts, lineGridPitchTwips, ownParaStyle, ownRunStyle, paraSpacingPitch, paraStyleOf, paragraphTextsOf, rowShapeOf, runStyleOf, samePropValue, sectionEndsOf, signCellPlaceRevision, signCellRevision, signRowRevision, signTableRevision, stampNow, syncCellBox, syncCellVAlign, syncParaSlots, syncRowHeight, syncTableBox, syncTableProps, tableShapeOf, twipsToPx } from "../core/docx.js";
 import type { CellWhere, TableEdit } from "../core/doc-table-ops.js";
 import { allCells, cellOuterSides, cellRangeFor, cellRect, columnCells, cellsInRect, cellsInSweep, deleteCellHere, deleteColumnHere, deleteRowHere, deleteTableBlock, gridColumns, gridWidths, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, setColumnWidth, splitHere, splitTableAt } from "../core/doc-table-ops.js";
 import { IMAGE_EXT_BY_MIME } from "../core/media.js";
@@ -16,6 +16,7 @@ import { CELL_BOX_SIDES, PARA_BOX_SIDES, applyBoxPatch, cellOuterPatch, showCell
 import type { BoxPatch, BoxState, CellBoxSide, ParaBoxPatch, ParaBoxState, TableBoxSide } from "./doc-para-border.js";
 import { showParaSpacingDialog } from "./doc-para-spacing.js";
 import type { ParaSpacingPatch, ParaSpacingState } from "./doc-para-spacing.js";
+import { showTablePropsDialog, type TablePropsState } from "./doc-table-props.js";
 import { openWordCount, type WordCountReadout } from "./doc-word-count.js";
 import { openGoTo } from "./doc-goto.js";
 
@@ -3566,6 +3567,91 @@ export class DocEditor {
       edit.table.borders = edit.after;
       if (edit.ground !== undefined) edit.table.shading = edit.ground;
       syncTableBox(edit.table, edit.changes, edit.ground);
+      if (this.trackRevisions && edit.table.revFormat?.author !== this.authorName) {
+        this.revSeq += 1;
+        signTableRevision(edit.table, { id: this.revSeq, author: this.authorName, date: stampNow() }, edit.wasShape, edit.wasXml);
+      }
+    }
+    this.repaintWithSelection(caret);
+    return true;
+  }
+
+  /**
+   * 「表格属性」的读数：选中的每张表**自己说过**的那四句——对齐 `w:jc`、左缩进 `w:tblInd`、固定列宽
+   * `w:tblLayout`、默认单元格边距 `w:tblCellMar`。摆的是件里那一句，不是页面的缺省；几张表说法不一致时
+   * 摆第一张的并说一句 `mixed`（与「边框与底纹」同一条口径）。
+   */
+  tablePropsState(): TablePropsState | undefined {
+    const segments = this.selectionTableSegments();
+    if (!segments.length) return undefined;
+    const first = segments[0]!.table;
+    const state: TablePropsState = {
+      ...(first.align !== undefined ? { align: first.align } : {}),
+      ...(first.indentTwips !== undefined ? { indentTwips: first.indentTwips } : {}),
+      ...(first.layout !== undefined ? { layout: first.layout } : {}),
+      ...(first.cellMargin !== undefined ? { cellMargin: { ...first.cellMargin } } : {}),
+    };
+    // 逐格问「选的这几张表在这一句上说不一致」：不一致的那一格摆「不改」而不是第一张的说法，
+    // 否则原样确定会把这些表**改成第一张的**，用户一个字没填却动了文件。
+    if (segments.length > 1) {
+      const other = segments.slice(1).map((s) => s.table);
+      const margin: Partial<Record<(typeof MARGIN_SIDES)[number], boolean>> = {};
+      for (const side of MARGIN_SIDES)
+        if (other.some((t) => t.cellMargin?.[side] !== first.cellMargin?.[side])) margin[side] = true;
+      const differ = {
+        align: other.some((t) => t.align !== first.align),
+        indent: other.some((t) => t.indentTwips !== first.indentTwips),
+        layout: other.some((t) => t.layout !== first.layout),
+        ...(Object.keys(margin).length ? { margin } : {}),
+      };
+      if (differ.align || differ.indent || differ.layout || differ.margin) {
+        state.differ = differ;
+        state.mixed = true;
+      }
+    }
+    return state;
+  }
+
+  /** ribbon 表格工具「属性」那一枚：读数交给对话框，改完从同一条腿落笔。 */
+  openTableProps(): void {
+    const state = this.tablePropsState();
+    if (!state) return;
+    showTablePropsDialog(state, (patch) => this.setTableProps(patch));
+  }
+
+  /**
+   * 「表格属性」这一击的落笔处：逐张表只写**这一击点过名、且与它自己那句不一样**的那几句，本来就这么说的表
+   * 一个字节不动（所以「原样确定」不改文件）。开着修订时与 `setTableBox` 同形留一枚 `w:tblPrChange`。
+   * 宽度不在这条腿里：`w:tblW` 由网格那条腿（`setTableWidth`）写，两条腿写同一句会互相顶掉。
+   */
+  setTableProps(patch: TablePropsPatch): boolean {
+    const caret = this.caretPath();
+    const edits = this.selectionTableSegments().flatMap((segment) => {
+      const table = segment.table;
+      const diff: TablePropsPatch = {};
+      if (patch.align !== undefined && patch.align !== (table.align ?? "")) diff.align = patch.align;
+      if (patch.indentTwips !== undefined && patch.indentTwips !== table.indentTwips) diff.indentTwips = patch.indentTwips;
+      const wasFixed = table.layout === "fixed";
+      const wantFixed = patch.layout === "fixed";
+      if (patch.layout !== undefined && wantFixed !== wasFixed) diff.layout = patch.layout;
+      if (patch.cellMargin !== undefined) {
+        const margins: MarginTwips = {};
+        let touched = false;
+        for (const side of MARGIN_SIDES) {
+          const tw = patch.cellMargin[side];
+          if (tw === undefined || tw === table.cellMargin?.[side]) continue;
+          margins[side] = tw;
+          touched = true;
+        }
+        if (touched) diff.cellMargin = margins;
+      }
+      if (!Object.keys(diff).length) return [];
+      return [{ table, diff, wasShape: tableShapeOf(table), wasXml: table.tblPrXml }];
+    });
+    if (!edits.length) return false;
+    this.snapshot(caret);
+    for (const edit of edits) {
+      syncTableProps(edit.table, edit.diff);
       if (this.trackRevisions && edit.table.revFormat?.author !== this.authorName) {
         this.revSeq += 1;
         signTableRevision(edit.table, { id: this.revSeq, author: this.authorName, date: stampNow() }, edit.wasShape, edit.wasXml);

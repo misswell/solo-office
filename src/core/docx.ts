@@ -5527,6 +5527,81 @@ export function syncTableBox(t: Table, changes: BorderSet, shading?: string): vo
   t.tblPrXml = next;
 }
 
+/**
+ * 「表格属性」那一击碰得到的四句：对齐 `w:jc`、左缩进 `w:tblInd`、固定列宽 `w:tblLayout`、默认单元格边距
+ * `w:tblCellMar`。**宽度不在这一份里**：`w:tblW` 已经有一条腿跟着网格走（`setTableWidth`，`doc-table-ops.ts`），
+ * 第二个写同一句的地方只会把对方顶掉。
+ *
+ * 缺的键 = 这一句不改；`""` = 把件里那一句**删掉**，回到「没说」的那一档（左对齐 / 不缩进 / 自动列宽）。
+ * 删而不是补一句缺省值：授权 46 份的 58 张表里 `w:tblLayout` 58 枚全是 `fixed`，`w:tblInd` 30 枚写 `0`
+ * 而 28 枚写别的数，`autofit` 一枚也没写过（`.scratch/tblpr-children-audience.py`）——替文件写一句它从没写过的
+ * `autofit` 就是编。与 `syncTableBox` 同一条纪律：没点名的孩子一个字节不动，动过的按 `CT_TblPr` 的序回原位。
+ */
+export type TablePropsPatch = {
+  align?: "left" | "center" | "right" | "";
+  indentTwips?: number | "";
+  layout?: "fixed" | "";
+  /** 只写点名的边；没点名的边沿用件里那一句（连它的 `w:type` 一起原样留着）。 */
+  cellMargin?: MarginTwips;
+};
+
+/** 这四句写回表自己的 `w:tblPr`，模型字段同一步跟上——再画一遍与再存一遍说的得是同一件事。 */
+export function syncTableProps(t: Table, patch: TablePropsPatch): void {
+  if (patch.align !== undefined) t.align = patch.align || undefined;
+  if (patch.indentTwips !== undefined) t.indentTwips = patch.indentTwips === "" ? undefined : patch.indentTwips;
+  if (patch.layout !== undefined) t.layout = patch.layout || undefined;
+  if (patch.cellMargin !== undefined) t.cellMargin = { ...t.cellMargin, ...patch.cellMargin };
+  const own = t.tblPrXml;
+  // 编辑器自己造的表没有原件文字：写出器按字段拼（`tablePropsInner`），这里只跟上字段。
+  if (!own) return;
+  const p = tagPrefix(own);
+  let next = own;
+  if (patch.align !== undefined)
+    next = replaceElementChild(next, "jc", patch.align ? `<${p}:jc ${p}:val="${patch.align}"/>` : "", TBLPR_CHILD_ORDER);
+  if (patch.indentTwips !== undefined)
+    next = replaceElementChild(
+      next,
+      "tblInd",
+      patch.indentTwips === "" ? "" : `<${p}:tblInd ${p}:w="${Math.round(patch.indentTwips)}" ${p}:type="dxa"/>`,
+      TBLPR_CHILD_ORDER,
+    );
+  if (patch.layout !== undefined)
+    next = replaceElementChild(
+      next,
+      "tblLayout",
+      patch.layout ? `<${p}:tblLayout ${p}:type="${patch.layout}"/>` : "",
+      TBLPR_CHILD_ORDER,
+    );
+  if (patch.cellMargin !== undefined) {
+    // 四条边一条都没点名（`{}`）时一个字也不碰：`w:tblCellMar` 可能还带着别的说法，重拼就是重写。
+    const sides = MARGIN_SIDES.filter((s) => patch.cellMargin![s] !== undefined);
+    if (sides.length) next = replaceElementChild(next, "tblCellMar", cellMarSlotXml(childOf(next, "tblCellMar"), patch.cellMargin, p), TBLPR_CHILD_ORDER);
+  }
+  t.tblPrXml = next;
+}
+
+/**
+ * `w:tblCellMar` 的一句：件里有的边原样留着（边与边之间的文字也留着），点名的边换数，缺的按
+ * `top/left/bottom/right` 的序插进去。新写的一条照件的拼法带 `w:w` 与 `w:type="dxa"`——授权 46 份里
+ * 751 枚 `w:top`/`w:bottom` 与 751 枚 `w:left`/`w:right` 全是这两句，不带 `w:type` 的一条也没有
+ * （`.scratch/tblpr-children-audience.py` 的同一趟读数）。
+ */
+function cellMarSlotXml(existing: string | undefined, sides: MarginTwips, p: string): string {
+  const sideXml = (name: (typeof MARGIN_SIDES)[number], n: number): string =>
+    `<${p}:${name} ${p}:w="${Math.round(n)}" ${p}:type="dxa"/>`;
+  if (!existing) {
+    const kids = MARGIN_SIDES.filter((s) => sides[s] !== undefined).map((s) => sideXml(s, sides[s]!));
+    return `<${p}:tblCellMar>${kids.join("")}</${p}:tblCellMar>`;
+  }
+  let next = existing;
+  for (const side of MARGIN_SIDES) {
+    const n = sides[side];
+    if (n === undefined) continue;
+    next = replaceElementChild(next, side, sideXml(side, n), MARGIN_SIDES);
+  }
+  return next;
+}
+
 /** 一格这一击动过的边与地写回它自己的 `w:tcPr`；与表同一条口径，没有原件的格子由写出器按字段拼。 */
 export function syncCellBox(cell: TableCell, changes: BorderSet, shading?: string): void {
   const own = cell.tcPrXml;

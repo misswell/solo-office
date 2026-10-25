@@ -1,5 +1,5 @@
 import { strToU8, zipSync } from "fflate";
-import type { Block, BorderSet, CellStyle, Inline, ListAddition, ParaStyle, Paragraph, ParagraphFormatRevision, PropSlot, RunStyle, RowInfo, RowStyle, Table, TableBorder, TableCell, TableStyle, WordDocument } from "./docx.js";
+import type { Block, BorderSet, CellStyle, Inline, ListAddition, MarginTwips, ParaStyle, Paragraph, ParagraphFormatRevision, PropSlot, RunStyle, RowInfo, RowStyle, Table, TableBorder, TableCell, TableStyle, WordDocument } from "./docx.js";
 import { bytesOfDataUrl } from "./media.js";
 import { BORDER_ORDER, PBDR_ORDER, ROW_REVISION_TAGS, ownParaStyle, ownRunStyle, paraBorderChanges, paraStyleOf, preserve, revisionTag, runStyleOf, samePropValue, shadingFillToken } from "./docx.js";
 import { childSpans, elementContent } from "./opc.js";
@@ -811,7 +811,20 @@ function tablePropsInner(t: TableStyle): string[] {
     // 表这一层的底纹在授权语料里 0 枚（`.scratch/shd-audience.ts`），摆的位置是 `CT_TblPr` 给的序。
     t.shading ? `<w:shd w:val="clear" w:color="auto" w:fill="${XML_ESC(shadingFillToken(t.shading))}"/>` : "",
     t.layout ? `<w:tblLayout w:type="${XML_ESC(t.layout)}"/>` : "",
+    cellMarginXml(t.cellMargin),
   ].filter(Boolean);
+}
+
+/**
+ * 编辑器自己造的表那一份默认单元格边距。与 `w:tblCellMar` 在件里的拼法同一句：每条边都是 `w:w` 加
+ * `w:type="dxa"`（授权 46 份里 1,502 枚边孩子无一例外）。
+ */
+function cellMarginXml(m: MarginTwips | undefined): string {
+  if (!m) return "";
+  const sides = (["top", "left", "bottom", "right"] as const)
+    .filter((s) => m[s] !== undefined)
+    .map((s) => `<w:${s} w:w="${Math.round(m[s]!)}" w:type="dxa"/>`);
+  return sides.length ? `<w:tblCellMar>${sides.join("")}</w:tblCellMar>` : "";
 }
 
 /** 一枚记录带着的属性原文：件里怎么写的就怎么回去，模型没有字段的属性也在这一份里。 */

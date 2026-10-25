@@ -1233,6 +1233,71 @@ function smoke(): void {
           const glBackShadow = glShadow();
           const glBackRect = glRect();
           const glDirty1 = (document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0;
+          // 「表格属性」那一枚（CT_TableTools.kuip:7 的 TableProperties，RB_Table 组里排在 ShowGridlines **之前**）
+          // 在装机这一趟量六条：按钮与组序摆得出、对话框起手摆的是件里那一句、改完纸跟着动、撤销回得来、
+          // 再开一次「取消」不动文件、「原样确定」（这里按「取消」那一支等价：一个字段没碰）不留脏字。
+          // 起点是件里**说过**的那几句：夹具说了一句 w:tblLayout fixed、没说过对齐/缩进/默认边距（make-table-tools-smoke.ts），
+          // 所以起手 固定列宽=勾，其余格子空着。落笔挑的是**左对齐 + 1.27 厘米缩进**：居中/右对齐在纸上只改
+          // margin-left:auto，而这张表已宽过正文栏，auto 解析出来的像素与「没说」分不开——左对齐加缩进才是纸上量得到的那一格。
+          // 默认边距落 0.19 厘米（≈108 缇）在纸上就是 td 的 padding-left。最后整条撤销，盘上那件交本节末尾那句
+          // solo:save 写回（这一腿不许牵动 #190/#195 那两笔字节账）。
+          const tpGrp = [...document.querySelectorAll("#ribbon .rbar[data-tab='table'] .grp")]
+            .find((g) => [...g.querySelectorAll("button")].some((b) => b.textContent === "属性"));
+          const tpGrpLabels = tpGrp ? [...tpGrp.querySelectorAll("button")].map((b) => b.textContent).join("|") : "";
+          const tpBtn = () => ttRowEls().find((b) => b.textContent === "属性");
+          const tpDlg = () => document.querySelector(".solo-tp-dialog");
+          const tpField = (n) => tpDlg()?.querySelector("[name='" + n + "']") ?? null;
+          const tpShot = () => {
+            const t = ttFind();
+            const td = ttAlignTd();
+            if (!t) return "no-table";
+            const s = getComputedStyle(t);
+            return [s.tableLayout, s.marginLeft, td ? getComputedStyle(td).paddingLeft : "no-cell"].join("|");
+          };
+          const tpSet = (el, v) => {
+            if (!el) return 0;
+            el.value = v;
+            el.dispatchEvent(new Event("change", { bubbles: true }));
+            return 1;
+          };
+          const tpBefore = tpShot();
+          const tpBtnPresent = tpBtn() ? 1 : 0;
+          const tpBtnLabel = tpBtn()?.textContent ?? "";
+          tpBtn()?.click();
+          await wait(320);
+          const tpOpen = tpDlg()?.open === true ? 1 : 0;
+          const tpTitle = tpDlg()?.querySelector("h2")?.textContent ?? "";
+          const tpRows = tpDlg()?.querySelectorAll(".solo-tp-row,.solo-tp-check").length ?? 0;
+          const tpEchoAlign = tpField("tp-align")?.value ?? "?";
+          const tpEchoIndent = tpField("tp-indent")?.value ?? "?";
+          const tpEchoFixed = tpField("tp-fixed")?.checked === true ? 1 : 0;
+          const tpEchoMargin = ["top", "left", "bottom", "right"].map((s) => tpField("tp-m-" + s)?.value ?? "?").join(",");
+          tpSet(tpField("tp-align"), "left");
+          tpSet(tpField("tp-indent"), "1.27");
+          if (tpField("tp-fixed")) {
+            tpField("tp-fixed").checked = false;
+            tpField("tp-fixed").dispatchEvent(new Event("change", { bubbles: true }));
+          }
+          tpSet(tpField("tp-m-left"), "0.19");
+          await wait(140);
+          const tpError = tpDlg()?.querySelector(".solo-tp-error")?.textContent ?? "";
+          tpDlg()?.querySelector(".solo-tp-apply")?.click();
+          await wait(400);
+          const tpGone = tpDlg() ? 0 : 1;
+          const tpAfter = tpShot();
+          const tpWritten = tpAfter !== tpBefore ? 1 : 0;
+          ttUndoKey();
+          await wait(400);
+          const tpUndo = tpShot();
+          const tpUndoBack = tpUndo === tpBefore ? 1 : 0;
+          tpBtn()?.click();
+          await wait(320);
+          const tpReopen = tpDlg()?.open === true ? 1 : 0;
+          tpDlg()?.querySelector(".solo-tp-cancel")?.click();
+          await wait(220);
+          const tpCancelGone = tpDlg() ? 0 : 1;
+          const tpCancelClean = tpShot() === tpBefore ? 1 : 0;
+          const tpDialogsLeft = document.querySelectorAll(".solo-tp-dialog").length;
           // 光标交回表外：下面那一段量的还是「表一退场、页签跟着退、档回到开始」，与这一腿各说各的。
           const ttCursorBackInCell = ttAlignTd() ? 1 : 0;
           // 光标退出表挑的是**表外那一段**，不是「第一张纸最后一个孩子」：表涨宽后会挪到别的纸上，
@@ -1281,6 +1346,9 @@ function smoke(): void {
             glStartView, glStartLit, glStartShadow, glStartInk, glStartEdges: glStartAudit.edges, glStartBoth: glStartAudit.both, glStartNeither: glStartAudit.neither, glStartRect,
             glOffView, glOffLit, glOffShadow, glOffInk, glOffEdges: glOffAudit.edges, glOffBoth: glOffAudit.both, glOffNeither: glOffAudit.neither, glOffRect, glOffNotice,
             glBackView, glBackLit, glBackShadow, glBackRect, glDirty0, glDirty1,
+            tpGrpLabels, tpBtnPresent, tpBtnLabel, tpOpen, tpTitle, tpRows,
+            tpEchoAlign, tpEchoIndent, tpEchoFixed, tpEchoMargin, tpError,
+            tpBefore, tpAfter, tpWritten, tpUndoBack, tpReopen, tpCancelGone, tpCancelClean, tpDialogsLeft,
             ttDirty: (document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0,
           };
         }

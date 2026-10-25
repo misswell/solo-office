@@ -882,23 +882,26 @@ function buildDocRibbon(): void {
   // 表格工具的上下文页。WPS 的组序是 `<subcommand id="CT_TableTools">`（`CT_TableTools.kuip:180-198`）说死的：
   // RB_Table → RB_RowsAndColumns → RB_Merge → RB_Adjust → RB_Table_Font → RB_Alignment → RB_Data → TableSelectMenu。
   // 这里摆家里真做得了的组，组名用自家的话，**位置按上面那个组序**（缺的是中间那几组，不是摆好的这几组的位）：
-  //   · 表格 ← RB_Table 的 `ShowGridlines`（视图那一档，见下面那枚 `props`；`TableProperties` 仍缺）；
+  //   · 表格 ← RB_Table 的两枚（`TableProperties` 属性对话框、`ShowGridlines` 视图那一档，见下面那枚 `props`）；
   //   · 行与列 ← RB_RowsAndColumns 里的 `TableTools_Insert`（上方/下方插入行、左侧/右侧插入列、Cells…）
   //     与 `Delete` 那档四条（:33-36：单元格、列、行、表格）；
   //   · 合并与拆分 ← RB_Merge 的 Merge Cells / Split Cells / Split Table by Row（按列拆仍是 0 命令）；
   //   · 单元格尺寸 ← RB_Adjust 的高度/宽度两格（见 `CELL_SIZE_SPINS`）；
   //   · 对齐 ← RB_Alignment 的两行六枚（见 `TABLE_ALIGN_BUTTONS`）；
   //   · 选择 ← TableSelectMenu 的四条。
-  // RB_Table 里的「属性」、RB_Table_Font 与 RB_Data（公式/转文字/标题行重复）要建模或对话框，
+  // RB_Table 的两枚都接上了。RB_Table_Font 与 RB_Data（公式/转文字/标题行重复）要建模或对话框，
   // 这一轮不摆空按钮——宁缺一条，不摆一条按下去什么也不改的。
   // `RB_Table`（`CT_TableTools.kuip:5-9`，`groupTip="TableToolPropertyGroup"`）在 WPS 那条 `<subcommand>` 组序里排
-  // **第一**，组里两枚：`TableProperties`（:7）与 `ShowGridlines`（:8，`idMso="TableShowGridlines"`）。
-  // 这一轮只摆后者：
+  // **第一**，组里两枚：`TableProperties`（:7）与 `ShowGridlines`（:8，`idMso="TableShowGridlines"`）。两枚都摆，次序照它：
+  //  · 「属性」按下开的是「表格属性」对话框（`doc-table-props.ts`）。WPS 那张对话框里分几页、摆哪些字段**未取证**，
+  //    所以这里不按 Word 的四页抄，只摆件里真有受众、又已经有落笔处的那四句：对齐 `w:jc`（14 枚/4 件，
+  //    全是 `center`）、左缩进 `w:tblInd`（58 枚/10 件）、固定列宽 `w:tblLayout`（58 枚/10 件，全是 `fixed`）、
+  //    默认单元格边距 `w:tblCellMar`（58 枚/10 件，`.scratch/tblpr-children-audience.py` 的读数）。
+  //    宽度、边框、底纹不在这张对话框里：它们各自已经有落笔处（`setTableWidth`、`#145/#150/#152` 那张对话框）。
   //  · 「查看网格线」说的是**屏幕上画不画导引线**这一句，文件里没有它（下面那枚 `showGridlines` 说清了为什么），
-  //    家里画得出来也回得了显，所以摆；
-  //  · 「表格属性」按下开的是对话框——那张对话框里摆哪些字段、每一字段落哪一句 OOXML，WPS 侧**未取证**，
-  //    摆一枚按下去说不出话的按钮不做（与 `m_TableTextDirection`、分栏那两枚同一口径）。
+  //    家里画得出来也回得了显，所以摆。
   const props = group("table");
+  button(props, "tableProps", "属性", "表格对齐、左缩进、固定列宽与默认单元格边距（WPS：Table Properties）", () => editor?.openTableProps());
   button(props, "gridlines", "查看网格线", "把文件里没说过线的那些格子边，在屏幕上画成导引线（WPS：View Gridlines）；导引线上不了纸", () => {
     showGridlines = !showGridlines;
     syncDocRibbon();

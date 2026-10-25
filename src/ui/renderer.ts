@@ -550,6 +550,7 @@ const TABLE_TOOL_KEYS = [
   "mergeCells", "splitCell", "splitTable",
   "cellHeight", "cellWidth",
   "tblTop", "tblMid", "tblBot", "tblLeft", "tblCenter", "tblRight",
+  "repeatHeader",
   "selectCell", "selectCol", "selectRow", "selectTable",
 ] as const;
 
@@ -970,6 +971,11 @@ function buildDocRibbon(): void {
         : editor?.setCellAlign(value as "left" | "center" | "right")));
   }
 
+  // RB_Data 那一组（`CT_TableTools.kuip:92`）家里做得了的一条：「标题行重复」`RepeatHeaderRows`。公式、转文字
+  // 仍未接，不摆空按钮。这是一枚开关：光标落在表头那一段里时亮着，再按一下关（与「查看网格线」同一形状）。
+  const data = group("table");
+  button(data, "repeatHeader", "标题行重复", "让表格开头连续的几行在每一页重复（WPS：Repeat Header Rows）", () => tableAction(editor?.toggleHeaderRows()));
+
   const picking = group("table");
   button(picking, "selectCell", "选择单元格", "选择单元格（WPS：Select Cell）", () => tableAction(editor?.selectCell()));
   button(picking, "selectCol", "选择列", "选择列（WPS：Select Column）", () => tableAction(editor?.selectColumn()));
@@ -1225,6 +1231,9 @@ function syncDocRibbon(force = false): void {
   lit(["tblLeft"], hOn("left"));
   lit(["tblCenter"], hOn("center"));
   lit(["tblRight"], hOn("right"));
+  // 「标题行重复」的回显问的是**光标那一行在不在表头那一段里**——正是那一击会关掉的状态（命令按「选区末行」
+  // 定标题块尽头）。光标不在表里时 `rowHeaderState()` 给 `undefined`，按钮灰着（`TABLE_TOOL_KEYS` 一并管）。
+  mark("repeatHeader", editor?.rowHeaderState() === true);
   for (const key of ["vtop", "vmid", "vbot"]) {
     const b = ctl[key] as HTMLButtonElement | undefined;
     if (b) b.disabled = !inTable;

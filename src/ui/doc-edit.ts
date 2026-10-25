@@ -1,14 +1,14 @@
 import type { Block, BorderSet, Carried, CarriedInline, CellStyle, FormatRevision, HeaderFooter, HfSegment, Inline, LineSpacingRule, MarginTwips, ParaStyle, PageGeometry, PageSetup, Paragraph, ParagraphFormatRevision, PropSlot, Revision, RevisionEntry, RowInfo, RowStyle, RunStyle, Section, Table, TableBorder, TableCell, TablePropsPatch, TableStyle, WordDocument } from "../core/docx.js";
 import type { CommentAnchor, DocComment } from "../core/comments.js";
 import { bodyShape, commentTexts } from "../core/comments.js";
-import { DEFAULT_SECTION, EAST_ASIAN_TEXT, MARGIN_SIDES, RUN_STYLE_KEYS, applyFacePick, applyRunPatch, borderDelta, carriedShape, cellShapeOf, countTexts, lineGridPitchTwips, ownParaStyle, ownRunStyle, paraSpacingPitch, paraStyleOf, paragraphTextsOf, rowShapeOf, runStyleOf, samePropValue, sectionEndsOf, signCellPlaceRevision, signCellRevision, signRowRevision, signTableRevision, stampNow, syncCellBox, syncCellVAlign, syncParaSlots, syncRowHeight, syncTableBox, syncTableProps, tableShapeOf, twipsToPx } from "../core/docx.js";
+import { DEFAULT_SECTION, EAST_ASIAN_TEXT, MARGIN_SIDES, RUN_STYLE_KEYS, applyFacePick, applyRunPatch, borderDelta, carriedShape, cellShapeOf, countTexts, lineGridPitchTwips, ownParaStyle, ownRunStyle, paraSpacingPitch, paraStyleOf, paragraphTextsOf, rowShapeOf, runStyleOf, samePropValue, sectionEndsOf, signCellPlaceRevision, signCellRevision, signRowRevision, signTableRevision, stampNow, syncCellBox, syncCellVAlign, syncParaSlots, syncRowHeader, syncRowHeight, syncTableBox, syncTableProps, tableShapeOf, twipsToPx } from "../core/docx.js";
 import type { CellWhere, TableEdit } from "../core/doc-table-ops.js";
 import { allCells, cellOuterSides, cellRangeFor, cellRect, columnCells, cellsInRect, cellsInSweep, deleteCellHere, deleteColumnHere, deleteRowHere, deleteTableBlock, gridColumns, gridWidths, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, setColumnWidth, splitHere, splitTableAt } from "../core/doc-table-ops.js";
 import { IMAGE_EXT_BY_MIME } from "../core/media.js";
 import { BAND_SOURCE_CLASS, CARRY_CLASS, CARRY_STYLE, BAND_MASTER_CLASS, PAGE_BORDER_CLASS, RUN_CARRY_CLASS, type RevisionView, fontStack, highlightColor, renderWord } from "../core/render.js";
 import { flatOf, inlineLength, isMark, keepRunIdentity } from "../core/run-identity.js";
 import { CommentPanel } from "./doc-comments.js";
-import { applyBandYield, applySheetGaps, applyTabStops, BAND_CLONE_CLASS, caretCharTop, caretStatusOf, lineCaretAnchor, lineNumberAt, measurePageLayout, pageAtCaret, pageCaretAnchor, pagePositionAt, rowColumnAt, sectionCaretAnchor, SHEET_GAP_ROW_CLASS, SHEET_STRIP_CLASS, type CaretLine, type CaretStatus, type PageAnchor, type PageMeasure, type PagePlacement, type SheetStrip } from "./doc-layout.js";
+import { applyBandYield, applySheetGaps, applyTabStops, BAND_CLONE_CLASS, caretCharTop, caretStatusOf, lineCaretAnchor, lineNumberAt, measurePageLayout, pageAtCaret, pageCaretAnchor, pagePositionAt, REPEAT_HEADER_ROW_CLASS, rowColumnAt, sectionCaretAnchor, SHEET_GAP_ROW_CLASS, SHEET_STRIP_CLASS, type CaretLine, type CaretStatus, type PageAnchor, type PageMeasure, type PagePlacement, type SheetStrip } from "./doc-layout.js";
 import { ReviewPanel } from "./doc-review.js";
 import { OutlinePanel } from "./doc-outline.js";
 import { openPageSetup as showPageSetupDialog } from "./doc-page-setup.js";
@@ -178,12 +178,13 @@ function revisionOf(el: Element): Revision | undefined {
  * The rows of this table only. A table nested in a cell is inside the same element, and its rows are not
  * this table's rows.
  *
- * A row the page seam put in (`SHEET_GAP_ROW_CLASS`, #158) is paint, not a row: reading it back would add an
- * empty `w:tr` to the file and shift every row under the seam by one. Same precedent as a sheet strip or a
- * band copy at block level — the painting pass is not the model.
+ * A row the page seam put in (`SHEET_GAP_ROW_CLASS`, #158) and a re-drawn header row on a continuation page
+ * (`REPEAT_HEADER_ROW_CLASS`) are paint, not rows: reading one back would add an empty `w:tr` to the file and
+ * shift every row under the seam by one. Same precedent as a sheet strip or a band copy at block level — the
+ * painting pass is not the model.
  */
 function rowsOf(el: Element): Element[] {
-  const isGap = (tr: Element): boolean => tr.classList.contains(SHEET_GAP_ROW_CLASS);
+  const isGap = (tr: Element): boolean => tr.classList.contains(SHEET_GAP_ROW_CLASS) || tr.classList.contains(REPEAT_HEADER_ROW_CLASS);
   return [...el.children].flatMap((part) =>
     part.tagName === "TR" ? (isGap(part) ? [] : [part]) : ["TBODY", "THEAD", "TFOOT"].includes(part.tagName) ? [...part.children].filter((tr) => tr.tagName === "TR" && !isGap(tr)) : [],
   );
@@ -3888,6 +3889,68 @@ export class DocEditor {
     }
     this.repaintWithSelection(caret);
     return { ok: true };
+  }
+
+  /**
+   * 表格工具「数据 → 标题行重复」（WPS `CT_TableTools.kuip:92` 的 `RepeatHeaderRows`）：给「表第一行起、连续
+   * 到选区末行」的那一段行写 `w:trPr/w:tblHeader`（§17.4.49），续页在正文开始线重画它们（`doc-layout.ts`）。
+   *
+   * 文件只让**从第一行起连续**的那一段在续页重复（§17.4.49 的读法就是前缀），所以这一击按**选区末行**定标题块
+   * 的尽头：中间行标不上，这里也不写一句读回来不成立的字节。选区末行已经在标题块里时这一击是**关**——清掉整段
+   * 标题行。整张表都选上时拒绝：全是标题行就没有表体，续页无从续排（WPS 真机在整表选区上写什么**未取证**，
+   * 这里不做猜测）。
+   *
+   * 开着修订时整击签**一枚** `w:id`，逐行 `w:trPrChange` 带改前那一套（与行高那一击同一出口）。已经这么说的行
+   * 一个字节不动；一行都不用改时回绝、不进撤销栈。
+   */
+  toggleHeaderRows(): TableCommandAnswer {
+    const caret = this.caretPath();
+    if (!this.tableAt(caret)) return { ok: false, reason: "光标不在表格里" };
+    const segments = this.selectionTableSegments();
+    if (!segments.length) return { ok: false, reason: "光标不在表格里" };
+    const edits: { info: RowInfo; on: boolean; was: RowStyle; wasSlots: PropSlot[] }[] = [];
+    const seen = new Set<RowInfo>();
+    for (const segment of segments) {
+      const rows = segment.table.rows;
+      if (!rows.length) continue;
+      let leading = 0;
+      while (leading < rows.length && rows[leading]?.[0]?.row?.header) leading += 1;
+      let last = 0;
+      for (const where of segment.cells) last = Math.max(last, where.row);
+      const on = last >= leading;
+      const upTo = on ? last : leading - 1;
+      if (on && upTo >= rows.length - 1 && rows.length > 1) return { ok: false, reason: "最后一行不能是标题行：续页没有可排的表体" };
+      for (let r = 0; r <= upTo; r += 1) {
+        let info = rows[r]?.[0]?.row;
+        if (!info) {
+          info = {};
+          for (const cell of rows[r] ?? []) cell.row = info;
+        }
+        if (seen.has(info) || (info.header === true) === on) continue;
+        seen.add(info);
+        edits.push({ info, on, was: rowShapeOf(info), wasSlots: info.slots ?? [] });
+      }
+    }
+    if (!edits.length) return { ok: false, reason: "标题行已经是这个状态" };
+    this.snapshot(caret);
+    if (this.trackRevisions) this.revSeq += 1;
+    for (const edit of edits) {
+      syncRowHeader(edit.info, edit.on);
+      if (this.trackRevisions)
+        signRowRevision(edit.info, { id: this.revSeq, author: this.authorName, date: stampNow() }, edit.was, edit.wasSlots);
+    }
+    this.repaintWithSelection(caret);
+    return { ok: true };
+  }
+
+  /** 「标题行重复」那一枚的回显：光标那一行在不在表头那一段里（不在表里时 `undefined`，与 `borderScope` 同口径）。 */
+  rowHeaderState(): boolean | undefined {
+    const target = this.tableAt(this.caretPath());
+    if (!target) return undefined;
+    const rows = target.table.rows;
+    let leading = 0;
+    while (leading < rows.length && rows[leading]?.[0]?.row?.header) leading += 1;
+    return target.where.row < leading;
   }
 
   /**

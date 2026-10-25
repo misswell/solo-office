@@ -886,7 +886,8 @@ function renderTable(t: Table, doc: WordDocument, state: CommentState, gridPx?: 
         : "";
       const shown = rev ? `${rev.author}${rev.date ? ` · ${rev.date.slice(0, 10)}` : ""} ${rev.kind === "del" ? "删除行" : "插入行"}` : "";
       const height = rowStyle(row);
-      return `<tr${carried}${height ? ` style="${height}"` : ""}${shown ? ` title="${esc(shown)}"` : ""}>${cells
+      const header = row?.header ? ` ${TBL_HEADER_ATTR}="1"` : "";
+      return `<tr${carried}${header}${height ? ` style="${height}"` : ""}${shown ? ` title="${esc(shown)}"` : ""}>${cells
         .map((c, c2) => {
           const merge = merges[r][c2]!;
           // The table's inside lines belong to the seam, so they draw on the cell that faces it, and a
@@ -963,6 +964,13 @@ export const CARRY_STYLE = "border:1px dashed #b3b3b3;border-radius:2px;padding:
 
 /** The class a carried container's element wears: the page's one signal that a block is not editable. */
 export const CARRY_CLASS = "doc-carry";
+
+/**
+ * 纸上的表头行标记（`w:trPr/w:tblHeader`，§17.4.49）。`data-` 而不用 class：它说的是一句**文件里的话**，
+ * 不是页面自己的一层装饰，读回模型时不该被当成格式（与 `render.ts` 给行修订盖 `data-row-rev` 同一条口径）。
+ * 铺排（`doc-layout.ts`）与页缝重画按它认「开头连续的那几行」，所以两处读的是同一个字面。
+ */
+export const TBL_HEADER_ATTR = "data-tbl-header";
 
 /**
  * A block the model keeps as the source text it came in with: what is inside it is shown, and it is

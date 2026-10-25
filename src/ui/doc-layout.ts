@@ -89,7 +89,7 @@
  * （字体度量、行盒取整、页眉占位、孤行控制都不一样，这些也都**未取证**），所以这里不写「与 WPS 一致」。
  */
 import { DEFAULT_SECTION, sectionEndsOf, twipsToPx, type Section, type WordDocument } from "../core/docx.js";
-import { BAND_MASTER_CLASS, BAND_SOURCE_CLASS, CARRY_CLASS, PAGE_BORDER_CLASS } from "../core/render.js";
+import { BAND_MASTER_CLASS, BAND_SOURCE_CLASS, CARRY_CLASS, PAGE_BORDER_CLASS, TBL_HEADER_ATTR } from "../core/render.js";
 
 /**
  * 铺在纸上的一枚单位：一个行盒，或一枚不能拆的东西（表格的一行、一个只读容器）。
@@ -102,6 +102,12 @@ export type LayoutUnit = {
   keepNext?: boolean;
   /** 段首这一枚身上的**整段高度**（段落说 `w:keepLines`）：这一坨不拆页（比一页还高时不算数）。 */
   keepLines?: number;
+  /**
+   * 这一枚是表格的表体行、而它所在的表有一段「标题行」（`w:trPr/w:tblHeader`，§17.4.49）时，标题行那几枚
+   * 合起来的高。续页会在正文开始线处重画那几行，所以**从这一枚起跳的新页**得先让出这一截，否则按容量装进去的
+   * 表体会越过纸底。首张纸不 reserve：那张纸的表头是表自己的那几行，不是重画的复件。
+   */
+  resumeHeaderPx?: number;
   /**
    * 这一枚在**所属段落行盒序列**里的枚序与总枚数（段落没说「关孤行控制」时才有）。装箱那趟用它把落在段中
    * 的页界挪到不落单行的地方：段首行不许独自留在页尾，段尾行不许独自落在页头。
@@ -166,6 +172,16 @@ export const SHEET_GAP_CLASS = "solo-sheet-gap";
  * 逐枚相同——`sheets-dom` 那一条按重拼后的 document.xml 数 `w:tr` 钉住这一条。
  */
 export const SHEET_GAP_ROW_CLASS = "solo-sheet-gap-row";
+
+/**
+ * 续页顶上重画的**标题行复件**（`applySheetGaps` 在页缝垫行之后 clone 的那几行）。
+ *
+ * 它与 `SHEET_GAP_ROW_CLASS` 同一族：**画的复件，不是表的一枚行**。量（`tableRowsOf`）、读回模型
+ * （`doc-edit.ts` 的 `rowsOf`）、`clearSheetGaps` 的清场三处都按这个 class 认它，所以重拼出来的件里
+ * `w:tr` 枚数一枚不多，光标也落不进复件。复件带着 `data-tbl-header`（它画的就是那句文件里的话），但
+ * 认「开头连续的那几行」时先撇 class 再认属性——两处读的是同一个字面，见 `render.ts:TBL_HEADER_ATTR`。
+ */
+export const REPEAT_HEADER_ROW_CLASS = "solo-repeat-header-row";
 
 /** 两张纸之间留出的空档，px。WPS 真机留多宽**未取证**，这一版自定 24。 */
 export const SHEET_GAP_PX = 24;
@@ -361,12 +377,23 @@ function unitsOfParagraph(el: HTMLElement, zoom: number): PlacedUnit[] {
 }
 
 /**
- * 这张表自己的行，按页写出来的顺序（`#158`）：页缝垫下的那一枚 `SHEET_GAP_ROW_CLASS` **不是表的一枚行**，
- * 从这里就撇掉——量、取点、落笔三个口径都必须与「没有缝的时候」逐枚同一份，否则垫一行会把后面的页界整体推歪。
+ * 这张表自己的行，按页写出来的顺序（`#158`）：页缝垫下的那一枚 `SHEET_GAP_ROW_CLASS` 与续页顶上重画的
+ * `REPEAT_HEADER_ROW_CLASS` 都**不是表的一枚行**，从这里就撇掉——量、取点、落笔三个口径都必须与「没有缝的
+ * 时候」逐枚同一份，否则垫一行会把后面的页界整体推歪。
  * 嵌套在格子里的表属于那个表对象，`rows` 本来也不会给过来。
  */
 function tableRowsOf(table: HTMLTableElement): HTMLTableRowElement[] {
-  return [...table.rows].filter((r) => !r.classList.contains(SHEET_GAP_ROW_CLASS));
+  return [...table.rows].filter((r) => !r.classList.contains(SHEET_GAP_ROW_CLASS) && !r.classList.contains(REPEAT_HEADER_ROW_CLASS));
+}
+
+/** 开头连续几行是标题行（`w:tblHeader`）：文件只让**从第一行起连着**的那一段在续页重复，断在中间的不算。 */
+function leadingHeaderRows(table: HTMLTableElement): HTMLTableRowElement[] {
+  const out: HTMLTableRowElement[] = [];
+  for (const r of tableRowsOf(table)) {
+    if (!r.hasAttribute(TBL_HEADER_ATTR)) break;
+    out.push(r);
+  }
+  return out;
 }
 
 /** 表里量得出高度的行（0 高的行不产一枚单位，与 `unitsOfBlock` 同一口径），带上各自的矩形。 */
@@ -383,7 +410,29 @@ function measuredRows(table: HTMLTableElement): { el: HTMLTableRowElement; rect:
 function unitsOfBlock(el: HTMLElement, zoom: number): PlacedUnit[] {
   if (el.tagName === "TABLE") {
     // `rows` 只给这张表自己的行：格子里的嵌套表属于那个表对象，不会被这里数两遍。
-    return measuredRows(el as HTMLTableElement).map(({ rect }) => ({ height: rect.height, forcePage: false, top: rect.top }));
+    const table = el as HTMLTableElement;
+    const rows = measuredRows(table);
+    const out: PlacedUnit[] = rows.map(({ rect }) => ({ height: rect.height, forcePage: false, top: rect.top }));
+    // 标题行那一段（`w:tblHeader`，§17.4.49）按**开头连续**认，与 `applySheetGaps` 重画复件是同一份口径。
+    // 两件事挂在单位上：
+    // · 首枚带 `keepLines` = 标题行合起来的高 + 表体第一行的高。「标题行+第一行」不许被页缝切开（与段落
+    //   `w:keepLines` 同一条装箱规则）；断在它前面时整段同去下一页，表头就不会孤零零留在纸尾。
+    // · 表体每一枚带 `resumeHeaderPx` = 标题行合起来的高。这一枚若成为新页的第一枚（表从上一页续下来），
+    //   续页顶上会重画标题行，装箱得先让出这一截（见 `placementsAcrossSections`）。
+    // 标题行自己不带 `resumeHeaderPx`：新页若从标题行起，纸上的就是表自己那几行，没有再画一份的道理。
+    const headerEls = new Set(leadingHeaderRows(table));
+    let headerPx = 0;
+    let headerCount = 0;
+    for (const { el: row, rect } of rows) {
+      if (!headerEls.has(row)) break;
+      headerPx += rect.height;
+      headerCount += 1;
+    }
+    if (headerPx > 0 && headerCount < out.length) {
+      out[0] = { ...out[0]!, keepLines: headerPx + out[headerCount]!.height };
+      for (let i = headerCount; i < out.length; i++) out[i] = { ...out[i]!, resumeHeaderPx: headerPx };
+    }
+    return out;
   }
   if (el.classList.contains(CARRY_CLASS)) {
     const b = el.getBoundingClientRect();
@@ -493,6 +542,7 @@ function unitBlocksForPacking(page: HTMLElement): { el: HTMLElement; units: Plac
         const h = base.units[k]!;
         const scaled: PlacedUnit = { ...u, height: h.height * zoom };
         if (u.keepLines !== undefined && h.keepLines !== undefined) scaled.keepLines = h.keepLines * zoom;
+        if (u.resumeHeaderPx !== undefined && h.resumeHeaderPx !== undefined) scaled.resumeHeaderPx = h.resumeHeaderPx * zoom;
         return scaled;
       }),
     };
@@ -629,6 +679,15 @@ function widowBoundary(units: readonly LayoutUnit[], i: number): number {
 }
 
 /**
+ * 新页第一枚是表体行时要让出的那一截（`LayoutUnit.resumeHeaderPx`，续页顶上重画的标题行）。
+ * 标题行比一页还高时不让：重画的那一份没处可放，与 `keepLines`「比一页还高时不算数」同一条退让。
+ */
+function headerReserveOf(u: LayoutUnit | undefined, contentHeightPx: number): number {
+  const px = u?.resumeHeaderPx;
+  return px !== undefined && px > 0 && px < contentHeightPx ? px : 0;
+}
+
+/**
  * 纯的那一半（多节版）：一列单位在 `unitSections[i]` 说的那一节的纸上各落在第几页（与 `units` 一一对应）。
  * 每一节内的铺法是「单节」那一套再加三条**文件声明的保持规则**（`w:keepNext` / `w:keepLines` / `w:widowControl`，
  * 段落自己写的与它的样式链说的都算——渲染器盖章时早已按 `docx.ts` 的阶梯把两者合成一个值了）：
@@ -680,7 +739,8 @@ export function placementsAcrossSections(units: readonly LayoutUnit[], unitSecti
       // 高过一页时按装箱这趟照常续排，不为它多算一页）。
       const b = widowBoundary(units, i);
       page++;
-      used = 0;
+      // 新页第一枚若是表体行，页首那一截重画的标题行先占掉（`headerReserveOf`）。
+      used = headerReserveOf(units[b], contentHeightPx);
       for (let j = b; j < i; j++) {
         pages[j] = page;
         used += Math.min(Math.max(units[j]!.height, 0), contentHeightPx);
@@ -1338,12 +1398,34 @@ function makeSheetGapRow(height: number, columns: number): HTMLElement {
 }
 
 /**
+ * 续页顶上重画的一枚标题行：把表自己那一行原样 clone 一份，但摘掉编辑器盖在行、格、块上的归属号
+ * （`data-rid`/`data-cid`/`data-bid`）。复件不是模型里的东西——带着归属号读回时会被认成**另一枚真行**
+ * （`doc-edit.ts` 的 `ownedRow`/`ownedCell` 按号认领），存盘就多出一行。也不可编辑、不接鼠标、不进选区、
+ * 读屏跳过：它是画出来的表头，落笔的位置在纸下面那几行真行上。
+ */
+function makeHeaderClone(row: HTMLTableRowElement): HTMLTableRowElement {
+  const clone = row.cloneNode(true) as HTMLTableRowElement;
+  clone.classList.add(REPEAT_HEADER_ROW_CLASS);
+  clone.setAttribute("aria-hidden", "true");
+  clone.contentEditable = "false";
+  clone.style.pointerEvents = "none";
+  clone.style.userSelect = "none";
+  for (const el of [clone, ...clone.querySelectorAll<HTMLElement>("*")]) {
+    el.removeAttribute("data-rid");
+    el.removeAttribute("data-cid");
+    el.removeAttribute("data-bid");
+    el.contentEditable = "false";
+  }
+  return clone;
+}
+
+/**
  * 清掉上一趟垫下的页缝，并把被 `splitText` 切开过的文字节点合回去——下一趟还在这一段里找行首。
- * 两种垫片一起清：段落里的空 span，与表行之间的那一行（`#158`）。
+ * 两种垫片、一种复件一起清：段落里的空 span、表行之间的那一行（`#158`）、续页顶上重画的标题行复件。
  */
 function clearSheetGaps(page: HTMLElement): void {
   const parents = new Set<Element>();
-  for (const gap of [...page.querySelectorAll<HTMLElement>(`.${SHEET_GAP_CLASS}, .${SHEET_GAP_ROW_CLASS}`)]) {
+  for (const gap of [...page.querySelectorAll<HTMLElement>(`.${SHEET_GAP_CLASS}, .${SHEET_GAP_ROW_CLASS}, .${REPEAT_HEADER_ROW_CLASS}`)]) {
     if (gap.parentElement) parents.add(gap.parentElement);
     gap.remove();
   }
@@ -1602,6 +1684,22 @@ export function applySheetGaps(page: HTMLElement, doc: WordDocument): SheetLayou
   const zoom = parseFloat(page.style.getPropertyValue("zoom")) || 1;
   const origin = page.getBoundingClientRect().top;
   const localTopOf = (viewportTop: number): number => (viewportTop - origin) / zoom;
+  // 这一节正文的净高（纸的像素）：纸高减上下边距与带子让出的两截。重画的标题行比它还高时没有让位的道理。
+  const yieldBottomOf = bandYieldsOf(page, BAND_YIELD_BOTTOM);
+  const bodyPxOf = (s: number): number =>
+    paperHOf(s) - padTopOf(s) - twipsToPx((sections[s] ?? sections[0]!).margins.bottom) - (yieldBottomOf[s] ?? 0);
+  /**
+   * 这一道缝的续页顶上要重画的标题行合起来多高（**纸的像素**，与推距同一个空间）。三种情形不给：
+   * 新页第一枚本身就是标题行（纸上是表自己那几行）、这张表没有开头连续的标题行、标题行比一页还高
+   * （重画的一份没处可放，与 `headerReserveOf` 同一条退让）。
+   */
+  const repeatHeaderPxOf = (row: HTMLTableRowElement, section: number): number => {
+    if (row.hasAttribute(TBL_HEADER_ATTR)) return 0;
+    const table = row.closest("table") as HTMLTableElement | null;
+    if (!table) return 0;
+    const px = leadingHeaderRows(table).reduce((n, r) => n + r.getBoundingClientRect().height, 0) / zoom;
+    return px > 0 && px < bodyPxOf(section) ? px : 0;
+  };
   // 归属口径（#171 逐枚对拍后才定下来）：某一张纸上有没有正文、那枚算第几张，一律按**行盒的上沿**数——
   // `units[].top` 与这里画的条带是同一条链（`.scratch/seam-straddle-dom.ts`：长段落切 7 张、67 枚行的表，
   // 铺排的 `places` 与按条带反推的张 **0 分岔**，页数 == 条带数 + 1）。**不要按块的 `top` 认领**：一枚跨缝的块
@@ -1616,7 +1714,8 @@ export function applySheetGaps(page: HTMLElement, doc: WordDocument): SheetLayou
   // 推距是三角形方程组：第 p 道缝的垫片会把**下面所有内容**一起推下沉，所以往下解时每一道都要扣掉上面
   // 各道已经让出的距离（`lifted`）。先从上往下一趟把「哪一道垫多少」全解出来、落笔点也全按**原 DOM**
   // 找好（这时一个垫片都还没插），再统一下手插——顺序见下。
-  const ops: { h: number; offset: number; node?: Node; prev?: HTMLElement; block?: HTMLElement; row?: HTMLTableRowElement; place?: "before" | "after" }[] = [];
+  // `headerPx` 是这一道缝后面要重画的标题行那一段（纸的像素）——它也把下面的内容推下去，进 `lifted`。
+  const ops: { h: number; offset: number; headerPx?: number; node?: Node; prev?: HTMLElement; block?: HTMLElement; row?: HTMLTableRowElement; place?: "before" | "after" }[] = [];
   let lifted = 0;
   for (let p = 1; p <= pages - 1; p++) {
     const idxNext = firstUnitOfPage(p + 1);
@@ -1640,12 +1739,15 @@ export function applySheetGaps(page: HTMLElement, doc: WordDocument): SheetLayou
     const above = blockInsetAbove(blocks, units, content, localTopOf);
     const h = target - localTopOf(units[content]!.top) + above - lifted;
     if (!(h > 0)) continue;
+    // 这一道缝后面要重画的标题行（没有就是 0）：它把下面的内容再推一截，进 `lifted`。
+    let headerPx = 0;
     if (where.seg > 0) {
       if (where.el.tagName === "TABLE") {
         // 缝落在第 seg 枚表行之前：块级垫片进不了 `<table>` 的肚子里，垫的那一行落在它前面。
         const row = measuredRows(where.el as HTMLTableElement)[where.seg]?.el;
         if (!row) continue;
-        ops.push({ h, row, place: "before", offset: -1 });
+        headerPx = repeatHeaderPxOf(row, unitSections[content] ?? 0);
+        ops.push({ h, row, place: "before", offset: -1, headerPx });
       } else if (opaque(where.el)) {
         continue;
       } else {
@@ -1661,6 +1763,7 @@ export function applySheetGaps(page: HTMLElement, doc: WordDocument): SheetLayou
       else if (!opaque(where.el)) ops.push({ h, node: where.el, offset: 0 });
       else if (where.el.tagName === "TABLE") {
         // 缝正落在这张表的第一行之前，而上一块进不去（另一张表、或只读容器）：垫在这一张的第一行之上。
+        // 新页从这张表的第一行起，纸上就是表自己那几行标题行，没有复件可画（`headerPx` 因此是 0）。
         const row = measuredRows(where.el as HTMLTableElement)[0]?.el;
         if (!row) continue;
         ops.push({ h, row, place: "before", offset: -1 });
@@ -1672,7 +1775,7 @@ export function applySheetGaps(page: HTMLElement, doc: WordDocument): SheetLayou
         ops.push({ h, row, place: "after", offset: -1 });
       } else continue;
     }
-    lifted += h;
+    lifted += h + headerPx;
     strips.push(seam);
   }
   // 从下往上插：同一段文字里先切靠后的落笔点，靠前的那个（按原 DOM 解出来的节点与偏移）才不会被切开
@@ -1686,7 +1789,11 @@ export function applySheetGaps(page: HTMLElement, doc: WordDocument): SheetLayou
       const gapRow = makeSheetGapRow(op.h, gridColumnsOf(table));
       // DOM 方法不能从宿主上摘下来调（摘了就 `Illegal invocation`，整趟渲染探针全废）：按落笔方向各调一次。
       if (op.place === "after") op.row.after(gapRow);
-      else op.row.before(gapRow);
+      else {
+        op.row.before(gapRow);
+        // 续页顶上重画标题行：垫行之上、表体第一行之下（`before` 逐次插在那一行前面，次序就是表里的次序）。
+        if (op.headerPx) for (const header of leadingHeaderRows(table)) op.row.before(makeHeaderClone(header));
+      }
     } else if (op.node && op.block) insertSheetGapAt(op.node, op.offset, op.h, op.block);
   }
   return { strips, pages };

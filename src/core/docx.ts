@@ -5665,6 +5665,29 @@ export function syncRowHeight(row: RowInfo, twips: number, rule?: string): void 
   );
 }
 
+/**
+ * 「标题行重复」那一击写回行自己那句 `w:trPr/w:tblHeader`（§17.4.49）。与行高同两分：字段给纸面与铺排读
+ * （`render.ts` 盖章、`doc-layout.ts` 在页缝处重画这一行），孩子给写出与「拒绝」读——读过件的行是按枚带回
+ * `w:trPr` 孩子的，光改字段存盘会发现那一句还在（或不在）。
+ *
+ * 关掉时**摘掉**那一枚孩子，不写 `<w:tblHeader w:val="0"/>`：模型里「没说」就是这一句的缺席，`w:val="0"`
+ * 读回来也是缺席，两种写法在纸上是同一张纸；写一枚显式的「否」只会多一句没人读的字节。件里原本的
+ * `w:val="0"` 因此也一并退成缺席——与 `setCellAlign("left")` 清掉 `w:jc` 同一条口径。
+ *
+ * 只动这一枚孩子，别的孩子（含别人的待裁决记录）原样留在原位，插入位置按 `CT_TrPr` 的孩子序。
+ */
+export function syncRowHeader(row: RowInfo, on: boolean): void {
+  if (on) row.header = true;
+  else delete row.header;
+  if (!row.slots?.length) return;
+  if (!on) {
+    row.slots = row.slots.filter((s) => s.tag !== "tblHeader");
+    return;
+  }
+  const prefix = slotPrefix(row.slots);
+  row.slots = upsertSlot(row.slots, "tblHeader", `<${prefix}:tblHeader/>`, TRPR_CHILD_ORDER);
+}
+
 /** 一套属性在孩子里说过的那几枚：别人的待裁决不算进这一份快照。 */
 const statedChildren = (setXml: string): PropSlot[] =>
   childSpans(elementContent(setXml))

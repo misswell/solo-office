@@ -1298,6 +1298,63 @@ function smoke(): void {
           const tpCancelGone = tpDlg() ? 0 : 1;
           const tpCancelClean = tpShot() === tpBefore ? 1 : 0;
           const tpDialogsLeft = document.querySelectorAll(".solo-tp-dialog").length;
+          // 「标题行重复」（RB_Data 组那一枚，WPS 的 Repeat Header Rows）在装机这一趟量五条：按钮摆得出、起手灭着且
+          // 一行都不带 data-tbl-header；光标在第一行按下去之后从表头到光标那一行都标上；⌘Z 一起退；光标在最后一行按
+          // 时命令自己回绝并说出理由；开着修订按同一条只添一份「行属性」记录、撤销之后那一行跟着退。整条撤销收尾，
+          // 不动盘上那件的字节账。这一件的表只有两行、一页放得下，所以续页复件数在这一趟恒为 0——复件与「给表体让位」
+          // 由 .scratch/tbl-header-dom.ts 那一页量（真 Chrome 里 3 页 62 行）。
+          const rhBtn = () => ttRowEls().find((b) => b.textContent === "标题行重复");
+          const rhRows = () => [...(ttFind()?.rows ?? [])].filter((r) => !r.classList.contains("solo-repeat-header-row"));
+          const rhStamped = () => rhRows().map((r) => (r.getAttribute("data-tbl-header") === "1" ? 1 : 0)).join("");
+          const rhOn = () => (rhBtn()?.classList.contains("on") ? 1 : 0);
+          const rhClones = () => ttFind()?.querySelectorAll(".solo-repeat-header-row").length ?? -1;
+          const rhItems = () => [...document.querySelectorAll(".solo-rev-item")]
+            .filter((it) => (it.querySelector(".solo-rev-kind")?.textContent ?? "") === "行属性").length;
+          ttPut(ttRow0Cell(0));
+          await wait(240);
+          const rhBtnPresent = rhBtn() ? 1 : 0;
+          const rhStartDisabled = rhBtn()?.disabled === true ? 1 : 0;
+          const rhStartOn = rhOn();
+          const rhStartStamped = rhStamped();
+          const rhStartClones = rhClones();
+          rhBtn()?.click();
+          await wait(360);
+          const rhAfterOn = rhOn();
+          const rhAfterStamped = rhStamped();
+          const rhAfterClones = rhClones();
+          const rhNotice = ttNoticeSel();
+          ttUndoKey();
+          await wait(360);
+          const rhUndoStamped = rhStamped();
+          const rhUndoOn = rhOn();
+          // 小条是四秒后退场的浮层：上一击那句「最后一行不能是标题行」挂着就按下一击，「这一击没被回绝」就是假绿。
+          await wait(4200);
+          ttPut(ttBottomRow()?.cells[0]);
+          await wait(240);
+          rhBtn()?.click();
+          await wait(360);
+          const rhLastStamped = rhStamped();
+          const rhLastNotice = ttNoticeSel();
+          await wait(4200);
+          revBtn()?.click();
+          await wait(200);
+          const rhTrackOn = revBtn()?.classList.contains("on") ? 1 : 0;
+          if (!ttPaneOpen()) rb("审阅窗格")?.click();
+          await wait(260);
+          const rhItemsBefore = rhItems();
+          ttPut(ttRow0Cell(0));
+          await wait(240);
+          rhBtn()?.click();
+          await wait(400);
+          const rhItemsSigned = rhItems();
+          const rhStampedSigned = rhStamped();
+          ttUndoKey();
+          await wait(400);
+          const rhItemsUndone = rhItems();
+          const rhStampedUndone = rhStamped();
+          revBtn()?.click();
+          await wait(160);
+          const rhTrackEnd = revBtn()?.classList.contains("on") ? 1 : 0;
           // 光标交回表外：下面那一段量的还是「表一退场、页签跟着退、档回到开始」，与这一腿各说各的。
           const ttCursorBackInCell = ttAlignTd() ? 1 : 0;
           // 光标退出表挑的是**表外那一段**，不是「第一张纸最后一个孩子」：表涨宽后会挪到别的纸上，
@@ -1349,6 +1406,10 @@ function smoke(): void {
             tpGrpLabels, tpBtnPresent, tpBtnLabel, tpOpen, tpTitle, tpRows,
             tpEchoAlign, tpEchoIndent, tpEchoFixed, tpEchoMargin, tpError,
             tpBefore, tpAfter, tpWritten, tpUndoBack, tpReopen, tpCancelGone, tpCancelClean, tpDialogsLeft,
+            rhBtnPresent, rhStartDisabled, rhStartOn, rhStartStamped, rhStartClones,
+            rhAfterOn, rhAfterStamped, rhAfterClones, rhNotice, rhUndoStamped, rhUndoOn,
+            rhLastStamped, rhLastNotice, rhTrackOn, rhItemsBefore, rhItemsSigned, rhStampedSigned,
+            rhItemsUndone, rhStampedUndone, rhTrackEnd,
             ttDirty: (document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0,
           };
         }

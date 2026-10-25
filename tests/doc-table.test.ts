@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Table } from "../src/core/docx.js";
-import { WordDocument } from "../src/core/docx.js";
+import { syncRowHeader, WordDocument } from "../src/core/docx.js";
 import { writeDocx } from "../src/core/write-docx.js";
 import { renderWord } from "../src/core/render.js";
 import { OpcPackage, text } from "../src/core/opc.js";
@@ -199,7 +199,8 @@ describe("docx table rendering", () => {
     // 地板要写成浏览器认的那一句：`min-height` 落在 `<tr>`（或 `<td>`）上整条被丢掉——实测声明 200px 的行
     // 画 23px（`.scratch/row-height-css.html`），而表里的行高是铺排量的依据（`doc-layout.ts` 一行算一枚），
     // 认不到的下限就是「表比文件说的矮」。`height` 才是内容短时按它高、内容长时自己长的下限。
-    expect(html).toContain('<tr style="height:40px;">');
+    // 第一行还带着文件说的标题行那一句（`w:trPr/w:tblHeader`），纸面按同一句盖 `data-tbl-header`。
+    expect(html).toContain('<tr data-tbl-header="1" style="height:40px;">');
     expect(html).toContain('<tr style="display:none;height:20px;">');
   });
 
@@ -210,9 +211,44 @@ describe("docx table rendering", () => {
     const html = renderWord(doc);
     // 这一版没法把表行压到内容之下，exact 那句的「裁掉」画不出来；但下限必须画出来，且两句都不许退回
     // min-height（那条在这套引擎里整条无效，见 `.scratch/row-height-css.html`）。
-    expect(html).toContain('<tr style="height:40px;">');
+    expect(html).toContain('<tr data-tbl-header="1" style="height:40px;">');
     expect(html).toContain('<tr style="display:none;height:20px;">');
     expect(html).not.toContain("min-height:");
+  });
+
+  it("标题行重复：关掉时摘掉那一枚孩子，其余孩子原位不动；写出与读回同一句", () => {
+    const doc = open(makeTableFidelityDocx());
+    const row = tableOf(doc).rows[0][0]!.row!;
+    expect(row.header).toBe(true);
+    syncRowHeader(row, false);
+    expect(row.header).toBeUndefined();
+    // 只摘 `tblHeader`：`w:gridBefore`、`w:trHeight`、`w:cantSplit` 都还在，次序也不动（`CT_TrPr` 的孩子序）。
+    expect(row.slots?.map((s) => s.tag)).toEqual(["gridBefore", "trHeight", "cantSplit"]);
+    const out = saved(doc);
+    expect(out).not.toContain("<w:tblHeader/>");
+    expect(out).toContain("<w:cantSplit/>");
+    // 存盘再读回来：这一行不再是标题行，其余字段逐个还在。
+    const again = tableOf(open(writeDocx(doc))).rows[0][0]!.row!;
+    expect(again.header).toBeUndefined();
+    expect({ height: again.heightTwips, rule: again.heightRule, keep: again.keepTogether }).toEqual({ height: 600, rule: "atLeast", keep: true });
+  });
+
+  it("标题行重复：编辑器自己造的行没有孩子可换，字段说了算；重复落笔不多出一枚", () => {
+    const doc = open(makeTableFidelityDocx());
+    const cells = tableOf(doc).rows[2]!;
+    const row = {};
+    for (const cell of cells) cell.row = row;
+    syncRowHeader(row, true);
+    syncRowHeader(row, true);
+    expect((row as { header?: boolean }).header).toBe(true);
+    expect((row as { slots?: unknown[] }).slots).toBeUndefined();
+    // 夹具第 0 行本来就带一枚（`w:tblHeader`）；这一行落两次笔只该再添一枚。
+    expect(saved(doc).split("<w:tblHeader/>").length - 1).toBe(2);
+    expect(tableOf(open(writeDocx(doc))).rows[2][0]!.row?.header).toBe(true);
+    syncRowHeader(row, false);
+    const back = tableOf(open(writeDocx(doc))).rows;
+    expect(back[2]![0]!.row?.header).toBeUndefined();
+    expect(back[0]![0]!.row?.header).toBe(true);
   });
 
   it("renders the nested table inside its cell, and marks an inserted row on the row", () => {

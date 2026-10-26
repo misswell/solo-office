@@ -549,6 +549,7 @@ const TABLE_TOOL_KEYS = [
   "rowAbove", "rowBelow", "colLeft", "colRight", "insertCellKind", "delRow", "delCol", "delTable", "deleteCellKind",
   "mergeCells", "splitCell", "splitTable",
   "cellHeight", "cellWidth", "distributeRows", "distributeCols",
+  "tblFace", "tblSize", "tblBold", "tblItalic", "tblUnder", "tblColor", "tblHl",
   "tblTop", "tblMid", "tblBot", "tblLeft", "tblCenter", "tblRight",
   "repeatHeader", "convertTable",
   "selectCell", "selectCol", "selectRow", "selectTable",
@@ -760,24 +761,30 @@ function buildDocRibbon(): void {
   button(font, "italic", "斜", "斜体 ⌘I", () => style({ italic: !editor?.markState().italic }));
   button(font, "under", "线", "下划线 ⌘U", () => style({ underline: !editor?.markState().underline }));
   button(font, "strike", "删", "删除线", () => style({ strike: !editor?.markState().strike }));
-  // 字体框与字号框在 WPS 里是一对：`CT_Home.kuip` 把 `KxWpsFontComboBoxCommand idMso="Font" ksoCmd="FontName"` 与
-  // `FontSize` 同挂在 `RB_Font` 的 `font_info_pair` 里，字体在前、`layoutOnLeft="true"`、`minimumWidth="130"`。
+  // 字体框与字号框在 WPS 里是一对：`CT_Home.kuip:110-111` 把 `FontNameInHomeTab` 与 `FontSize` 同挂在 `RB_Font` 的
+  // `font_info_pair` 里，字体在前、`minimumWidth="130"`。表格工具页那一组（`CT_TableTools.kuip:133`）是同一对里的
+  // 另一条声明 `FontNameInTableToolTab`，只把 `minimumWidth` 报成 112——两页各一枚框，共用的只有这张清单与落笔。
   // 它是可编辑的一格：打名字回车，或从下拉里挑。下拉列的是这份文件自己用过的脸——Electron 没有「本机装了哪些
   // 字体」的接口可问，WPS 那份装机字体清单在此仍未取证，所以只把文档说过的名字递给用户，不替它编一张表。
-  const faceBox = document.createElement("input");
-  faceBox.type = "text";
-  faceBox.className = "facebox";
-  faceBox.title = "字体";
-  faceBox.placeholder = "字体";
-  faceBox.setAttribute("list", FACES_ID);
-  faceBox.onfocus = () => fillFaceList();
-  faceBox.onchange = () => {
-    const name = faceBox.value.trim();
-    // 清空那一格不当命令办：这一页说不出「这段取消脸」该往件里写哪一句（「没提过」只能靠原件那半边的字节带回，
-    // 而 ribbon 上没有「清除格式」这一条），真机 WPS 那一格被清空后写什么仍未取证。
-    if (name) style({ font: name });
+  const faceInput = (key: string, px: number): HTMLInputElement => {
+    const box = document.createElement("input");
+    box.type = "text";
+    box.className = "facebox";
+    box.title = "字体";
+    box.placeholder = "字体";
+    box.style.width = `${px}px`;
+    box.setAttribute("list", FACES_ID);
+    box.onfocus = () => fillFaceList();
+    box.onchange = () => {
+      const name = box.value.trim();
+      // 清空那一格不当命令办：这一页说不出「这段取消脸」该往件里写哪一句（「没提过」只能靠原件那半边的字节带回，
+      // 而 ribbon 上没有「清除格式」这一条），真机 WPS 那一格被清空后写什么仍未取证。
+      if (name) style({ font: name });
+    };
+    ctl[key] = box;
+    return box;
   };
-  ctl.font = faceBox;
+  const faceBox = faceInput("font", 130);
   font.append(faceBox);
   chooser(font, "size", "字号", DOC_SIZES.map((s): [string, string] => [String(s), String(s)]), (v) => style({ sizePt: Number(v) }));
   swatch(font, "color", "字体颜色", "#c00000", (v) => style({ color: v }));
@@ -970,9 +977,34 @@ function buildDocRibbon(): void {
   button(sizes, "distributeCols", "分布列", "把选区碰到的那几列摆成等宽，表的总宽不变（WPS：Distribute Columns Evenly）", () =>
     tableAction(editor?.distributeColumns()));
 
+  // `RB_Table_Font`（`CT_TableTools.kuip:129`：`groupTip="TableToolFontGroup"`、`ksoCmd="Font"`、`customTip="RB_Font"`、
+  // `horizontalSpacing="2"`、`needsinglerowmorebutton="true"`）在这份文件的组序里正夹在 `RB_Adjust` 与 `RB_Alignment`
+  // 中间（:129 早于 :156 那枚 `RB_Alignment`），所以上面那组自旋格之后、下面那六枚对齐之前就是它的位置。
+  // 组里七枚的实据（两行）：第一行 `FontNameInTableToolTab`（:133，`ksoCmd="FontName"`、`minimumWidth="112"`、
+  // `singlerowfoldgroup="font_info_pair"`）与 `command idQ="FontSize"`（:134，引 :102 那一枚）；第二行 `Bold`（:138→:112）、
+  // `Italic`（:141→:113）、`Underline`（:144→:114）、`FontColor`（:147→:108）、`HighlightColor`（:150→:105），后三枚各占
+  // 一格 `fixedwidgetWidth="40"`。摆不完的三条也是声明里的账：`CustomBoldWidth`/`OfficialPrintingCustomBoldWidth`
+  // （:139-140）说的是加粗的笔画宽度，家里没有那一笔；`Underline`（:114）在 WPS 是一枚带 8 档线样式的 gallery
+  // （外加 `MoreUnderlines` :123、`UnderLineColor` :124），家里按开始页那一枚的开关做，落 `w:u w:val="single"`。
+  // 「删除线」在这个文件里声明了（:103 `Strikethought`）却**没进这一组**，「着重号」（:104 `EmphasisMark`）同样——
+  // 所以这一组比开始页少一枚「删」，那是 WPS 的组形状，不是家里缺的一条命令。
+  // 落笔与回显都走开始页那一条路（`applyStyle` → `w:rPr` 里的 `w:b/w:i/w:u/w:color/w:highlight/w:rFonts/w:sz`；
+  // `markState()` 一份读数喂两页的框），WPS 那边也是同一枚 `ksoCmd` 挂在两处。
+  const tableFont = group("table");
+  tableFont.append(faceInput("tblFace", 112));
+  chooser(tableFont, "tblSize", "字号", DOC_SIZES.map((s): [string, string] => [String(s), String(s)]), (v) => style({ sizePt: Number(v) }));
+  button(tableFont, "tblBold", "粗", "加粗 ⌘B", () => style({ bold: !editor?.markState().bold }));
+  button(tableFont, "tblItalic", "斜", "斜体 ⌘I", () => style({ italic: !editor?.markState().italic }));
+  button(tableFont, "tblUnder", "线", "下划线 ⌘U", () => style({ underline: !editor?.markState().underline }));
+  swatch(tableFont, "tblColor", "字体颜色", "#c00000", (v) => style({ color: v }));
+  chooser(tableFont, "tblHl", "突出显示", DOC_HIGHLIGHTS, (v) => {
+    editor?.applyStyle({ highlight: v });
+    syncDocRibbon();
+  });
+
   // `RB_Alignment` 那一组的六枚按 WPS 自己的两行摆：先竖向三枚（落格），再横向三枚（落格里的段）。
   // 组的位置照 `<subcommand id="CT_TableTools">` 的组序——`RB_Adjust` 之后、`TableSelectMenu` 之前；
-  // 中间那组 `RB_Table_Font`（字体）家里还没接，缺的是那一组，不是这一组的位置。
+  // 它前面那一组 `RB_Table_Font`（字体）已经接上，就在上面。
   const aligns = group("table");
   for (const [key, label, tip, value, leg] of TABLE_ALIGN_BUTTONS) {
     button(aligns, key, label, tip, () =>
@@ -1213,9 +1245,15 @@ function syncDocRibbon(force = false): void {
   const mark = (key: string, want: boolean): void => {
     (ctl[key] as HTMLButtonElement | undefined)?.classList.toggle("on", want);
   };
-  mark("bold", state?.bold ?? false);
-  mark("italic", state?.italic ?? false);
-  mark("under", state?.underline ?? false);
+  // 同一句话在两页各有一枚按钮时，回显一次点亮两枚：开始页与表格工具页那两枚 `Bold`/`Italic`/`Underline`
+  // 在 WPS 是同一个 `ksoCmd` 挂在两处（`CT_Home.kuip:125/127/130` 与 `CT_TableTools.kuip:138/141/144`），
+  // 对着同一处光标各说一句就是撒谎。
+  const lit = (keys: string[], on: boolean): void => {
+    for (const key of keys) mark(key, on);
+  };
+  lit(["bold", "tblBold"], state?.bold ?? false);
+  lit(["italic", "tblItalic"], state?.italic ?? false);
+  lit(["under", "tblUnder"], state?.underline ?? false);
   mark("strike", state?.strike ?? false);
   // 「查看网格线」那一枚回显的是**视图档**、不问文档：它不跟着光标变，也不参与「件改了没有」的判断。
   // 容器上那一枚 `doc-grid` 也在这一趟挂/摘——换文件、开关、编辑后重读走的都是这一条路，不留第二处写法。
@@ -1235,9 +1273,6 @@ function syncDocRibbon(force = false): void {
   // 开始页那三枚与表格工具页那六枚读的是同一个 `cellAlignState()`，对着同一份文档不各说一句。
   const cellState = editor?.cellAlignState();
   const inTable = cellState?.inTable ?? false;
-  const lit = (keys: string[], on: boolean): void => {
-    for (const key of keys) mark(key, on);
-  };
   const vOn = (want: string): boolean => inTable && !cellState?.valignMixed && cellState?.valign === want;
   const hOn = (want: string): boolean => inTable && !cellState?.alignMixed && cellState?.align === want;
   lit(["vtop", "tblTop"], vOn("top"));
@@ -1285,19 +1320,26 @@ function syncDocRibbon(force = false): void {
       border.title = scope === "table" ? "表格边框" : scope === "cells" ? "单元格边框" : "边框";
     }
   }
-  const face = ctl.font as HTMLInputElement | undefined;
-  // 正在打的那一格不回显（换文档那一趟的 `force` 除外）：`syncDocRibbon` 随每次选区变化跑一遍，把用户打到一半的名字吃掉就不是他的名字了。
+  // 字体、字号、底色这三族在表里与表外各有一枚控件（`CT_Home.kuip:110-111` 与 `CT_TableTools.kuip:133-134/150`），
+  // 两枚读的是同一份 `markState()`：光标停在表格里那一段时，开始页那一格与表格工具这一格得报同一句话。
+  // 正在打的那一格不回显（只有换文档那一趟 `force` 除外）：
+  // `syncDocRibbon` 随每次选区变化跑一遍，把用户打到一半的名字吃掉就不是他的名字了。
   // 回显给的是选区起点那一段（`markState` 一路按起点算），两张脸并存时给这段字真正穿的那一张。
-  if (face && (force || document.activeElement !== face)) face.value = state?.font ?? "";
-  const size = ctl.size as HTMLSelectElement | undefined;
-  if (size) {
-    const pt = state?.sizePt;
-    echoChoice(size, pt === undefined ? undefined : String(pt), DOC_SIZES.map(String), DOC_SIZES.filter((n) => n < (pt ?? 0)).length);
+  for (const key of ["font", "tblFace"]) {
+    const box = ctl[key] as HTMLInputElement | undefined;
+    if (box && (force || document.activeElement !== box)) box.value = state?.font ?? "";
   }
-  const hl = ctl.highlight as HTMLSelectElement | undefined;
+  const pt = state?.sizePt;
+  for (const key of ["size", "tblSize"]) {
+    const s = ctl[key] as HTMLSelectElement | undefined;
+    if (s) echoChoice(s, pt === undefined ? undefined : String(pt), DOC_SIZES.map(String), DOC_SIZES.filter((n) => n < (pt ?? 0)).length);
+  }
   // Three sentences the file could have written — 没提过底色 / 提了「没有」 / 提了某个颜色名 — three readings of
   // the box. Leaving it blank is the first, and only the `none` option spells the second.
-  if (hl) echoChoice(hl, state?.highlight, DOC_HIGHLIGHTS.map(([v]) => v), DOC_HIGHLIGHTS.length);
+  for (const key of ["highlight", "tblHl"]) {
+    const hl = ctl[key] as HTMLSelectElement | undefined;
+    if (hl) echoChoice(hl, state?.highlight, DOC_HIGHLIGHTS.map(([v]) => v), DOC_HIGHLIGHTS.length);
+  }
   // 行距那一格只认 `w:lineRule="auto"` 那一族：`w:line` 在 固定值/最小值 下数的是缇，把它当成倍数摆进这一格
   // 就是给 ribbon 编一个件里没说过的数（#132 之前正是这样把 固定值 22 磅画成 1.83 倍的）。所以这两档与「没提过」
   // 一律留空——那句话说的是另一件事，要看得去「段落」对话框。件里 7,810 枚 `w:line` 有 2,178 枚是 `auto`。

@@ -1593,6 +1593,188 @@ function smoke(): void {
           ttPut(drOutPara);
           await wait(260);
           const drOutDisabled = drBtn()?.disabled === true ? 1 : 0;
+          // 「字体」那一组（CT_TableTools.kuip:129 的 RB_Table_Font，组 tip TableToolFontGroup，夹在 RB_Adjust(:55)
+          // 与 RB_Alignment(:156) 之间）在装机这只盒子里量四条：
+          // ①这一组打进包之后仍摆得出、仍按 WPS 那一页的组序坐在第 5 组（左边那一组带着「分布行」、右边那一组是
+          //   对齐那六枚），组里七枚控件一字排开（:133 的字体框 + :134 的字号 + :138/:141/:144 的粗/斜/线 +
+          //   :147 的字体颜色 + :150 的突出显示）；两页那两枚字体框各自按 WPS 声明的数摆（本组 :133 的 112、
+          //   开始页 CT_Home.kuip:110 的 130）——装机窗口就是产品开的那只，量的是那份渲染，不是再拼一遍探针页。
+          // ②带子被这一组撑宽（自然宽 > 可视宽）之后，最后一枚「突出显示」靠行右那枚自家的箭头滚进可视框——
+          //   断的是**可达**，不是「够宽」；不许为了让它露出来删掉组里任何一枚。
+          // ③两页同源：表里这一枚「粗」按下去，开始页同名那枚跟着亮，再按回来一起灭，纸上那一枚 run 的字重跟着走。
+          //   WPS 也是同一个 ksoCmd 挂两处（:138/:141/:144 的 idQ 就是 Bold/Italic/Underline，:147/:150 同指 FontColorPicker/
+          //   HighlightColorPicker），所以「两页各说一句」在这枚上是要害，不是风格。
+          // ④单位账与回显在同一腿里：字号挑 24 磅，纸上那枚 run 就是 32px（1 磅 = 4/3 像素，96dpi）；字体框打字进
+          //   黑体之后开始页那格回显同一个名字（两页读同一份 markState）。挑的都是**选区盖住那几枚 run**——悬光标
+          //   上字体框走的是待用格式（#89/#90），不落笔在这一格已有的字上。
+          // 这一腿按完全部撤销，不牵动盘上那件的字节账（件里那六个槽的形状归 .scratch/table-tools-dom.ts 的 K 腿
+          // 与 tests/doc-run-props.test.ts）；WPS 真机这一组按下去落不落 w:rFonts/w:sz、颜色档怎么排，均 未取证。
+          await wait(4200);
+          ttPut(ttRow0Cell(0));
+          await wait(260);
+          const tfTabShow = ttTab("表格工具") ? 1 : 0;
+          ttTab("开始")?.click();
+          await wait(240);
+          const tfHomeFaceNow = () => document.querySelector("#ribbon .rbar[data-tab='home'] input.facebox");
+          const tfFaceNow = () => document.querySelector("#ribbon .rbar[data-tab='table'] input.facebox");
+          const tfHomeFace = tfHomeFaceNow();
+          const tfHomeFaceW = tfHomeFace ? Math.round(tfHomeFace.getBoundingClientRect().width) : -1;
+          const tfHomeBold0 = ttLitIn(ttHomeBtn("粗"));
+          ttTab("表格工具")?.click();
+          await wait(240);
+          const tfBar = document.querySelector("#ribbon .rbar[data-tab='table']");
+          const tfBarShown = tfBar?.hidden === true ? 0 : 1;
+          const tfGroups = [...document.querySelectorAll("#ribbon .rbar[data-tab='table'] .grp")];
+          const tfGroupIdx = tfGroups.findIndex((g) => [...g.querySelectorAll("button")].map((b) => b.textContent).join("|") === "粗|斜|线");
+          const tfGroup = tfGroupIdx < 0 ? null : tfGroups[tfGroupIdx];
+          const tfCtlN = tfGroup ? tfGroup.querySelectorAll(".facebox,.pick,.rb,.swatch").length : -1;
+          const tfFaceW = tfFaceNow() ? Math.round(tfFaceNow().getBoundingClientRect().width) : -1;
+          const tfPrevDist = tfGroupIdx > 0 && [...tfGroups[tfGroupIdx - 1].querySelectorAll("button")].some((b) => b.textContent === "分布行") ? 1 : 0;
+          const tfNextAlign = tfGroupIdx >= 0 && tfGroupIdx + 1 < tfGroups.length &&
+            [...tfGroups[tfGroupIdx + 1].querySelectorAll("button")].map((b) => b.textContent).join("|") === "↑|↕|↓|左|中|右" ? 1 : 0;
+          const tfSel = (label) => [...document.querySelectorAll("#ribbon .rbar[data-tab='table'] select")].find((s) => s.title === label);
+          const tfNatural = tfBar?.scrollWidth ?? -1;
+          const tfVisible = tfBar?.clientWidth ?? -1;
+          const tfRoverPresent = document.querySelector("#ribbon .rover") ? 1 : 0;
+          const tfIn = (el) => {
+            if (!el || !tfBar) return 0;
+            const b = tfBar.getBoundingClientRect();
+            const r = el.getBoundingClientRect();
+            return r.left >= b.left - 0.5 && r.right <= b.right + 0.5 ? 1 : 0;
+          };
+          const tfHlStart = tfIn(tfSel("突出显示"));
+          let tfRoverClicks = 0;
+          const tfRoverEl = document.querySelector("#ribbon .rover");
+          while (tfIn(tfSel("突出显示")) === 0 && tfRoverClicks < 8) {
+            if (tfRoverEl?.hidden === true) tfBar.scrollLeft = tfBar.scrollWidth;
+            else tfRoverEl?.click();
+            tfRoverClicks++;
+            await wait(180);
+          }
+          const tfHlReached = tfIn(tfSel("突出显示"));
+          const tfRun = () => {
+            const td = ttRow0Cell(0);
+            return td?.querySelector(".para span") ?? td?.querySelector(".para") ?? null;
+          };
+          const tfSelectRun = () => {
+            const el = tfRun();
+            if (!el || !el.textContent) return 0;
+            const r = document.createRange();
+            r.selectNodeContents(el);
+            const s = document.getSelection();
+            s?.removeAllRanges();
+            if (s) s.addRange(r);
+            return 1;
+          };
+          const tfBtn = (label) => ttRowEls().find((x) => x.textContent === label);
+          // computed 的 font-family 串里带 CSS 那对双引号（"PingFang SC"），而烟测读数是一条 JSON——引号不抹掉，
+          // 外面那条正则会把这一格截断成半串，「黑体在不在里面」就量不到了。
+          const tfFam = (el) => cssOf(el, "fontFamily").replace(/"/g, "");
+          const tfPress = (label) => {
+            const b = tfBtn(label);
+            if (!b || b.disabled === true) return 0;
+            b.click();
+            return 1;
+          };
+          const tfPick = (sel, v) => {
+            if (!sel) return 0;
+            sel.value = v;
+            sel.dispatchEvent(new Event("change", { bubbles: true }));
+            return 1;
+          };
+          const tfHomeSel = (label) => [...document.querySelectorAll("#ribbon .rbar[data-tab='home'] select")].find((s) => s.title === label);
+          const tfText0 = tfRun()?.textContent ?? "";
+          await wait(200);
+          const tfSelectHit = tfSelectRun();
+          // 起手那几枚回显要在**摊开选区之后**取，与 tfClean() 同一口径：折叠光标报的是那一点的待用格式（#89/#90），
+          // 摊开报的是那几枚 run 已有的字——起手按折叠取、结束时按摊开比，两句就不是同一个量，永远对不齐。
+          const tfBold0Start = ttLitIn(tfBtn("粗"));
+          const tfFaceHome0 = tfHomeFaceNow()?.value ?? "?";
+          const tfFaceTable0 = tfFaceNow()?.value ?? "?";
+          const tfSizeTable0 = tfSel("字号")?.value ?? "?";
+          const tfWeight0 = cssOf(tfRun(), "fontWeight");
+          const tfSize0 = cssOf(tfRun(), "fontSize");
+          const tfFamily0 = tfFam(tfRun());
+          // 四击之间隔 1000ms 不是「等渲染」，是**跟着产品自己那条合并规矩排步**：mark() 里 now-burst<900 就不落新快照
+          // （doc-edit.ts:1822「Typing coalesces into one entry per pause」）。按 360ms 排时这四击在栈上只有 1~2 条，
+          // 撤两步读到的是「按完不粗那一记」之后的中间态——纸上 400、回显全灭看着像起手，件里却留着那句 w:b val="0"。
+          // 隔过 900ms 每一击各占一条，这一腿的撤销步数才等于它自己按下的四击，上限 4 也才真的是「只撤自己」。
+          const tfPressBold = tfPress("粗");
+          await wait(1000);
+          tfSelectRun();
+          const tfBoldLitTable = ttLitIn(tfBtn("粗"));
+          const tfBoldLitHome = ttLitIn(ttHomeBtn("粗"));
+          const tfWeightBold = cssOf(tfRun(), "fontWeight");
+          const tfPressBold2 = tfPress("粗");
+          await wait(1000);
+          tfSelectRun();
+          const tfBoldOffTable = ttLitIn(tfBtn("粗"));
+          const tfBoldOffHome = ttLitIn(ttHomeBtn("粗"));
+          const tfWeightOff = cssOf(tfRun(), "fontWeight");
+          const tfPressSize = tfPick(tfSel("字号"), "24");
+          await wait(1000);
+          const tfSizePx = cssOf(tfRun(), "fontSize");
+          const tfSizeEchoTable = tfSel("字号")?.value ?? "?";
+          const tfSizeEchoHome = tfHomeSel("字号")?.value ?? "?";
+          const tfPressFace = ttType(tfFaceNow(), "黑体");
+          await wait(360);
+          const tfFamilyPx = tfFam(tfRun());
+          const tfFaceEchoHome = tfHomeFaceNow()?.value ?? "?";
+          const tfFaceEchoTable = tfFaceNow()?.value ?? "?";
+          const tfBoldLitAfterFace = ttLitIn(tfBtn("粗"));
+          // 撤销的步数按这一腿自己按下的击数走（tfPresses），**不按条件早退**——纸与回显看不出「说过」与「没说过」的差别：
+          // 撤两步落回的是「按完不粗那一记」之后，纸上 400、两页那枚灭、字号格显空，与起手一字不差，可件里那句
+          // w:b w:val="0" 还在（run 上 false 算说过，ownRunStyle 的口径，tests/doc-run-props.test.ts:92 同形钉着）。
+          // 上一版据此早退就漏了这一枚；四击之间各隔过 1000ms（> mark() 那条 900ms 合并窗，doc-edit.ts:1822），
+          // 栈上确实是四条，撤满四条才回到「这一腿第一击之前」。上限也就是击数：多撤一步就要吃掉「对齐」那一腿
+          // 不落撤销、交壳写回盘上的那两句话，所以再拿 tfNeighbor0/tfNeighborEnd 当绊线——少撤则 tfCleanEnd 红，
+          // 多撤则邻格那两句话红，两头都当场看得见，不靠调宽条件换绿。
+          const tfBlur = () => { const a = document.activeElement; if (a && a.blur) a.blur(); };
+          // 问回显前必须自己**把这一趟点亮**：回显挂在 document 的 selectionchange 上，而摊选区（tfSelectRun）
+          // 只改 Range，不发这个事件——不发就只有撤销那一路的回显，而那一趟遇上的正是「正在打的那一格不写」的礼节：
+          // 这台烟测跑在 show: false 的隐藏窗口里，产品把焦点交回纸上的那一句 page.focus() 在此不成，
+          // 字体框一路是 activeElement，于是它被礼貌地跳过、报着刚打进去那张脸（撤完那一站焦点在谁身上由 tfFocusAfterUndo 当场报出）。
+          // 无头 Chrome 里同一句 page.focus() 是成的，所以这条签名只在装机腿出现——它问的是回显同不同源，
+          // 不是「带着焦点那一枚该不该写」；那一格该不该写由 DOM 腿与产品自己的焦点走向定，不由这里改产品。
+          const tfEcho = () => { tfBlur(); tfSelectRun(); document.dispatchEvent(new Event("selectionchange")); };
+          const tfClean = () => {
+            tfEcho();
+            return cssOf(tfRun(), "fontWeight") === tfWeight0 && cssOf(tfRun(), "fontSize") === tfSize0 &&
+              tfFam(tfRun()) === tfFamily0 &&
+              ttLitIn(tfBtn("粗")) === tfBold0Start && ttLitIn(ttHomeBtn("粗")) === tfHomeBold0 &&
+              (tfHomeFaceNow()?.value ?? "") === tfFaceHome0 && (tfFaceNow()?.value ?? "") === tfFaceTable0 &&
+              (tfSel("字号")?.value ?? "?") === tfSizeTable0;
+          };
+          const tfNeighbor = () => ttValign() + "|" + ttTextAlign();
+          const tfNeighbor0 = tfNeighbor();
+          const tfPresses = tfPressBold + tfPressBold2 + tfPressSize + tfPressFace;
+          let tfUndoSteps = 0;
+          await wait(200);
+          while (tfUndoSteps < tfPresses) {
+            tfSelectRun();
+            ttUndoKey();
+            tfUndoSteps++;
+            await wait(420);
+          }
+          const tfFocusAfterUndo = (() => {
+            const a = document.activeElement;
+            if (!a) return "无";
+            if (a === tfFaceNow()) return "表框";
+            return (a.tagName || "?") + "." + (a.className || "");
+          })();
+          const tfCleanEnd = tfClean() ? 1 : 0;
+          // 红的时候要能一眼看出是哪一枚没回起手，所以把 tfClean() 那五枚逐条也报出来（同一次读法，不另起口径）。
+          tfEcho();
+          const tfEndBoldTable = ttLitIn(tfBtn("粗"));
+          const tfEndBoldHome = ttLitIn(ttHomeBtn("粗"));
+          const tfEndFaceHome = tfHomeFaceNow()?.value ?? "?";
+          const tfEndFaceTable = tfFaceNow()?.value ?? "?";
+          const tfEndSizeEcho = tfSel("字号")?.value ?? "?";
+          const tfNeighborEnd = tfNeighbor();
+          tfSelectRun();
+          const tfWeightEnd = cssOf(tfRun(), "fontWeight");
+          const tfFamilyEnd = tfFam(tfRun());
+          const tfSizeEnd = cssOf(tfRun(), "fontSize");
           ttCmd = {
             ttTabPresent, ttTabHidden, ttBarHidden, ttBarOpen, ttBtns, ttHit: ttHit ? 1 : 0, ttDisabled, ttNotice,
             ttPxBefore, ttPxAfter, ttWrittenBefore, ttWrittenAfter, ttColsBefore, ttColsAfter, ttTabBackHidden, ttHomeOn, ttInTableAgain,
@@ -1647,6 +1829,15 @@ function smoke(): void {
             drPress2, drRefuseNotice, drRowsRefuse: drJoin(drRowsRefuse), drBoxRefuse,
             drRowsUndo1: drJoin(drRowsUndo1), drSpreadUndo1: drSpread(drRowsUndo1), drSumUndo1, drBoxUndo1,
             drRowsUndo2: drJoin(drRowsUndo2), drSpreadUndo2, drBoxUndo2,
+            tfTabShow, tfBarShown, tfGroupIdx, tfCtlN, tfFaceW, tfHomeFaceW, tfPrevDist, tfNextAlign,
+            tfNatural, tfVisible, tfRoverPresent, tfHlStart, tfRoverClicks, tfHlReached,
+            tfFaceHome0, tfFaceTable0, tfSizeTable0, tfText0, tfSelectHit, tfWeight0, tfSize0, tfFamily0,
+            tfBold0Start, tfHomeBold0, tfPressBold, tfBoldLitTable, tfBoldLitHome, tfWeightBold,
+            tfPressBold2, tfBoldOffTable, tfBoldOffHome, tfWeightOff,
+            tfPressSize, tfSizePx, tfSizeEchoTable, tfSizeEchoHome,
+            tfPressFace, tfFamilyPx, tfFaceEchoHome, tfFaceEchoTable, tfBoldLitAfterFace,
+            tfPresses, tfUndoSteps, tfFocusAfterUndo, tfCleanEnd, tfEndBoldTable, tfEndBoldHome, tfEndFaceHome, tfEndFaceTable, tfEndSizeEcho,
+            tfWeightEnd, tfFamilyEnd, tfSizeEnd, tfNeighbor0, tfNeighborEnd,
             ttDirty: (document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0,
           };
         }

@@ -1340,6 +1340,14 @@ function syncDocRibbon(force = false): void {
     const hl = ctl[key] as HTMLSelectElement | undefined;
     if (hl) echoChoice(hl, state?.highlight, DOC_HIGHLIGHTS.map(([v]) => v), DOC_HIGHLIGHTS.length);
   }
+  // 「字体颜色」在两页各有一格（`CT_Home.kuip:108` 的 `FontColor` 与 `CT_TableTools.kuip:147` 那枚同 `ksoCmd`
+  // 的 `FontColor`），读的是同一份 `markState().color`。它和字号/底色那两族差一步口径：`input[type=color]`
+  // 说不出「没提过」——它只能摆一个颜色——所以这一格报的是「光标这段字现在穿的墨」：从红的走到没说的，格子跟着
+  // 走回纸上那层墨，不留在上一句。留在上一句就是替这段字说一件它自己没说过的颜色。
+  for (const key of ["color", "tblColor"]) {
+    const box = ctl[key] as HTMLInputElement | undefined;
+    if (box && state?.color && (force || document.activeElement !== box)) box.value = state.color;
+  }
   // 行距那一格只认 `w:lineRule="auto"` 那一族：`w:line` 在 固定值/最小值 下数的是缇，把它当成倍数摆进这一格
   // 就是给 ribbon 编一个件里没说过的数（#132 之前正是这样把 固定值 22 磅画成 1.83 倍的）。所以这两档与「没提过」
   // 一律留空——那句话说的是另一件事，要看得去「段落」对话框。件里 7,810 枚 `w:line` 有 2,178 枚是 `auto`。

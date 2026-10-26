@@ -3164,7 +3164,7 @@ export class DocEditor {
    * colour name is a background. A control that shows 「没提过」 the same way as 「说了没有」 answers the reader
    * with a silence where the document spoke.
    */
-  markState(): { bold: boolean; italic: boolean; underline: boolean; strike: boolean; sizePt?: number; highlight?: string; font?: string; align?: string; list?: "bullet" | "number"; line?: number; lineRule?: LineSpacingRule } {
+  markState(): { bold: boolean; italic: boolean; underline: boolean; strike: boolean; sizePt?: number; color?: string; highlight?: string; font?: string; align?: string; list?: "bullet" | "number"; line?: number; lineRule?: LineSpacingRule } {
     const sel = document.getSelection();
     let el: Element | null = null;
     if (sel?.rangeCount) {
@@ -3191,6 +3191,12 @@ export class DocEditor {
       underline: carried.underline ?? false,
       strike: carried.strike ?? false,
       sizePt: carried.sizePt,
+      // 「字体颜色」那一格答的是光标这段字**穿着**的颜色，不是「件里那句 `w:color` 说没说」：run 自己说过、
+      // 或样式阶梯借来一张色（渲染器把解析后的值原样画进 `style="color:…"`，`styleOf` 就读回来），都算穿着。
+      // 这段字什么都没说时（`w:color val="auto"` 与「没提过」在纸上画的是同一个墨），交回页面**实际画出来**的那层墨：
+      // 授权 46 份里正文/页眉脚有 1,646 枚说了十六进制、132 枚说 auto（`.scratch/font-color-audience.py`），
+      // 「说了」与「没说」在纸上是两个读数，抵一个想象中的 `#000000` 就是把量出来的换了想出来的。
+      color: carried.color ?? (el ? hexOf(getComputedStyle(el).color) : undefined),
       highlight: carried.highlight,
       // 待用的那一张脸还没进模型（占位 span 上才算数），它得盖在回显上，否则工具栏说的是光标原来穿的脸。
       font: this.pendingFormatPatch.font ?? faceShown(this.caretRun()),

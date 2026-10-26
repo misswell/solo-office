@@ -1683,6 +1683,27 @@ function smoke(): void {
             return 1;
           };
           const tfHomeSel = (label) => [...document.querySelectorAll("#ribbon .rbar[data-tab='home'] select")].find((s) => s.title === label);
+          // 两页那枚「字体颜色」色板（CT_Home.kuip:108 与 CT_TableTools.kuip:147 同一条 ksoCmd）。
+          const tfColorBox = () => document.querySelector("#ribbon .rbar[data-tab='table'] input.swatch[title='字体颜色']");
+          const tfHomeColorBox = () => document.querySelector("#ribbon .rbar[data-tab='home'] input.swatch[title='字体颜色']");
+          const tfColorPick = (hex) => {
+            const i = tfColorBox();
+            if (!i || i.disabled === true) return 0;
+            i.value = hex;
+            i.dispatchEvent(new Event("input", { bubbles: true }));
+            return 1;
+          };
+          // 色板那一格交回来的是 #rrggbb（小写），纸上 computed 的是 rgb(...)：两边折成同一个形状才敢比。
+          // 这里不用正则：这段脚本活在一条模板串里，正则里的反斜杠会被外层字符串吃掉一半。
+          const tfHex = (s) => {
+            const t = String(s || "");
+            if (t.indexOf("rgb") !== 0) return t;
+            const open = t.indexOf("(");
+            const parts = open < 0 ? [] : t.slice(open + 1).split(",");
+            if (parts.length < 3) return t;
+            const hx = (v) => { const n = parseInt(v, 10); return Number.isFinite(n) ? (n < 16 ? "0" : "") + n.toString(16) : "??"; };
+            return ("#" + hx(parts[0]) + hx(parts[1]) + hx(parts[2])).toLowerCase();
+          };
           const tfText0 = tfRun()?.textContent ?? "";
           await wait(200);
           const tfSelectHit = tfSelectRun();
@@ -1692,13 +1713,17 @@ function smoke(): void {
           const tfFaceHome0 = tfHomeFaceNow()?.value ?? "?";
           const tfFaceTable0 = tfFaceNow()?.value ?? "?";
           const tfSizeTable0 = tfSel("字号")?.value ?? "?";
+          // 起手那两枚色板的读数：这一腿按下去之前，格子报的是这段字**穿着**的墨（件里没说过颜色时，那就是纸上画的那层）。
+          const tfColorTable0 = tfColorBox()?.value ?? "?";
+          const tfColorHome0 = tfHomeColorBox()?.value ?? "?";
+          const tfColorCss0 = tfHex(cssOf(tfRun(), "color"));
           const tfWeight0 = cssOf(tfRun(), "fontWeight");
           const tfSize0 = cssOf(tfRun(), "fontSize");
           const tfFamily0 = tfFam(tfRun());
           // 四击之间隔 1000ms 不是「等渲染」，是**跟着产品自己那条合并规矩排步**：mark() 里 now-burst<900 就不落新快照
           // （doc-edit.ts:1822「Typing coalesces into one entry per pause」）。按 360ms 排时这四击在栈上只有 1~2 条，
           // 撤两步读到的是「按完不粗那一记」之后的中间态——纸上 400、回显全灭看着像起手，件里却留着那句 w:b val="0"。
-          // 隔过 900ms 每一击各占一条，这一腿的撤销步数才等于它自己按下的四击，上限 4 也才真的是「只撤自己」。
+          // 隔过 900ms 每一击各占一条，这一腿的撤销步数才等于它自己按下的击数，上限也才真的是「只撤自己」。
           const tfPressBold = tfPress("粗");
           await wait(1000);
           tfSelectRun();
@@ -1717,7 +1742,8 @@ function smoke(): void {
           const tfSizeEchoTable = tfSel("字号")?.value ?? "?";
           const tfSizeEchoHome = tfHomeSel("字号")?.value ?? "?";
           const tfPressFace = ttType(tfFaceNow(), "黑体");
-          await wait(360);
+          // 这一眼也要隔过 900ms：下一击（色板）落在它之后，间隔不够就在栈上被合并成一条，撤销步数就对不上击数。
+          await wait(1000);
           const tfFamilyPx = tfFam(tfRun());
           const tfFaceEchoHome = tfHomeFaceNow()?.value ?? "?";
           const tfFaceEchoTable = tfFaceNow()?.value ?? "?";
@@ -1725,29 +1751,40 @@ function smoke(): void {
           // 撤销的步数按这一腿自己按下的击数走（tfPresses），**不按条件早退**——纸与回显看不出「说过」与「没说过」的差别：
           // 撤两步落回的是「按完不粗那一记」之后，纸上 400、两页那枚灭、字号格显空，与起手一字不差，可件里那句
           // w:b w:val="0" 还在（run 上 false 算说过，ownRunStyle 的口径，tests/doc-run-props.test.ts:92 同形钉着）。
-          // 上一版据此早退就漏了这一枚；四击之间各隔过 1000ms（> mark() 那条 900ms 合并窗，doc-edit.ts:1822），
-          // 栈上确实是四条，撤满四条才回到「这一腿第一击之前」。上限也就是击数：多撤一步就要吃掉「对齐」那一腿
+          // 上一版据此早退就漏了这一枚；每一击之间各隔过 1000ms（> mark() 那条 900ms 合并窗，doc-edit.ts:1822），
+          // 栈上确实是击数那么多条，撤满才回到「这一腿第一击之前」。上限也就是击数：多撤一步就要吃掉「对齐」那一腿
           // 不落撤销、交壳写回盘上的那两句话，所以再拿 tfNeighbor0/tfNeighborEnd 当绊线——少撤则 tfCleanEnd 红，
           // 多撤则邻格那两句话红，两头都当场看得见，不靠调宽条件换绿。
           const tfBlur = () => { const a = document.activeElement; if (a && a.blur) a.blur(); };
           // 问回显前必须自己**把这一趟点亮**：回显挂在 document 的 selectionchange 上，而摊选区（tfSelectRun）
-          // 只改 Range，不发这个事件——不发就只有撤销那一路的回显，而那一趟遇上的正是「正在打的那一格不写」的礼节：
-          // 这台烟测跑在 show: false 的隐藏窗口里，产品把焦点交回纸上的那一句 page.focus() 在此不成，
-          // 字体框一路是 activeElement，于是它被礼貌地跳过、报着刚打进去那张脸（撤完那一站焦点在谁身上由 tfFocusAfterUndo 当场报出）。
+          // 只改 Range，不发这个事件——不发就没有人来问回显，两页那几格谁的也不写。
+          // 「正在打字的那一格不写」那条礼节在这台烟测里依旧站着（show: false 的隐藏窗口，产品把焦点交回纸上的
+          // page.focus() 在此不成），但这一腿碰不到它：第五击按的是色板的 input，从头到尾没把焦点交给任何一格，
+          // 撤完那一站量出来是 tfFocusAfterUndo=BODY.（上一版四击、字体框还是 activeElement 时量出来是「表框」；
+          // 两回都由 tfFocusAfterUndo 当场报出，读的是签名，不写进判据）。
           // 无头 Chrome 里同一句 page.focus() 是成的，所以这条签名只在装机腿出现——它问的是回显同不同源，
           // 不是「带着焦点那一枚该不该写」；那一格该不该写由 DOM 腿与产品自己的焦点走向定，不由这里改产品。
           const tfEcho = () => { tfBlur(); tfSelectRun(); document.dispatchEvent(new Event("selectionchange")); };
+          // 第五击：在那枚色板里挑一枚蓝（走 input，与用户取完色同一趟），落的是 rPr 里那句 w:color。
+          const tfPressColor = tfColorPick("#0000ff");
+          await wait(1000);
+          const tfColorPx = tfHex(cssOf(tfRun(), "color"));
+          tfEcho();
+          const tfColorEchoTable = tfColorBox()?.value ?? "?";
+          const tfColorEchoHome = tfHomeColorBox()?.value ?? "?";
           const tfClean = () => {
             tfEcho();
             return cssOf(tfRun(), "fontWeight") === tfWeight0 && cssOf(tfRun(), "fontSize") === tfSize0 &&
               tfFam(tfRun()) === tfFamily0 &&
+              tfHex(cssOf(tfRun(), "color")) === tfColorCss0 &&
               ttLitIn(tfBtn("粗")) === tfBold0Start && ttLitIn(ttHomeBtn("粗")) === tfHomeBold0 &&
               (tfHomeFaceNow()?.value ?? "") === tfFaceHome0 && (tfFaceNow()?.value ?? "") === tfFaceTable0 &&
-              (tfSel("字号")?.value ?? "?") === tfSizeTable0;
+              (tfSel("字号")?.value ?? "?") === tfSizeTable0 &&
+              (tfColorBox()?.value ?? "?") === tfColorTable0 && (tfHomeColorBox()?.value ?? "?") === tfColorHome0;
           };
           const tfNeighbor = () => ttValign() + "|" + ttTextAlign();
           const tfNeighbor0 = tfNeighbor();
-          const tfPresses = tfPressBold + tfPressBold2 + tfPressSize + tfPressFace;
+          const tfPresses = tfPressBold + tfPressBold2 + tfPressSize + tfPressFace + tfPressColor;
           let tfUndoSteps = 0;
           await wait(200);
           while (tfUndoSteps < tfPresses) {
@@ -1770,11 +1807,14 @@ function smoke(): void {
           const tfEndFaceHome = tfHomeFaceNow()?.value ?? "?";
           const tfEndFaceTable = tfFaceNow()?.value ?? "?";
           const tfEndSizeEcho = tfSel("字号")?.value ?? "?";
+          const tfEndColorTable = tfColorBox()?.value ?? "?";
+          const tfEndColorHome = tfHomeColorBox()?.value ?? "?";
           const tfNeighborEnd = tfNeighbor();
           tfSelectRun();
           const tfWeightEnd = cssOf(tfRun(), "fontWeight");
           const tfFamilyEnd = tfFam(tfRun());
           const tfSizeEnd = cssOf(tfRun(), "fontSize");
+          const tfColorEnd = tfHex(cssOf(tfRun(), "color"));
           ttCmd = {
             ttTabPresent, ttTabHidden, ttBarHidden, ttBarOpen, ttBtns, ttHit: ttHit ? 1 : 0, ttDisabled, ttNotice,
             ttPxBefore, ttPxAfter, ttWrittenBefore, ttWrittenAfter, ttColsBefore, ttColsAfter, ttTabBackHidden, ttHomeOn, ttInTableAgain,
@@ -1837,6 +1877,8 @@ function smoke(): void {
             tfPressSize, tfSizePx, tfSizeEchoTable, tfSizeEchoHome,
             tfPressFace, tfFamilyPx, tfFaceEchoHome, tfFaceEchoTable, tfBoldLitAfterFace,
             tfPresses, tfUndoSteps, tfFocusAfterUndo, tfCleanEnd, tfEndBoldTable, tfEndBoldHome, tfEndFaceHome, tfEndFaceTable, tfEndSizeEcho,
+            tfPressColor, tfColorTable0, tfColorHome0, tfColorCss0, tfColorPx, tfColorEchoTable, tfColorEchoHome,
+            tfEndColorTable, tfEndColorHome, tfColorEnd,
             tfWeightEnd, tfFamilyEnd, tfSizeEnd, tfNeighbor0, tfNeighborEnd,
             ttDirty: (document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0,
           };

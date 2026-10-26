@@ -540,3 +540,33 @@ export function makeSeamInkDocx(): Uint8Array {
     `</w:tbl>`;
   return pack(document);
 }
+
+/**
+ * 「分布列」那三张表（#206），形状按授权 46 份量到的三类各摆一张（`.scratch/col-distribute-audience.py`：
+ * 58 张多列表里本来就等宽 0 张、网格和被列数除不尽 44 张、含跨列格 32 张、`w:tblW` 58/58 等于网格和）：
+ *  · `odd`——3 列 1,000 / 1,100 / 1,102（和 3,202，除不尽，余 1 缇要落在最左那一列）；每行三格各说自己那一列。
+ *  · `even`——2 列各 1,200，本来就等宽：那一击在这张表上没活，得回绝且不进撤销栈。
+ *  · `spanned`——3 列 1,500 / 2,000 / 500（和 4,000），中间那一列**上下两行都被跨列格盖着**：纸面上没有这一条边，
+ *    于是均分只在看得见边的两列间分（1,500 + 500 → 1,000 / 1,000），跨列那两句（2,500 与 3,500）一个字节不动。
+ * 三张都带 `w:tblW w:type="dxa"` 且说的就是网格和——这一击保住和，所以那一句必须原样留着（`w:tblW` 变了才是编出来的）。
+ */
+export function makeDistributeDocx(): Uint8Array {
+  const cell = (label: string, w: number, span = 1): string =>
+    `<w:tc><w:tcPr><w:tcW w:w="${w}" w:type="dxa"/>${span > 1 ? `<w:gridSpan w:val="${span}"/>` : ""}</w:tcPr>` +
+    `<w:p><w:r><w:t>${label}</w:t></w:r></w:p></w:tc>`;
+  const table = (grid: number[], rows: string): string =>
+    `<w:tbl><w:tblPr><w:tblW w:w="${grid.reduce((n, w) => n + w, 0)}" w:type="dxa"/><w:tblLayout w:type="fixed"/></w:tblPr>` +
+    `<w:tblGrid>${grid.map((w) => `<w:gridCol w:w="${w}"/>`).join("")}</w:tblGrid>${rows}</w:tbl>`;
+  const document =
+    table([1000, 1100, 1102],
+      `<w:tr>${cell("甲一", 1000)}${cell("甲二", 1100)}${cell("甲三", 1102)}</w:tr>` +
+        `<w:tr>${cell("乙一", 1000)}${cell("乙二", 1100)}${cell("乙三", 1102)}</w:tr>`) +
+    table([1200, 1200],
+      `<w:tr>${cell("丙一", 1200)}${cell("丙二", 1200)}</w:tr>` +
+        `<w:tr>${cell("丁一", 1200)}${cell("丁二", 1200)}</w:tr>`) +
+    table([1500, 2000, 500],
+      `<w:tr>${cell("戊一", 1500)}${cell("戊跨两列", 2500, 2)}</w:tr>` +
+        `<w:tr>${cell("己跨两列", 3500, 2)}${cell("己三", 500)}</w:tr>`) +
+    `<w:p><w:r><w:t>表外的一段</w:t></w:r></w:p>`;
+  return pack(document);
+}

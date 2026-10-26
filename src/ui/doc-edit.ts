@@ -3,7 +3,7 @@ import type { CommentAnchor, DocComment } from "../core/comments.js";
 import { bodyShape, commentTexts } from "../core/comments.js";
 import { DEFAULT_SECTION, EAST_ASIAN_TEXT, MARGIN_SIDES, RUN_STYLE_KEYS, applyFacePick, applyRunPatch, borderDelta, carriedShape, cellShapeOf, countTexts, lineGridPitchTwips, ownParaStyle, ownRunStyle, paraSpacingPitch, paraStyleOf, paragraphTextsOf, rowShapeOf, runStyleOf, samePropValue, sectionEndsOf, signCellPlaceRevision, signCellRevision, signRowRevision, signTableRevision, stampNow, syncCellBox, syncCellVAlign, syncParaSlots, syncRowHeader, syncRowHeight, syncTableBox, syncTableProps, tableShapeOf, twipsToPx } from "../core/docx.js";
 import type { CellWhere, TableEdit } from "../core/doc-table-ops.js";
-import { allCells, cellOuterSides, cellRangeFor, cellRect, columnCells, cellsInRect, cellsInSweep, deleteCellHere, deleteColumnHere, deleteRowHere, deleteTableBlock, gridColumns, gridWidths, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, setColumnWidth, splitHere, splitTableAt, tableToText, type TableTextSeparator } from "../core/doc-table-ops.js";
+import { allCells, cellOuterSides, cellRangeFor, cellRect, columnCells, cellsInRect, cellsInSweep, deleteCellHere, deleteColumnHere, deleteRowHere, deleteTableBlock, distributeColumns, gridColumns, gridWidths, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, setColumnWidth, splitHere, splitTableAt, tableToText, type TableTextSeparator } from "../core/doc-table-ops.js";
 import { IMAGE_EXT_BY_MIME } from "../core/media.js";
 import { BAND_SOURCE_CLASS, CARRY_CLASS, CARRY_STYLE, BAND_MASTER_CLASS, PAGE_BORDER_CLASS, RUN_CARRY_CLASS, type RevisionView, fontStack, highlightColor, renderWord } from "../core/render.js";
 import { flatOf, inlineLength, isMark, keepRunIdentity } from "../core/run-identity.js";
@@ -4037,6 +4037,66 @@ export class DocEditor {
     if (!moved.length) {
       this.undoStack.pop();
       return { ok: false, reason: reason ?? "这一列的宽度改不了" };
+    }
+    if (this.trackRevisions) {
+      this.revSeq += 1;
+      const sign = { id: this.revSeq, author: this.authorName, date: stampNow() };
+      for (const cell of moved) {
+        const back = was.get(cell);
+        if (back) signCellRevision(cell, sign, back.shape, back.xml);
+      }
+    }
+    this.repaintWithSelection(caret);
+    return { ok: true };
+  }
+
+  /**
+   * 「分布列」那一击（WPS `CT_TableTools.kuip:54` 的 `DistributeColumns`，`idMso="TableColumnsDistribute"`，
+   * 挂在 :58 那枚 `TableAutoAdjust` 清单里、组是 RB_Adjust :55——与高度/宽度那两格同一组）：落点仍然是**一整列**，
+   * 选区碰到哪几列就把那几列摆成等宽，跨表选区逐张表各摆自己那几列。
+   *
+   * 光标只是悬在一格上、或选区只碰到一列时，摆的是**整张表**的每一列：一列没有「均分」可言（那一列自己就是全部），
+   * 而这一枚命令说的是「看得见的那些边一样长」。WPS 真机在悬光标上落哪几列**未取证**（首启同意页仍未过），
+   * 这一条按命令自己那句话定，落下去的形状照 `distributeColumns` 里那条按 58 张表量出来的算式。
+   *
+   * 修订那一笔与「单元格宽度」同一出口：整击签**一枚** `w:id`，逐格 `w:tcPrChange` 带落笔前那一套；参照要在动
+   * 字节之前按列取快照，所以落点算完（含整张表那一路的展开）再取。
+   */
+  distributeColumns(): TableCommandAnswer {
+    const caret = this.caretPath();
+    const segments = this.selectionTableSegments();
+    if (!segments.length) return { ok: false, reason: "光标不在表格里" };
+    const columns = new Map<Table, Set<number>>();
+    for (const segment of segments) {
+      for (const where of segment.cells) {
+        const rect = cellRect(segment.table, where);
+        if (!rect) continue;
+        let set = columns.get(segment.table);
+        if (!set) columns.set(segment.table, (set = new Set<number>()));
+        for (let c = rect.c0; c < rect.c1; c += 1) set.add(c);
+      }
+    }
+    if (!columns.size) return { ok: false, reason: "光标不在表格里" };
+    for (const [table, set] of columns) {
+      if (set.size > 1) continue;
+      for (let c = 0; c < gridColumns(table); c += 1) set.add(c);
+    }
+    const was = new Map<TableCell, { shape: CellStyle; xml?: string }>();
+    for (const [table, set] of columns)
+      for (const at of set)
+        for (const cell of columnCells(table, at))
+          if (!was.has(cell)) was.set(cell, { shape: cellShapeOf(cell), xml: cell.tcPrXml });
+    this.snapshot(caret);
+    const moved: TableCell[] = [];
+    let reason: string | undefined;
+    for (const [table, set] of columns) {
+      const out = distributeColumns(table, [...set]);
+      if (out.ok) moved.push(...out.cells);
+      else reason ??= out.reason;
+    }
+    if (!moved.length) {
+      this.undoStack.pop();
+      return { ok: false, reason: reason ?? "这几列的宽度摆不齐" };
     }
     if (this.trackRevisions) {
       this.revSeq += 1;

@@ -422,6 +422,53 @@ export function setColumnWidth(t: Table, at: number, twips: number): ColumnWidth
 }
 
 /**
+ * 「分布列」那一击：把这几列摆成**等宽**，而这几列原来的和一格不少地留在原地——所以表自己那句 `w:tblW` 一个字节
+ * 不动（`setGrid` 只在和变了时才重述它）。除不尽时多出来的那几缇按列序从**左**往右每列一缇：授权 46 份里 58 张
+ * 多列表 44 张除不尽（`.scratch/col-distribute-audience.py`），这一条是主路而不是边角；那一批 `w:gridCol` 与
+ * `w:tcW` 全批 0 枚小数，所以按整数分下去的和与原来的和一字不差。
+ *
+ * 落点仍然是**一整列**，与「单元格宽度」同一条口径（那一击为什么不落一格，就写在上面）。整列被跨列格盖住时
+ * 这一列在纸面没有边（每一行都从它头上跨过去），说不出也摆不了它的宽——把它从均分里**摘出去**，剩下那些看得见
+ * 的边摆齐：这批表 58 张里只有 4 张含这样一列（共 12 枚），没有一张表全是它。全被摘光、或摘得只剩一列时回绝——
+ * 均分要有两条边才谈得上「一样宽」。跨列格自己一句 `w:tcW` 不动，它说的是几列之和，而我们没动任何列的和。
+ *
+ * 本来就等宽、那一列每一格也说着同一个数时那一列不写字节；一列都不用改时整击回绝（不进撤销栈）。
+ */
+export function distributeColumns(t: Table, columns: number[]): ColumnWidthEdit {
+  const widths = gridWidths(t);
+  const touched = [...new Set(columns.filter((at) => at >= 0 && at < widths.length))].sort((a, b) => a - b);
+  if (!touched.length) return { ok: false, reason: "这一列不在表格里" };
+  const movable = new Map<number, TableCell[]>();
+  for (const at of touched) {
+    const cells = columnCells(t, at).filter(isDxaWidth);
+    if (cells.length) movable.set(at, cells);
+  }
+  const work = [...movable.keys()];
+  if (!work.length) return { ok: false, reason: "这几列整列都被跨列格盖住，纸面上没有这一条边" };
+  // 数得出宽度的只剩一列时这一击没有「均分」可言：一列自己就是全部，摆不动第二两条边。
+  if (work.length < 2) return { ok: false, reason: "碰到的列里数得出宽度的只剩一列，均分要有两条边" };
+  const sum = work.reduce((n, at) => n + Math.round(widths[at]), 0);
+  const base = Math.floor(sum / work.length);
+  const extra = sum - base * work.length;
+  const target = (i: number): number => base + (i < extra ? 1 : 0);
+  const changed = work.filter((at, i) => {
+    const w = target(i);
+    return Math.round(widths[at]) !== w || movable.get(at)!.some((c) => Math.round(c.widthTwips ?? w) !== w);
+  });
+  if (!changed.length) return { ok: false, reason: "这几列已经是等宽" };
+  let carried = gridCarried(t);
+  work.forEach((at, i) => {
+    if (!changed.includes(at)) return;
+    const w = target(i);
+    for (const cell of movable.get(at)!) applyCellProps(cell, { widthTwips: w });
+    widths[at] = w;
+    carried = restateCarriedGrid(carried, at, w);
+  });
+  setGrid(t, widths, carried);
+  return { ok: true, cells: changed.flatMap((at) => movable.get(at)!) };
+}
+
+/**
  * 「拒绝」/「显示原文」把某一列的格摆回改前那个数之后，网格那一列跟着回去。OOXML 没有 `w:tblGrid` 的记录族——
  * 修订着的列是**逐格**签的（一格一枚 `w:tcPrChange`，整列共用一个 `w:id`），网格只是那份数的镜像；不重述这一列，
  * 表盒（`w:tblW`，#190 按网格和算）与逐格画出来的宽就还站在按下去的那个数上，「原始状态」与最终态画成一样宽。

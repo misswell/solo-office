@@ -1465,6 +1465,68 @@ function smoke(): void {
           const cvUndo2Tabs = cvTabSpanN();
           await wait(4300);
           const cvUndoNotice = ttNoticeSel();
+          // 「分布列」（CT_TableTools.kuip:54 的 DistributeColumns，idMso="TableColumnsDistribute"，RB_Adjust 那组
+          // 第三枚、挂在 :58 那枚 TableAutoAdjust 的清单里）在装机这只盒子里量六条：①光标在「甲」那只表里时那一枚
+          // 摆得出、按得动，光标退到表外时灰着（与上面那两格同一个开关）；②先拿自家的「单元格宽度」那一格把光标
+          // 那一列摆宽一厘米——纸上那几列因此**不等**，这一击才有不等可摆；③按下去每一列摆到同一个宽（相邻两列
+          // 差不到 0.5px），而整只盒一寸不挪：均分把那几列的和留在原地，那句 w:tblW 没理由重述；④立刻再按一次——
+          // 这会儿每列已经一样宽，命令该回绝、把理由说在小条上、纸上一寸不挪；⑤一次 ⌘Z 退掉的是**第一次**那一击
+          // （纸上重新不等、盒回到摆宽后那个数），这一条同时是「回绝那一次没进撤销栈」的证据：它要是留了一条空步，
+          // ⌘Z 只会退掉那条空步、均分还挂在纸上；⑥再一次 ⌘Z 退掉宽度那一格，列宽与盒宽回到起手——整条撤销收尾，
+          // 这一腿不许牵动盘上那件的字节账（下面 d1/d2 那两本的列数与网格和照旧，与本腿无关）。
+          // 为什么量在「甲」那一只：新插的那只 2×2 两列本来就等宽，只量得到回绝那一条分支；而「甲」这一只在两趟里
+          // 分别是 4 列与 5 列（上一腿前面那几腿各留一张、各插一列），所以这里断的全是**每趟自己那本算式**
+          // （不等 → 齐 → 回绝 → 退两步回起手），两趟之间比的只有形状与那些算式，不是绝对列宽。
+          // WPS 真机在悬光标上落哪几列、均分时动不动那句 w:tblW 均 未取证；这里断的是自家那条口径（落一整列、
+          // 碰到的列之和留在原地）在装机的壳里落得下去、退得回来。件里那串字节的形状归 tests/doc-distribute.test.ts
+          // 与 .scratch/col-distribute-dom.ts（它把同一份 writeDocx 的 XML 数出来）。
+          const dcBtn = () => rb("分布列");
+          const dcColsOf = () => [...(ttFind()?.rows[0]?.cells ?? [])]
+            .map((c) => Math.round(c.getBoundingClientRect().width * 100) / 100);
+          const dcSpread = (a) => (a.length ? Math.round((Math.max(...a) - Math.min(...a)) * 100) / 100 : -1);
+          const dcJoin = (a) => a.join(",");
+          ttPut(ttRow0Cell(0));
+          await wait(260);
+          const dcTrackStart = revBtn()?.classList.contains("on") ? 1 : 0;
+          const dcBtnPresent = dcBtn() ? 1 : 0;
+          const dcBtnIn = dcBtn()?.disabled === true ? 1 : 0;
+          const dcCols0 = dcColsOf();
+          const dcBox0 = ttBox();
+          const dcEcho0 = ttSpin("宽度")?.value ?? "";
+          const dcWidenTo = dcEcho0 !== "" && Number.isFinite(Number(dcEcho0))
+            ? (Math.round((Number(dcEcho0) + 1) * 1000) / 1000).toFixed(3)
+            : "5.292";
+          const dcWidenHit = ttType(ttSpin("宽度"), dcWidenTo);
+          await wait(420);
+          const dcColsW = dcColsOf();
+          const dcBoxW = ttBox();
+          // 浮层四秒退场：上一击那句要是还挂着，「这一击没被回绝」就成了假绿。
+          await wait(4300);
+          const dcQuiet = ttNoticeSel();
+          const dcPress = dcBtn() && dcBtn().disabled !== true ? (dcBtn().click(), 1) : 0;
+          await wait(460);
+          const dcColsAfter = dcColsOf();
+          const dcBoxAfter = ttBox();
+          const dcAfterNotice = ttNoticeSel();
+          const dcPress2 = dcBtn() && dcBtn().disabled !== true ? (dcBtn().click(), 1) : 0;
+          await wait(460);
+          const dcRefuseNotice = ttNoticeSel();
+          const dcColsRefuse = dcColsOf();
+          const dcBoxRefuse = ttBox();
+          ttUndoKey();
+          await wait(460);
+          const dcColsUndo1 = dcColsOf();
+          const dcBoxUndo1 = ttBox();
+          ttUndoKey();
+          await wait(460);
+          const dcColsUndo2 = dcColsOf();
+          const dcBoxUndo2 = ttBox();
+          const dcSpreadUndo2 = dcSpread(dcColsUndo2);
+          const dcTablesEnd = cvTables().length;
+          const dcOutPara = [...document.querySelectorAll("#view .para")].find((el) => !el.closest("table"));
+          ttPut(dcOutPara);
+          await wait(260);
+          const dcOutDisabled = dcBtn()?.disabled === true ? 1 : 0;
           ttCmd = {
             ttTabPresent, ttTabHidden, ttBarHidden, ttBarOpen, ttBtns, ttHit: ttHit ? 1 : 0, ttDisabled, ttNotice,
             ttPxBefore, ttPxAfter, ttWrittenBefore, ttWrittenAfter, ttColsBefore, ttColsAfter, ttTabBackHidden, ttHomeOn, ttInTableAgain,
@@ -1505,6 +1567,13 @@ function smoke(): void {
             cvTabHidden, cvDisabledAfter, cvUndoTables, cvUndoRows, cvUndoCols, cvUndoTabs, cvTabReShown,
             cvTrackOn, cvRefusePress, cvRefuseNotice, cvRefuseTables, cvRefuseTabs, cvTrackEnd,
             cvUndo2Tables, cvUndo2Jia, cvUndo2Tabs, cvUndoNotice,
+            dcBtnPresent, dcBtnIn, dcOutDisabled, dcTrackStart, dcEcho0, dcWidenTo, dcWidenHit,
+            dcCols0: dcJoin(dcCols0), dcSpread0: dcSpread(dcCols0), dcBox0,
+            dcColsW: dcJoin(dcColsW), dcSpreadW: dcSpread(dcColsW), dcBoxW,
+            dcQuiet, dcPress, dcColsAfter: dcJoin(dcColsAfter), dcSpreadAfter: dcSpread(dcColsAfter), dcBoxAfter, dcAfterNotice,
+            dcPress2, dcRefuseNotice, dcColsRefuse: dcJoin(dcColsRefuse), dcBoxRefuse,
+            dcColsUndo1: dcJoin(dcColsUndo1), dcSpreadUndo1: dcSpread(dcColsUndo1), dcBoxUndo1,
+            dcColsUndo2: dcJoin(dcColsUndo2), dcSpreadUndo2, dcBoxUndo2, dcTablesEnd,
             ttDirty: (document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0,
           };
         }

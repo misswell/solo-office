@@ -1,5 +1,5 @@
 import { childSpans, elementContent } from "./opc.js";
-import type { Block, Paragraph, Table, TableCell } from "./docx.js";
+import type { Block, Inline, Paragraph, Table, TableCell } from "./docx.js";
 
 /**
  * The table commands WPS' 表格工具栏 has and this editor did not: insert or delete a row or a column,
@@ -1197,4 +1197,67 @@ export function deleteTableBlock(blocks: Block[], index: number): DeleteTableOut
   if (blocks[index]?.kind !== "table") return { ok: false, reason: "这里没有表格" };
   blocks.splice(index, 1, blank());
   return { ok: true, at: index };
+}
+
+/** 表格转文本的三档分隔：`CT_TableTools.kuip:89` 那一枚只说了命令名（`ConvertTabletoText`），哪一档没说。 */
+export type TableTextSeparator = "tab" | "comma" | "paragraph";
+
+/** What 表格转文本 reports: the paragraphs the table became, or why the table is not a lossless source. */
+export type TableTextOutcome = { ok: true; paragraphs: Paragraph[] } | { ok: false; reason: string };
+
+/**
+ * 表格转文本 (`CT_TableTools.kuip:89`: `ksoCmd="ConvertTabletoText"`, `idMso` 那一族里 WPS 的
+ * 「表格转换成文本」). The table comes apart into the paragraphs a reader already sees, and the separators
+ * between them are the one thing the caller chooses:
+ *
+ * - `paragraph` — every cell's own paragraphs, one after another. Nothing is joined, so every paragraph
+ *   property a cell stated survives on the paragraph that states it.
+ * - `tab` / `comma` — a row's cells are joined into lines: line *k* takes paragraph *k* of every cell on that
+ *   row, in cell order, with the separator between them. A cell that wrote more paragraphs than its
+ *   neighbours therefore makes extra lines instead of having its later paragraphs squashed into the first
+ *   one, which is what keeps a multi-line cell readable after the grid is gone. The line's paragraph
+ *   properties are the first contributing cell's paragraph *k* — the only paragraph that can be said to own
+ *   the line — and each run keeps its own `w:rPr`.
+ *
+ * Which of the three WPS offers, and which one it defaults to, is 未取证: the ribbon entry carries no
+ * `dialogHint`, so no dialog of its own is declared there, and no authorized file can record a conversion
+ * (the result is plain paragraphs). The three here are ECMA-376's own kinds of separation — `w:tab`, a
+ * literal, and a paragraph mark — named after what they write.
+ *
+ * A table is refused when converting would silently drop something this model carries rather than reads: a
+ * nested table or a content control inside a cell, a `w:bookmarkEnd`-style child between rows, or a pending
+ * `w:tblPrChange`. Each of those has an owner elsewhere; conversion has no slot for them.
+ */
+export function tableToText(t: Table, sep: TableTextSeparator): TableTextOutcome {
+  if (t.revFormat) return { ok: false, reason: "这张表上有一条待判的属性改动，转成文本会把它丢掉" };
+  if (t.betweenRows?.length) return { ok: false, reason: "表行之间夹着书签一类的东西，转成文本会把它丢掉" };
+  for (const row of t.rows) {
+    for (const cell of row) {
+      if (cell.paragraphs.some((b) => b.kind !== "paragraph")) {
+        return { ok: false, reason: "格子里有嵌套表或内容控件，转成文本会把它整个丢掉" };
+      }
+    }
+  }
+  const out: Paragraph[] = [];
+  for (const row of t.rows) {
+    const lines = Math.max(1, ...row.map((cell) => cell.paragraphs.length));
+    for (let line = 0; line < lines; line++) {
+      const cells = row.map((cell) => cell.paragraphs[line]).filter((p): p is Paragraph => p !== undefined);
+      if (!cells.length) continue;
+      if (sep === "paragraph") {
+        out.push(...structuredClone(cells));
+        continue;
+      }
+      const inlines: Inline[] = [];
+      cells.forEach((p, i) => {
+        if (i > 0) inlines.push(sep === "tab" ? { text: "", tab: true } : { text: "," });
+        inlines.push(...structuredClone(p.inlines));
+      });
+      out.push({ ...structuredClone(cells[0]), inlines });
+    }
+  }
+  // A table with no rows has nothing to say, but the slot it left still needs a line: the same rule
+  // `deleteTableBlock` follows, and the one that keeps two neighbouring blocks from being read as one.
+  if (!out.length) out.push(blank());
+  return { ok: true, paragraphs: out };
 }

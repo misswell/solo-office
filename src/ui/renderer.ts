@@ -550,7 +550,7 @@ const TABLE_TOOL_KEYS = [
   "mergeCells", "splitCell", "splitTable",
   "cellHeight", "cellWidth",
   "tblTop", "tblMid", "tblBot", "tblLeft", "tblCenter", "tblRight",
-  "repeatHeader",
+  "repeatHeader", "convertTable",
   "selectCell", "selectCol", "selectRow", "selectTable",
 ] as const;
 
@@ -889,9 +889,10 @@ function buildDocRibbon(): void {
   //   · 合并与拆分 ← RB_Merge 的 Merge Cells / Split Cells / Split Table by Row（按列拆仍是 0 命令）；
   //   · 单元格尺寸 ← RB_Adjust 的高度/宽度两格（见 `CELL_SIZE_SPINS`）；
   //   · 对齐 ← RB_Alignment 的两行六枚（见 `TABLE_ALIGN_BUTTONS`）；
+  //   · 数据 ← RB_Data 的「标题行重复」与「转换成文本」；
   //   · 选择 ← TableSelectMenu 的四条。
-  // RB_Table 的两枚都接上了。RB_Table_Font 与 RB_Data（公式/转文字/标题行重复）要建模或对话框，
-  // 这一轮不摆空按钮——宁缺一条，不摆一条按下去什么也不改的。
+  // RB_Table 的两枚都接上了；RB_Data 的公式（`FieldFormula`）与 RB_Table_Font 仍未接，这一轮不摆空按钮——
+  // 宁缺一条，不摆一条按下去什么也不改的。
   // `RB_Table`（`CT_TableTools.kuip:5-9`，`groupTip="TableToolPropertyGroup"`）在 WPS 那条 `<subcommand>` 组序里排
   // **第一**，组里两枚：`TableProperties`（:7）与 `ShowGridlines`（:8，`idMso="TableShowGridlines"`）。两枚都摆，次序照它：
   //  · 「属性」按下开的是「表格属性」对话框（`doc-table-props.ts`）。WPS 那张对话框里分几页、摆哪些字段**未取证**，
@@ -971,10 +972,15 @@ function buildDocRibbon(): void {
         : editor?.setCellAlign(value as "left" | "center" | "right")));
   }
 
-  // RB_Data 那一组（`CT_TableTools.kuip:92`）家里做得了的一条：「标题行重复」`RepeatHeaderRows`。公式、转文字
-  // 仍未接，不摆空按钮。这是一枚开关：光标落在表头那一段里时亮着，再按一下关（与「查看网格线」同一形状）。
+  // RB_Data 那一组（`CT_TableTools.kuip:78-91`）家里做得了的两条：「标题行重复」`RepeatHeaderRows`（:88）与
+  // 「转换成文本」`ConvertTabletoText`（:89，排在重复标题行之后、排序之前）。公式那一枚（`FieldFormula`）仍未接，
+  // 不摆空按钮。这一格是选方向的，不是开关：转换本身没有回显可言（表一没就没了），所以格子每次都回到「转换成文本」。
   const data = group("table");
   button(data, "repeatHeader", "标题行重复", "让表格开头连续的几行在每一页重复（WPS：Repeat Header Rows）", () => tableAction(editor?.toggleHeaderRows()));
+  chooser(data, "convertTable", "转换成文本（WPS：Convert Table to Text）", [["", "转换成文本"], ["tab", "制表符分隔"], ["comma", "逗号分隔"], ["paragraph", "段落标记分隔"]], (v) => {
+    (ctl.convertTable as HTMLSelectElement).value = "";
+    if (v) tableAction(editor?.convertTableToText(v as "tab" | "comma" | "paragraph"));
+  });
 
   const picking = group("table");
   button(picking, "selectCell", "选择单元格", "选择单元格（WPS：Select Cell）", () => tableAction(editor?.selectCell()));

@@ -3,7 +3,7 @@ import type { CommentAnchor, DocComment } from "../core/comments.js";
 import { bodyShape, commentTexts } from "../core/comments.js";
 import { DEFAULT_SECTION, EAST_ASIAN_TEXT, MARGIN_SIDES, RUN_STYLE_KEYS, applyFacePick, applyRunPatch, borderDelta, carriedShape, cellShapeOf, countTexts, lineGridPitchTwips, ownParaStyle, ownRunStyle, paraSpacingPitch, paraStyleOf, paragraphTextsOf, rowShapeOf, runStyleOf, samePropValue, sectionEndsOf, signCellPlaceRevision, signCellRevision, signRowRevision, signTableRevision, stampNow, syncCellBox, syncCellVAlign, syncParaSlots, syncRowHeader, syncRowHeight, syncTableBox, syncTableProps, tableShapeOf, twipsToPx } from "../core/docx.js";
 import type { CellWhere, TableEdit } from "../core/doc-table-ops.js";
-import { allCells, cellOuterSides, cellRangeFor, cellRect, columnCells, cellsInRect, cellsInSweep, deleteCellHere, deleteColumnHere, deleteRowHere, deleteTableBlock, gridColumns, gridWidths, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, setColumnWidth, splitHere, splitTableAt } from "../core/doc-table-ops.js";
+import { allCells, cellOuterSides, cellRangeFor, cellRect, columnCells, cellsInRect, cellsInSweep, deleteCellHere, deleteColumnHere, deleteRowHere, deleteTableBlock, gridColumns, gridWidths, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, setColumnWidth, splitHere, splitTableAt, tableToText, type TableTextSeparator } from "../core/doc-table-ops.js";
 import { IMAGE_EXT_BY_MIME } from "../core/media.js";
 import { BAND_SOURCE_CLASS, CARRY_CLASS, CARRY_STYLE, BAND_MASTER_CLASS, PAGE_BORDER_CLASS, RUN_CARRY_CLASS, type RevisionView, fontStack, highlightColor, renderWord } from "../core/render.js";
 import { flatOf, inlineLength, isMark, keepRunIdentity } from "../core/run-identity.js";
@@ -2498,6 +2498,18 @@ export class DocEditor {
   }
 
   /**
+   * The caret that lands on block `at` in the list `containerBlocks(prefix)` returns — `containerBlocks` 的反向那一条。
+   * `pathOf` 对块的写法只有一种：正文里的段答 `[块]`，格子里的段答 `[表, 行, 列, 块]`，也就是把「表自己的那一段」
+   * 换成「新块的那一段」，深度不变。多写一段就不一样了：`elementAt` 每三步下一次格（`rowsOf(el)[k]` →
+   * `cellsOf(row)[k+1].children[k+2]`），所以尾数只在**目标是表**时才说得通（`splitTable` 落的是下表的头一格，
+   * `[表, 0, 0, 0]` 是对的）。目标是段还照那个形状写，那一步就把段当表下：`div.para` 下没有行，`elementAt`
+   * 返回 null，而 `setCaret` 对 null 是**不动**——删完/转完光标留在原处，页面却已经没有那块了。
+   */
+  private blockCaret(prefix: number[], at: number): DocPath {
+    return { path: [...prefix.slice(0, -1), at], offset: 0 };
+  }
+
+  /**
    * The table the caret sits in, with the cell it sits in. A path only reaches a cell when it names one, so a
    * caret in prose gets nothing back and every structure command refuses to run there. `prefix` names the
    * table itself — one segment in the body, four for a table nested in a cell — so a command that reshapes a
@@ -2818,7 +2830,38 @@ export class DocEditor {
       return ran;
     }
     this.render();
-    this.setCaret({ path: [...target.prefix.slice(0, -1), ran.at, 0], offset: 0 });
+    this.setCaret(this.blockCaret(target.prefix, ran.at));
+    this.hooks.changed();
+    return { ok: true };
+  }
+
+  /**
+   * 表格转文本: the caret's table leaves the block list and the paragraphs `tableToText` made take its slot.
+   * The caret lands at the start of the first of them, which is where Word leaves it after this command and
+   * the only place in the new text that is unambiguously "where the table was".
+   *
+   * While 修订 is on this refuses instead of converting. OOXML has no record for "a table became text" —
+   * every table revision in `w:trPr`/`w:tcPr` signs a row or a cell that is still a row or a cell — so a
+   * conversion made under tracking would leave the review trail standing as if nothing had happened. What
+   * WPS does with 修订 on is 未取证; refusing is the reading that never silently loses a reviewer's change.
+   *
+   * The refusals `tableToText` reports come back as this command's reason, and the snapshot is dropped, the
+   * same way every other structure command leaves the model and the history exactly where they were.
+   */
+  convertTableToText(sep: TableTextSeparator): TableCommandAnswer {
+    const caret = this.caretPath();
+    const target = this.tableAt(caret);
+    if (!target) return { ok: false, reason: "光标不在表格里" };
+    const blocks = this.containerBlocks(target.prefix);
+    const index = target.prefix[target.prefix.length - 1];
+    if (!blocks || blocks[index] !== target.table) return { ok: false, reason: "这张表已经不在原来的位置" };
+    if (this.trackRevisions) return { ok: false, reason: "修订模式下不转：OOXML 没有「表格转文本」这一条修订，转了会绕过审阅" };
+    const made = tableToText(target.table, sep);
+    if (!made.ok) return made;
+    this.snapshot(caret);
+    blocks.splice(index, 1, ...made.paragraphs);
+    this.render();
+    this.setCaret(this.blockCaret(target.prefix, index));
     this.hooks.changed();
     return { ok: true };
   }

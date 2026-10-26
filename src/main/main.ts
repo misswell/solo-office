@@ -1376,6 +1376,95 @@ function smoke(): void {
           const ttAlignOutLit = ttAlignLit();
           const ttAlignOutDisabled = ttAlignKeys.filter((k) => ttAlignBtn(k)?.disabled === true).length;
           const ttHomeOutDisabled = ["↑", "↕", "↓"].filter((k) => ttHomeBtn(k)?.disabled === true).length;
+          // 「转换成文本」（CT_TableTools.kuip:89 的 ConvertTableToText，RB_Data 那组的第二格）在装机这只盒子里量七条：
+          // ①光标在表外时那一格灰着、四档都在（首档是「转换成文本」自己，转换没有回显可言）；②这一腿在正文里自己插
+          // 一张干净的 2×2——insertTable 把光标放进新表第一格，那一格跟着不灰、字面仍是首档，而按表序 index 问回来的
+          // 那一只与按光标问回来的是同一只；③开着修订按「逗号分隔」不许把表变没——OOXML 没有「一张表变成文本」这种
+          // 修订，命令自己回绝、小条说一句、表一张不少、导引线一枚不多；④关回修订后落「制表符分隔」这一档，那张表
+          // 从纸上没了、位子上那些段里多出导引线（一档一枚 span.tab，只数表外那些，算的是行数×(列数−1)），带「甲」
+          // 那一只一张没少；⑤页签跟着退场、那一格重新灰着（命令把光标放回表原来那个位子上的第一段）；⑥第一下 ⌘Z
+          // 撤转换：表回到同一个 index、行列与导引线回起手、页签重新露；⑦第二下 ⌘Z 撤插表：表数回起手、甲那一只还
+          // 在、导引线也回起手。整条以撤销收尾，不许牵动盘上那件的字节账（两趟开的同一件）。
+          // 「落得下去」这一条为什么不在「甲」那一只上量：前面那几腿在它身上留了一枚待判的属性改动，命令对它自己回绝
+          // （「这张表上有一条待判的属性改动，转成文本会把它丢掉」）；那条回绝分支连同件里那句 w:tab 的字节账归
+          // .scratch/tbl-text-dom.ts（它把同一份 writeDocx 的 XML 数出来）与 tests/doc-table-to-text.test.ts，
+          // 这里断的是「装机的壳按这一格落得下去、落下去纸上是什么、退得回来」。
+          const cvChooser = () => [...document.querySelectorAll("#ribbon .rbar[data-tab='table'] select")]
+            .find((x) => (x.title || "").indexOf("转换成文本") === 0);
+          const cvTabSpanN = () => [...document.querySelectorAll("#view .page span.tab")].filter((x) => !x.closest("table")).length;
+          const cvTables = () => [...document.querySelectorAll("#view .page table.doc-table")];
+          // 新插那一只表只留它在整篇表序里的位置：每按一次命令纸重铺一回，抓在手里的元素当场离开文档。
+          const cvTableAt = (i) => cvTables()[i] ?? null;
+          const cvCaretTable = () => {
+            const n = document.getSelection()?.anchorNode ?? null;
+            const el = n ? (n.nodeType === Node.TEXT_NODE ? n.parentElement : n) : null;
+            return el?.closest("#view .page table.doc-table") ?? null;
+          };
+          const cvPress = (value) => { const el = cvChooser(); if (!el) return 0; el.value = value; el.dispatchEvent(new Event("change")); return 1; };
+          const cvChooserHit = cvChooser() ? 1 : 0;
+          const cvOutDisabled = cvChooser()?.disabled === true ? 1 : 0;
+          const cvOptions = cvChooser()?.options.length ?? 0;
+          const cvHomeValueOut = cvChooser()?.value ?? "";
+          const cvN0 = cvTables().length;
+          const cvTabs0 = cvTabSpanN();
+          const cvTrackStart = revBtn()?.classList.contains("on") ? 1 : 0;
+          const cvInsertBtn = rb("表格");
+          const cvInsertHit = cvInsertBtn ? 1 : 0;
+          cvInsertBtn?.click();
+          await wait(220);
+          const cvPickEl = document.querySelector(".gridpick button[data-c='2'][data-r='2']");
+          const cvPickHit = cvPickEl ? 1 : 0;
+          cvPickEl?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+          await wait(360);
+          const cvTablesIns = cvTables().length;
+          const cvNewIdx = cvTables().indexOf(cvCaretTable());
+          ttPut(cvTableAt(cvNewIdx)?.rows[0]?.cells[0]);
+          await wait(260);
+          const cvCaretSame = cvCaretTable() === cvTableAt(cvNewIdx) ? 1 : 0;
+          const cvNewRows = cvTableAt(cvNewIdx)?.rows.length ?? 0;
+          const cvNewCols = cvTableAt(cvNewIdx)?.rows[0]?.cells.length ?? 0;
+          const cvNewNoJia = cvTableAt(cvNewIdx) ? ((cvTableAt(cvNewIdx).textContent ?? "").indexOf("甲") < 0 ? 1 : 0) : 0;
+          const cvInDisabled = cvChooser()?.disabled === true ? 1 : 0;
+          const cvHomeValue = cvChooser()?.value ?? "";
+          // 上面那几腿（标题行重复末行回绝）留下的浮层四秒后退场：先等它退场，「这一条有没有说话」才问得准。
+          await wait(4300);
+          const cvQuiet = ttNoticeSel();
+          const cvPressHit = cvPress("tab");
+          await wait(460);
+          const cvNotice = ttNoticeSel();
+          const cvTablesAfter = cvTables().length;
+          const cvJiaStill = ttFind() ? 1 : 0;
+          const cvTabsAfter = cvTabSpanN();
+          const cvTabHidden = ttTab("表格工具")?.hidden === true ? 1 : 0;
+          const cvDisabledAfter = cvChooser()?.disabled === true ? 1 : 0;
+          ttUndoKey();
+          await wait(460);
+          const cvUndoTables = cvTables().length;
+          const cvUndoRows = cvTableAt(cvNewIdx)?.rows.length ?? 0;
+          const cvUndoCols = cvTableAt(cvNewIdx)?.rows[0]?.cells.length ?? 0;
+          const cvUndoTabs = cvTabSpanN();
+          const cvTabReShown = ttTab("表格工具")?.hidden === true ? 0 : 1;
+          // 撤回来那一只表站着时才问修订那一条：这一条不改纸，表数与导引线得停在撤销后的读数上。
+          revBtn()?.click();
+          await wait(220);
+          const cvTrackOn = revBtn()?.classList.contains("on") ? 1 : 0;
+          ttPut(cvTableAt(cvNewIdx)?.rows[0]?.cells[0]);
+          await wait(260);
+          const cvRefusePress = cvPress("comma");
+          await wait(420);
+          const cvRefuseNotice = ttNoticeSel();
+          const cvRefuseTables = cvTables().length;
+          const cvRefuseTabs = cvTabSpanN();
+          revBtn()?.click();
+          await wait(200);
+          const cvTrackEnd = revBtn()?.classList.contains("on") ? 1 : 0;
+          ttUndoKey();
+          await wait(460);
+          const cvUndo2Tables = cvTables().length;
+          const cvUndo2Jia = ttFind() ? 1 : 0;
+          const cvUndo2Tabs = cvTabSpanN();
+          await wait(4300);
+          const cvUndoNotice = ttNoticeSel();
           ttCmd = {
             ttTabPresent, ttTabHidden, ttBarHidden, ttBarOpen, ttBtns, ttHit: ttHit ? 1 : 0, ttDisabled, ttNotice,
             ttPxBefore, ttPxAfter, ttWrittenBefore, ttWrittenAfter, ttColsBefore, ttColsAfter, ttTabBackHidden, ttHomeOn, ttInTableAgain,
@@ -1410,6 +1499,12 @@ function smoke(): void {
             rhAfterOn, rhAfterStamped, rhAfterClones, rhNotice, rhUndoStamped, rhUndoOn,
             rhLastStamped, rhLastNotice, rhTrackOn, rhItemsBefore, rhItemsSigned, rhStampedSigned,
             rhItemsUndone, rhStampedUndone, rhTrackEnd,
+            cvChooserHit, cvOptions, cvOutDisabled, cvHomeValueOut, cvN0, cvTabs0, cvTrackStart,
+            cvInsertHit, cvPickHit, cvTablesIns, cvNewIdx, cvCaretSame, cvNewRows, cvNewCols, cvNewNoJia,
+            cvInDisabled, cvHomeValue, cvQuiet, cvPressHit, cvNotice, cvTablesAfter, cvJiaStill, cvTabsAfter,
+            cvTabHidden, cvDisabledAfter, cvUndoTables, cvUndoRows, cvUndoCols, cvUndoTabs, cvTabReShown,
+            cvTrackOn, cvRefusePress, cvRefuseNotice, cvRefuseTables, cvRefuseTabs, cvTrackEnd,
+            cvUndo2Tables, cvUndo2Jia, cvUndo2Tabs, cvUndoNotice,
             ttDirty: (document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0,
           };
         }

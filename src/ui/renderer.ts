@@ -548,7 +548,7 @@ const DOC_RIBBON_TABS: [string, string][] = [
 const TABLE_TOOL_KEYS = [
   "rowAbove", "rowBelow", "colLeft", "colRight", "insertCellKind", "delRow", "delCol", "delTable", "deleteCellKind",
   "mergeCells", "splitCell", "splitTable",
-  "cellHeight", "cellWidth", "distributeCols",
+  "cellHeight", "cellWidth", "distributeRows", "distributeCols",
   "tblTop", "tblMid", "tblBot", "tblLeft", "tblCenter", "tblRight",
   "repeatHeader", "convertTable",
   "selectCell", "selectCol", "selectRow", "selectTable",
@@ -887,7 +887,7 @@ function buildDocRibbon(): void {
   //   · 行与列 ← RB_RowsAndColumns 里的 `TableTools_Insert`（上方/下方插入行、左侧/右侧插入列、Cells…）
   //     与 `Delete` 那档四条（:33-36：单元格、列、行、表格）；
   //   · 合并与拆分 ← RB_Merge 的 Merge Cells / Split Cells / Split Table by Row（按列拆仍是 0 命令）；
-  //   · 单元格尺寸 ← RB_Adjust 的高度/宽度两格（见 `CELL_SIZE_SPINS`）与「分布列」那一枚（`DistributeColumns`）；
+  //   · 单元格尺寸 ← RB_Adjust 的高度/宽度两格（见 `CELL_SIZE_SPINS`）与「分布行」「分布列」那两枚（`DistributeRows` / `DistributeColumns`）；
   //   · 对齐 ← RB_Alignment 的两行六枚（见 `TABLE_ALIGN_BUTTONS`）；
   //   · 数据 ← RB_Data 的「标题行重复」与「转换成文本」；
   //   · 选择 ← TableSelectMenu 的四条。
@@ -960,10 +960,13 @@ function buildDocRibbon(): void {
       echoSpin(ctl[key] as HTMLInputElement, editor?.cellSizeState()?.[dim]);
     });
   }
-  // `RB_Adjust` 组里第三枚：`DistributeColumns`（`CT_TableTools.kuip:54`，`idMso="TableColumnsDistribute"`、
-  // `ksoCmd="DistributeColumns"`），它在 WPS 那条声明里挂在 :58 那枚 `TableAutoAdjust` 清单里（:65 的 `idQ`），
-  // 与上面两格同组。中文措辞仍读不出（`.qm` 那一族按 #195 的口径只有在场、没有可读的字面），所以按钮照
-  // 「单元格尺寸」那两格用自家的话。落下的是**等宽而总和不变**：见 `doc-table-ops.ts:distributeColumns`。
+  // `RB_Adjust` 组里那两枚「分布」：`DistributeRows`（`CT_TableTools.kuip:53`，`idMso="TableRowsDistribute"`）与
+  // `DistributeColumns`（:54，`idMso="TableColumnsDistribute"`），两枚都挂在 :58 那枚 `TableAutoAdjust` 清单里
+  // （:64/:65 的 `idQ`），与上面两格同组，声明序是行在前、列在后。中文措辞仍读不出（`.qm` 那一族按 #195 的口径
+  // 只有在场、没有可读的字面），所以按钮照「单元格尺寸」那两格用自家的话。落下的是**等宽/等高而那一维的和不变**：
+  // 见 `doc-table-ops.ts:distributeColumns` 与 `:distributeRows`。
+  button(sizes, "distributeRows", "分布行", "把选区碰到的那几行摆成等高，表的总高不变（WPS：Distribute Rows Evenly）", () =>
+    tableAction(editor?.distributeRows()));
   button(sizes, "distributeCols", "分布列", "把选区碰到的那几列摆成等宽，表的总宽不变（WPS：Distribute Columns Evenly）", () =>
     tableAction(editor?.distributeColumns()));
 

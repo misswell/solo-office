@@ -570,3 +570,39 @@ export function makeDistributeDocx(): Uint8Array {
     `<w:p><w:r><w:t>表外的一段</w:t></w:r></w:p>`;
   return pack(document);
 }
+
+/**
+ * 「分布行」那四张表（#207），形状按授权 46 份量到的四类各摆一张（`.scratch/row-distribute-audience.py`：
+ * 58 张多行表里 38 张逐行说了 `w:trHeight`、20 张一句没说；说了的 38 张里本来就等高 6 张、和除不尽 24 张；
+ * `w:hRule` 580 枚全说 `atLeast`、`exact` 0 枚；`w:vMerge` 226 枚却没有一行因此没有自己的横边）：
+ *  · `unequal`——4 行 385 / 402 / 647 / 647（和 2,081，除不尽，余 1 缇落在最上那一行），每行都带 `w:hRule="atLeast"`。
+ *    这一组数就是从 `purchase contract.dotm` 那张 4 行表照搬的（385 / 402 / 647 / 647，和 2,081）。
+ *  · `equal`——3 行各 600：本来就等高，那一击在这张表上没活，得回绝且不进撤销栈。
+ *  · `unstated`——3 行一句 `w:trHeight` 也没有（20/58 张就是这一形状）：行高只能从纸上量。
+ *  · `merged`——3 行 200 / 400 / 600（和 1,200，除得尽），左列那两行是一带竖合并：行都有自己那条横边，
+ *    所以哪一行都不该被摘出均分，`w:vMerge` 那两句一个字节不动。
+ */
+export function makeRowDistributeDocx(): Uint8Array {
+  const cell = (label: string, vmerge = ""): string =>
+    `<w:tc><w:tcPr><w:tcW w:w="1500" w:type="dxa"/>${vmerge}</w:tcPr>` +
+    `<w:p><w:r><w:t>${label}</w:t></w:r></w:p></w:tc>`;
+  const row = (h: number | undefined, a: string, b: string, vmerge = ""): string =>
+    `<w:tr>${h === undefined ? "" : `<w:trPr><w:trHeight w:val="${h}" w:hRule="atLeast"/></w:trPr>`}` +
+    `${cell(a, vmerge)}${cell(b)}</w:tr>`;
+  const table = (rows: string): string =>
+    `<w:tbl><w:tblPr><w:tblW w:w="3000" w:type="dxa"/><w:tblLayout w:type="fixed"/></w:tblPr>` +
+    `<w:tblGrid><w:gridCol w:w="1500"/><w:gridCol w:w="1500"/></w:tblGrid>${rows}</w:tbl>`;
+  const document =
+    table(
+      row(385, "甲一", "甲二") +
+        row(402, "乙一", "乙二") +
+        row(647, "丙一", "丙二") +
+        row(647, "丁一", "丁二")) +
+    table(row(600, "戊一", "戊二") + row(600, "己一", "己二") + row(600, "庚一", "庚二")) +
+    table(row(undefined, "辛一", "辛二") + row(undefined, "壬一", "壬二") + row(undefined, "癸一", "癸二")) +
+    table(
+      row(200, "子一", "子二", `<w:vMerge w:val="restart"/>`) +
+        row(400, "", "丑二", `<w:vMerge/>`) +
+        row(600, "寅一", "寅二"));
+  return pack(document);
+}

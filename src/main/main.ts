@@ -1527,6 +1527,72 @@ function smoke(): void {
           ttPut(dcOutPara);
           await wait(260);
           const dcOutDisabled = dcBtn()?.disabled === true ? 1 : 0;
+          // 「分布行」（CT_TableTools.kuip:53 的 DistributeRows，idMso="TableRowsDistribute"，与 :54 那枚
+          // DistributeColumns 同挂 RB_Adjust（:55）、照声明的序排在它**前面**）在装机这只盒子里量六条：
+          // ①光标在带「甲」那只表里时那一枚摆得出、按得动，退到表外时灰着（与同组那三件同一个开关）；
+          // ②状态栏那一格自报「厘米」——下面那一格的字面按 1 厘米 = 567 缇算，单位不是这一档时这条账自己作废；
+          // ③先拿自家的「单元格高度」那一格把光标那一行按**纸上量到的**那条高再撑 600 缇，纸上那几行因此不等，
+          //    这一击才有不等可摆；④按下去每一行摆到同一条高（相邻两行差不到 0.5px），整只盒的高一寸不挪：
+          //    均分把那几行的和留在原地；⑤立刻再按一次——这会儿每行已经一样高，命令该回绝、把理由说在小条上、
+          //    纸上一寸不挪；⑥一次 ⌘Z 退掉的是**第一次**那一击（纸上重新不等、盒回到撑高后那个数），这一条同时是
+          //    「回绝那一次没进撤销栈」的证据：它要是留了一条空步，⌘Z 只会退掉那条空步、均分还挂在纸上；
+          //    再一次 ⌘Z 退掉高度那一格，行高与盒高回到起手——整条撤销收尾，这一腿不许牵动盘上那件的字节账。
+          // 为什么行高要从纸上量而不是从件里那句抄：授权 46 份 58 张表里 20 张一句 w:trHeight 都没说、按行数是
+          // 580 说 / 118 没说（.scratch/row-distribute-audience.py），而说了的那 580 枚全是最小说法（atLeast 580 /
+          // exact 0）——件里那句只是地板，「这一行现在多高」只有铺排答得出。这一件的几行起手一句没说，所以这一腿
+          // 的算式用的全是本趟量到的像素；两趟之间比的只有形状与算式（行数是前面几腿留的账），不是绝对行高。
+          // WPS 真机在悬光标上落哪几行、atLeast 追不上内容时它怎么收尾，均 未取证。
+          const drBtn = () => rb("分布行");
+          const drRowsOf = () => [...(ttFind()?.rows ?? [])]
+            .filter((r) => !r.classList.contains("solo-sheet-gap-row") && !r.classList.contains("solo-repeat-header-row"))
+            .map((r) => Math.round(r.getBoundingClientRect().height * 100) / 100);
+          const drSpread = (a) => (a.length ? Math.round((Math.max(...a) - Math.min(...a)) * 100) / 100 : -1);
+          const drJoin = (a) => a.join(",");
+          const drSum = (a) => Math.round(a.reduce((s, h) => s + h, 0) * 100) / 100;
+          const drBox = () => Math.round((ttFind()?.getBoundingClientRect().height ?? 0) * 100) / 100;
+          ttPut(ttRow0Cell(0));
+          await wait(260);
+          const drTrackStart = revBtn()?.classList.contains("on") ? 1 : 0;
+          const drBtnPresent = drBtn() ? 1 : 0;
+          const drBtnIn = drBtn()?.disabled === true ? 1 : 0;
+          const drUnit = document.querySelector(".solo-doc-status-unit")?.textContent ?? "";
+          const drRows0 = drRowsOf();
+          const drSum0 = drSum(drRows0);
+          const drBox0 = drBox();
+          const drWidenTo = (((drRows0[0] ?? 0) * 15 + 600) / 567).toFixed(3);
+          const drWidenHit = ttType(ttSpin("高度"), drWidenTo);
+          await wait(420);
+          // 浮层四秒退场：上一击那句要是还挂着，「这一击没被回绝」就成了假绿。
+          await wait(4300);
+          const drQuiet = ttNoticeSel();
+          const drRowsW = drRowsOf();
+          const drSumW = drSum(drRowsW);
+          const drBoxW = drBox();
+          const drPress = drBtn() && drBtn().disabled !== true ? (drBtn().click(), 1) : 0;
+          await wait(460);
+          const drRowsAfter = drRowsOf();
+          const drSumAfter = drSum(drRowsAfter);
+          const drBoxAfter = drBox();
+          const drAfterNotice = ttNoticeSel();
+          const drPress2 = drBtn() && drBtn().disabled !== true ? (drBtn().click(), 1) : 0;
+          await wait(460);
+          const drRefuseNotice = ttNoticeSel();
+          const drRowsRefuse = drRowsOf();
+          const drBoxRefuse = drBox();
+          ttUndoKey();
+          await wait(460);
+          const drRowsUndo1 = drRowsOf();
+          const drSumUndo1 = drSum(drRowsUndo1);
+          const drBoxUndo1 = drBox();
+          ttUndoKey();
+          await wait(460);
+          const drRowsUndo2 = drRowsOf();
+          const drBoxUndo2 = drBox();
+          const drSpreadUndo2 = drSpread(drRowsUndo2);
+          const drOutPara = [...document.querySelectorAll("#view .para")].find((el) => !el.closest("table"));
+          ttPut(drOutPara);
+          await wait(260);
+          const drOutDisabled = drBtn()?.disabled === true ? 1 : 0;
           ttCmd = {
             ttTabPresent, ttTabHidden, ttBarHidden, ttBarOpen, ttBtns, ttHit: ttHit ? 1 : 0, ttDisabled, ttNotice,
             ttPxBefore, ttPxAfter, ttWrittenBefore, ttWrittenAfter, ttColsBefore, ttColsAfter, ttTabBackHidden, ttHomeOn, ttInTableAgain,
@@ -1574,6 +1640,13 @@ function smoke(): void {
             dcPress2, dcRefuseNotice, dcColsRefuse: dcJoin(dcColsRefuse), dcBoxRefuse,
             dcColsUndo1: dcJoin(dcColsUndo1), dcSpreadUndo1: dcSpread(dcColsUndo1), dcBoxUndo1,
             dcColsUndo2: dcJoin(dcColsUndo2), dcSpreadUndo2, dcBoxUndo2, dcTablesEnd,
+            drBtnPresent, drBtnIn, drOutDisabled, drTrackStart, drUnit, drWidenHit, drWidenTo,
+            drRows0: drJoin(drRows0), drSpread0: drSpread(drRows0), drSum0, drBox0,
+            drRowsW: drJoin(drRowsW), drSpreadW: drSpread(drRowsW), drSumW, drBoxW,
+            drQuiet, drPress, drRowsAfter: drJoin(drRowsAfter), drSpreadAfter: drSpread(drRowsAfter), drSumAfter, drBoxAfter, drAfterNotice,
+            drPress2, drRefuseNotice, drRowsRefuse: drJoin(drRowsRefuse), drBoxRefuse,
+            drRowsUndo1: drJoin(drRowsUndo1), drSpreadUndo1: drSpread(drRowsUndo1), drSumUndo1, drBoxUndo1,
+            drRowsUndo2: drJoin(drRowsUndo2), drSpreadUndo2, drBoxUndo2,
             ttDirty: (document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0,
           };
         }

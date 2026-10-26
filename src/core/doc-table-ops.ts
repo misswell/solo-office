@@ -1,5 +1,6 @@
 import { childSpans, elementContent } from "./opc.js";
-import type { Block, Inline, Paragraph, Table, TableCell } from "./docx.js";
+import { rowShapeOf, syncRowHeight } from "./docx.js";
+import type { Block, Inline, Paragraph, PropSlot, RowInfo, RowStyle, Table, TableCell } from "./docx.js";
 
 /**
  * The table commands WPS' 表格工具栏 has and this editor did not: insert or delete a row or a column,
@@ -487,6 +488,92 @@ export function restateColumnFromCells(t: Table, at: number): boolean {
   widths[at] = first;
   setGrid(t, widths, restateCarriedGrid(gridCarried(t), at, first));
   return true;
+}
+
+// ------------------------------------------------------------------- 行高
+
+/**
+ * 「分布行」那一击的答：哪几行该换成哪个数（行号 + 目标缇数），或这几行为什么摆不成等高。
+ * 落笔留给拿笔的那一层——行高写的是行自己那句 `w:trPr/w:trHeight`，签不签修订、按谁的署名，这里一概不知道。
+ */
+export type RowHeightPlan = { ok: true; rows: { at: number; twips: number }[] } | { ok: false; reason: string };
+
+/** 这一行自己说了多高（`w:trHeight`）；一句没说的行没有这句，也就没有「已经说了这个数」可言。 */
+const rowStatedHeight = (t: Table, at: number): number | undefined => t.rows[at]?.[0]?.row?.heightTwips;
+
+/**
+ * 「分布行」那一击（WPS `CT_TableTools.kuip:53` 的 `DistributeRows`，`idMso="TableRowsDistribute"`，与 :54 那枚
+ * `DistributeColumns` 同一组、排在它前面）：把碰到的那几行摆成**等高**，而这几行原来的和一缇不少地留在原地——
+ * 行高是逐行说的，表的高本来就是行叠出来的，所以这一击没有第二句字节要重述（列那一击的 `w:tblW` 才需要）。
+ *
+ * 除不尽时多出来的那几缇按行序从**上**往下每行一缇，与列同一条算式：授权 46 份里 38 张逐行说了行高的表 24 张
+ * 和除不尽（`.scratch/row-distribute-audience.py` ③），而那一批 `w:trHeight` 0 枚非整数字面（⑤）、0 枚 `w:val="0"`
+ * ——按整数分下去的和与原来的和一字不差，余数是主路而不是边角。
+ *
+ * **要吃进纸上的高度**：`w:trHeight` 只是地板（`w:hRule` 580 枚全说 `atLeast`、`exact` 0 枚，④），一格内容比它高
+ * 时纸上画的是内容那一截；而 58 张表里 20 张一行都没说（②，按行 580 说了 / 118 没说，同表混合 0 张）——那 118 行
+ * 在件里说不出自己多高。所以「这几行现在各多说高」只能问铺排（`doc-edit.ts` 逐行量 `getBoundingClientRect()`），
+ * 本函数按那份读数算，不问也不编。量不出来的行（0 高、`w:hidden`、纸还没铺上）从均分里**摘出去**：把它的份按 0
+ * 记进和，等于替它编一个说得出数的假高度，剩下的行摆齐是诚实的；全摘光、或摘得只剩一行时回绝——等高要有两行才谈得上。
+ *
+ * 竖合并那一族不需要摘：`w:vMerge` 有 226 枚受众，但**一格都不自成一行**的行 0 行、含这样一行的表 0 张（⑥）——
+ * 每一行都有自己那条横边，而这一击写的是行自己那句，不像列会踩到「几列之和」。
+ *
+ * 纸上已经一样高时整击回绝（不进撤销栈，也不替没说过高度的行补字节）；纸不等时，自己已经说了目标那个数的那一行
+ * 不落笔——那一行本来就站在原地。
+ */
+export function distributeRows(t: Table, rows: number[], onPaper: number[]): RowHeightPlan {
+  const touched = [...new Set(rows.filter((at) => at >= 0 && at < t.rows.length))].sort((a, b) => a - b);
+  if (!touched.length) return { ok: false, reason: "这一行不在表格里" };
+  const measured = new Map<number, number>();
+  rows.forEach((at, i) => {
+    const h = onPaper[i];
+    if (Number.isFinite(h) && h > 0) measured.set(at, Math.round(h));
+  });
+  const work = touched.filter((at) => measured.has(at));
+  if (!work.length) return { ok: false, reason: "这几行在纸上量不出高度" };
+  if (work.length < 2) return { ok: false, reason: "量得出高度的只剩一行，等高要有两条边" };
+  const heights = work.map((at) => measured.get(at)!);
+  const sum = heights.reduce((n, h) => n + h, 0);
+  // 「已经等高」要按**纸上**判，不能按件里那句判：那 118 行一句 `w:trHeight` 都没说（②），纸上都一样高的时候
+  // 这一击在纸上没有活，替它们逐行补一句字节是无中生有；反过来纸上不等、件里那句已经正好是目标数的行，
+  // 才由下面那道「说了同一个数就不落笔」的筛子摘出去。
+  if (new Set(heights).size === 1) return { ok: false, reason: "这几行已经是等高" };
+  const base = Math.floor(sum / work.length);
+  const extra = sum - base * work.length;
+  const plan = work.map((at, i) => ({ at, twips: base + (i < extra ? 1 : 0) }));
+  const changed = plan.filter((p) => rowStatedHeight(t, p.at) !== p.twips);
+  if (!changed.length) return { ok: false, reason: "这几行已经是等高" };
+  return { ok: true, rows: changed };
+}
+
+/** 一行落笔后带回来的东西：改完仍站在原地的那个 `RowInfo`，加上动笔**之前**那一套属性与孩子——签 `w:trPrChange` 按的就是这一份。 */
+export type RowHeightMove = { info: RowInfo; was: RowStyle; wasSlots: PropSlot[] };
+
+/**
+ * 把「分布行」的答写进行自己那句 `w:trPr/w:trHeight`。这里管三件只有落笔的人才知道的事：
+ *  · **行没有自己的对象**——一行的格子共用一枚 `RowInfo`，编辑器自己造的行还没有那一枚，先补出来再挂到每一格上
+ *    （与 `setCellHeight` 同一形状），否则写完只有第一格认得新数。
+ *  · **`w:hRule` 按行自己原来的说法写**：授权 46 份 580 枚全说 `atLeast`、`exact` 0 枚（④），原来没说的补
+ *    `atLeast`——在这一击里发明 `exact` 就是替件编一种它从没用过的行。
+ *  · **改前那一套在动笔之前抄走**：签名归拿笔的那一层（`w:id` 与作者在那儿），这里只把参照交出去。
+ */
+export function applyRowHeights(t: Table, plan: { at: number; twips: number }[]): RowHeightMove[] {
+  const moved: RowHeightMove[] = [];
+  for (const p of plan) {
+    const cells = t.rows[p.at];
+    if (!cells?.length) continue;
+    let info = cells[0]!.row;
+    if (!info) {
+      info = {};
+      for (const cell of cells) cell.row = info;
+    }
+    const was = rowShapeOf(info);
+    const wasSlots = info.slots ?? [];
+    syncRowHeight(info, p.twips, info.heightRule ?? "atLeast");
+    moved.push({ info, was, wasSlots });
+  }
+  return moved;
 }
 
 // ------------------------------------------------------- carried property sets

@@ -3,7 +3,7 @@ import type { CommentAnchor, DocComment } from "../core/comments.js";
 import { bodyShape, commentTexts } from "../core/comments.js";
 import { DEFAULT_SECTION, EAST_ASIAN_TEXT, MARGIN_SIDES, RUN_STYLE_KEYS, applyFacePick, applyRunPatch, borderDelta, carriedShape, cellShapeOf, countTexts, lineGridPitchTwips, ownParaStyle, ownRunStyle, paraSpacingPitch, paraStyleOf, paragraphTextsOf, rowShapeOf, runStyleOf, samePropValue, sectionEndsOf, signCellPlaceRevision, signCellRevision, signRowRevision, signTableRevision, stampNow, syncCellBox, syncCellVAlign, syncParaSlots, syncRowHeader, syncRowHeight, syncTableBox, syncTableProps, tableShapeOf, twipsToPx } from "../core/docx.js";
 import type { CellWhere, TableEdit } from "../core/doc-table-ops.js";
-import { allCells, cellOuterSides, cellRangeFor, cellRect, columnCells, cellsInRect, cellsInSweep, deleteCellHere, deleteColumnHere, deleteRowHere, deleteTableBlock, distributeColumns, gridColumns, gridWidths, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, setColumnWidth, splitHere, splitTableAt, tableToText, type TableTextSeparator } from "../core/doc-table-ops.js";
+import { allCells, applyRowHeights, cellOuterSides, cellRangeFor, cellRect, columnCells, cellsInRect, cellsInSweep, deleteCellHere, deleteColumnHere, deleteRowHere, deleteTableBlock, distributeColumns, distributeRows, gridColumns, gridWidths, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, setColumnWidth, splitHere, splitTableAt, tableToText, type RowHeightMove, type TableTextSeparator } from "../core/doc-table-ops.js";
 import { IMAGE_EXT_BY_MIME } from "../core/media.js";
 import { BAND_SOURCE_CLASS, CARRY_CLASS, CARRY_STYLE, BAND_MASTER_CLASS, PAGE_BORDER_CLASS, RUN_CARRY_CLASS, type RevisionView, fontStack, highlightColor, renderWord } from "../core/render.js";
 import { flatOf, inlineLength, isMark, keepRunIdentity } from "../core/run-identity.js";
@@ -98,6 +98,9 @@ const boldWeight = (weight: string): boolean | undefined => {
   return Number.isFinite(n) ? n >= 600 : undefined;
 };
 
+/** 96dpi 下 CSS 的一像素换多少缇（1440/96）：`cssToTwips` 与「从纸上量回来的行高」两条腿共用这一个换算。 */
+const TWIPS_PER_PX = 1440 / 96;
+
 /**
  * CSS 长度回缇。渲染器把字距写成 `pt`，而 Blink 在别处会把同一个声明交回 `px`（96dpi 下 1px = 1440/96 = 15 缇）。
  * 认不出的单位当「没说」：把读不回来的数值抵成 0，就是替文件撤掉它自己写过的字距。
@@ -106,7 +109,7 @@ const cssToTwips = (value: string): number | undefined => {
   const n = Number.parseFloat(value);
   if (!Number.isFinite(n)) return undefined;
   if (value.endsWith("pt")) return Math.round(n * 20);
-  if (value.endsWith("px")) return Math.round(n * 15);
+  if (value.endsWith("px")) return Math.round(n * TWIPS_PER_PX);
   return undefined;
 };
 
@@ -3904,7 +3907,7 @@ export class DocEditor {
     const caret = this.caretPath();
     const segments = this.selectionTableSegments();
     if (!segments.length) return { ok: false, reason: "光标不在表格里" };
-    const hits: { info: RowInfo; was: RowStyle; wasSlots: PropSlot[] }[] = [];
+    const hits: RowHeightMove[] = [];
     const seen = new Set<RowInfo>();
     for (const segment of segments) {
       for (const where of segment.cells) {
@@ -4105,6 +4108,71 @@ export class DocEditor {
         const back = was.get(cell);
         if (back) signCellRevision(cell, sign, back.shape, back.xml);
       }
+    }
+    this.repaintWithSelection(caret);
+    return { ok: true };
+  }
+
+  /**
+   * 「分布行」那一击（WPS `CT_TableTools.kuip:53` 的 `DistributeRows`，`idMso="TableRowsDistribute"`，与 :54 那枚
+   * `DistributeColumns` 同一组、排在它前面）：选区碰到哪几行就把那几行摆成等高，跨表选区逐张表各摆自己那几行。
+   * 光标只悬在一格上、或选区只碰到一行时摆的是**整张表**的每一行——一行没有「均分」可言，与列那一击同一条读法；
+   * WPS 真机在悬光标上落哪几行**未取证**（首启同意页仍未过），这一条按命令自己那句话定。
+   *
+   * 比列多出来的一条腿是**先问纸**：`w:trHeight` 只是地板（授权 46 份 580 枚全说 `atLeast`、`exact` 0 枚，
+   * `.scratch/row-distribute-audience.py` ④），内容比它高时纸上画的是内容那一截；而 58 张表里 20 张一行都没说
+   * （按行 118/698 没说、同表混合 0 张，②）——那些行在件里说不出自己多高，只有铺排给得出。量的口径与
+   * `doc-layout.ts:1700` 同一份：`getBoundingClientRect()` 报的是**视口像素**，纸盒带 `zoom` 时先除回去再按
+   * 96dpi 换缇（`TWIPS_PER_PX`）；页缝垫的那一行与续页重画的标题行不是表的一枚行（`rowsOf` 已经撇掉它们）。
+   * 量不到的那一行由 `distributeRows` 从均分里**摘出去**：把它的份按 0 记进和，等于替一件什么都没说的行编一个
+   * 高度，摆出来的「等高」是假的——剩下的行摆齐、或一句回绝，都比它诚实。
+   *
+   * 落笔与「单元格高度」同一出口：逐行写它自己那句 `w:trHeight`（规则跟着行原本那句走，没说时 `atLeast`），
+   * 整击签**一枚** `w:id`。补 `RowInfo`、抄改前那一套、写字节都在 core 的 `applyRowHeights` 里，这一层只把纸上的
+   * 读数递下去、把交回来的参照签上。
+   */
+  distributeRows(): TableCommandAnswer {
+    const caret = this.caretPath();
+    const segments = this.selectionTableSegments();
+    if (!segments.length) return { ok: false, reason: "光标不在表格里" };
+    const scope = new Map<Table, { prefix: number[]; rows: Set<number> }>();
+    for (const segment of segments) {
+      let hit = scope.get(segment.table);
+      if (!hit) scope.set(segment.table, (hit = { prefix: segment.prefix, rows: new Set<number>() }));
+      for (const where of segment.cells) {
+        const rect = cellRect(segment.table, where);
+        if (!rect) continue;
+        for (let r = rect.r0; r < rect.r1; r += 1) hit.rows.add(r);
+      }
+    }
+    if (!scope.size) return { ok: false, reason: "光标不在表格里" };
+    const zoom = this.zoomLevel || 1;
+    const plans = new Map<Table, { at: number; twips: number }[]>();
+    let reason: string | undefined;
+    for (const [table, hit] of scope) {
+      if (!hit.rows.size) continue;
+      if (hit.rows.size === 1) for (let r = 0; r < table.rows.length; r += 1) hit.rows.add(r);
+      const at = [...hit.rows].sort((a, b) => a - b);
+      const el = this.elementAt(hit.prefix);
+      const trs = el && el.tagName === "TABLE" ? rowsOf(el) : [];
+      const onPaper = at.map((r) => Math.round(((trs[r]?.getBoundingClientRect().height ?? 0) / zoom) * TWIPS_PER_PX));
+      const out = distributeRows(table, at, onPaper);
+      if (!out.ok) {
+        reason ??= out.reason;
+        continue;
+      }
+      plans.set(table, out.rows);
+    }
+    if (!plans.size) return { ok: false, reason: reason ?? "这几行的高度摆不齐" };
+    this.snapshot(caret);
+    // 落笔归 core（`applyRowHeights`：补 `RowInfo`、按行原本的 `w:hRule` 写、把改前那一套交回来），这里只拿着
+    // 那一份参照签**一枚** `w:id`——一次落笔在件里是一枚签名挂在碰到的每一行上。
+    const moved: RowHeightMove[] = [];
+    for (const [table, rows] of plans) moved.push(...applyRowHeights(table, rows));
+    if (this.trackRevisions) {
+      this.revSeq += 1;
+      const sign = { id: this.revSeq, author: this.authorName, date: stampNow() };
+      for (const m of moved) signRowRevision(m.info, sign, m.was, m.wasSlots);
     }
     this.repaintWithSelection(caret);
     return { ok: true };

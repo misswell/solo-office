@@ -314,3 +314,17 @@ export function makeCharSpacingDocx(): Uint8Array {
 <w:p><w:r><w:rPr><w:spacing w:val="-6"/><w:rPrChange ${REV(31, "顾峰")}><w:rPr><w:spacing w:val="82"/><w:sz w:val="24"/></w:rPr></w:rPrChange></w:rPr><w:t>改过字距的字</w:t></w:r></w:p>`;
   return pack(document, SPACING_STYLES);
 }
+
+/**
+ * 字号框那一格（#221）：三段各说一种起始态，正好对上 WPS `fontSizeList` 的三种落点——
+ * 号1 自己写了 `w:sz 29`（14.5 磅，**不在那 21 档里**，框要照文件说 14.5）；
+ * 号2 什么都没说（框空着，那就是「没提过」）；号3 写了 `w:sz 24`（12 磅，档上第 10 档）。
+ * 三种起始态都是授权口径里真出现过的形状：`w:sz` 的 134 枚落在 9/15/22/26/42 磅上都不在旧清单里，
+ * 而 `w:sz` 与 `w:szCs` 成对写的形状是这批件的主流。
+ */
+export function makeSizeBoxDocx(): Uint8Array {
+  const document = `<w:p><w:r><w:rPr><w:sz w:val="29"/><w:szCs w:val="29"/></w:rPr><w:t>号1 自己写了十四点五磅的</w:t></w:r></w:p>
+<w:p><w:r><w:t>号2 什么都没说的</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:sz w:val="24"/><w:szCs w:val="24"/></w:rPr><w:t>号3 自己写了十二磅的</w:t></w:r></w:p>`;
+  return pack(document);
+}

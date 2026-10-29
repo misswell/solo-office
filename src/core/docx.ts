@@ -4518,6 +4518,18 @@ const entryType = (rev: Revision): "insert" | "delete" | "move-from" | "move-to"
  */
 export const hasLine = (underline?: string): boolean => underline !== undefined && underline !== "none";
 
+/**
+ * 字号框里打进来的那个数：`w:sz` 数的是**半点**（`ST_HpsMeasure`，§17.18.60），所以落笔前先取到半点上——
+ * 13.7 在件里只能说成 13.5，框里也就不该留着 13.7。只认十进制数（`10.5`、`12`）；不是数、不到半个点、
+ * 或超过 1638 磅（Word 界面那一格的上限；WPS 的上限未取证）一律不认，交回 `undefined`，调用方据此不落笔。
+ */
+export function parseSizePt(text: string): number | undefined {
+  const t = text.trim();
+  if (!/^\d+(?:\.\d+)?$/.test(t)) return undefined;
+  const pt = Math.round(Number(t) * 2) / 2;
+  return pt >= 0.5 && pt <= 1638 ? pt : undefined;
+}
+
 export const RUN_STYLE_KEYS: (keyof RunStyle)[] = ["bold", "italic", "underline", "strike", "sizePt", "color", "highlight", "font", "fontEastAsia", "vertAlign", "charSpacingTwips"];
 
 /**

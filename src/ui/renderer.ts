@@ -1,5 +1,5 @@
 import { Spreadsheet } from "../core/xlsx.js";
-import { LINE_ONE, WordDocument, type PageSetup, type Section } from "../core/docx.js";
+import { LINE_ONE, parseSizePt, WordDocument, type PageSetup, type Section } from "../core/docx.js";
 import { Presentation } from "../core/pptx.js";
 import { OpcPackage } from "../core/opc.js";
 import { writeXlsx } from "../core/write.js";
@@ -282,7 +282,14 @@ const NUMFMTS: [string, string][] = [
 ];
 
 const SIZES = [9, 10, 11, 12, 14, 18, 24, 36];
-const DOC_SIZES = [10, 10.5, 12, 14, 16, 18, 24, 36];
+/**
+ * 字号下拉那 21 档：`CT_TableTools.kuip` 的 `KxWpsFontSizeComboBoxCommand` 逐字写着
+ * `fontSizeList="@5;5.5;6.5;7.5;8;9;10;10.5;11;12;14;16;18;20;22;26;28;36;48;56;72"`，
+ * 开始页（`CT_Home.kuip` 的 `<command idQ="FontSize"/>`）、段落（`CT_Paragraph.kuip`）、正文（`CT_TextTool.kuip`）、
+ * 绘图工具与表格工具页的每一处声明都是同一串。旧清单里的 24 与 42 两档不在这一串里，已按 WPS 切掉。
+ * 这一串管的是**下拉**；框本身是 ComboBox（类名如此），能打别的数，见 `parseSizePt` 与 `sizeBox`。
+ */
+const DOC_SIZES = [5, 5.5, 6.5, 7.5, 8, 9, 10, 10.5, 11, 12, 14, 16, 18, 20, 22, 26, 28, 36, 48, 56, 72];
 const DECK_SIZES = [12, 14, 16, 18, 20, 24, 28, 32, 40, 44];
 
 /**
@@ -531,6 +538,22 @@ function fillFaceList(): void {
       return o;
     }),
   );
+}
+
+/** 字号框的下拉数据源：WPS 那份 `fontSizeList` 的 21 档。静态清单，不在聚焦时重算——它不随文档变。 */
+const SIZES_ID = "doc-sizes";
+function sizeList(): void {
+  if (document.getElementById(SIZES_ID)) return;
+  const list = document.createElement("datalist");
+  list.id = SIZES_ID;
+  list.replaceChildren(
+    ...DOC_SIZES.map((n) => {
+      const o = document.createElement("option");
+      o.value = String(n);
+      return o;
+    }),
+  );
+  document.body.append(list);
 }
 
 /** WPS 自己声明的那条 tab 条（`res/wpsongmani.kui:113-162`，`<KRbTabWidgetCommand>` 的孩子按序排）。 */
@@ -786,7 +809,37 @@ function buildDocRibbon(): void {
   };
   const faceBox = faceInput("font", 130);
   font.append(faceBox);
-  chooser(font, "size", "字号", DOC_SIZES.map((s): [string, string] => [String(s), String(s)]), (v) => style({ sizePt: Number(v) }));
+  /**
+   * 字号那一格在 WPS 里是 `KxWpsFontSizeComboBoxCommand`：下拉是 `fontSizeList` 那 21 档，框本身还能打字。
+   * 所以这里不是 `<select>` 而是 `input[list]`——`datalist` 给 21 档、键入别的磅数照样落笔（按半点取整，
+   * 见 `parseSizePt`）。「能打字」是照 ComboBox 这个类名推的，WPS 真机那一格的手感未取证。
+   * 打进来的不是磅数就不落笔，框退回这份文件此刻说的那个数：替它编一个数就是往件里写字。
+   */
+  const sizeBox = (key: string): HTMLInputElement => {
+    const box = document.createElement("input");
+    box.type = "text";
+    box.className = "sizebox";
+    box.title = "字号";
+    box.placeholder = "字号";
+    box.inputMode = "decimal";
+    box.autocomplete = "off";
+    // 21 档是静态清单、不随文档变，所以建框时就把 datalist 摆好：等聚焦那一下再挂，`list` 属性在聚焦前指的
+    // 是一个还不存在的 id（读端量 DOM 也只看到空下拉）。
+    sizeList();
+    box.setAttribute("list", SIZES_ID);
+    box.onchange = () => {
+      const pt = parseSizePt(box.value);
+      if (pt === undefined) {
+        box.value = sizeEcho();
+        return;
+      }
+      box.value = String(pt);
+      style({ sizePt: pt });
+    };
+    ctl[key] = box;
+    return box;
+  };
+  font.append(sizeBox("size"));
   swatch(font, "color", "字体颜色", "#c00000", (v) => style({ color: v }));
   chooser(
     font,
@@ -992,7 +1045,7 @@ function buildDocRibbon(): void {
   // `markState()` 一份读数喂两页的框），WPS 那边也是同一枚 `ksoCmd` 挂在两处。
   const tableFont = group("table");
   tableFont.append(faceInput("tblFace", 112));
-  chooser(tableFont, "tblSize", "字号", DOC_SIZES.map((s): [string, string] => [String(s), String(s)]), (v) => style({ sizePt: Number(v) }));
+  tableFont.append(sizeBox("tblSize"));
   button(tableFont, "tblBold", "粗", "加粗 ⌘B", () => style({ bold: !editor?.markState().bold }));
   button(tableFont, "tblItalic", "斜", "斜体 ⌘I", () => style({ italic: !editor?.markState().italic }));
   button(tableFont, "tblUnder", "线", "下划线 ⌘U", () => style({ underline: editor?.markState().underline ? "none" : "single" }));
@@ -1295,7 +1348,7 @@ function syncDocRibbon(force = false): void {
     if (!inTable && tableTab.shown() === "table") tableTab.show("home");
   }
   for (const key of TABLE_TOOL_KEYS) {
-    const b = ctl[key] as HTMLButtonElement | HTMLSelectElement | undefined;
+    const b = ctl[key] as HTMLButtonElement | HTMLSelectElement | HTMLInputElement | undefined;
     if (b) b.disabled = !inTable;
   }
   mark("bullet", state?.list === "bullet");
@@ -1329,10 +1382,12 @@ function syncDocRibbon(force = false): void {
     const box = ctl[key] as HTMLInputElement | undefined;
     if (box && (force || document.activeElement !== box)) box.value = state?.font ?? "";
   }
-  const pt = state?.sizePt;
+  // 字号框是可打字的 `input`，不是 `<select>`：说不出就打空（「没提过」），说得出来就摆文件那个数——
+  // 摆 13.5 还是 13.5，不摆最近的一档预设（那会给这段字安一个它没写过的尺寸）。`undefined` 与「空框」同一句话。
+  // 正在打字的那一格不刷（与字体框同一条礼节）：刷了就吃掉用户打到一半的数。
   for (const key of ["size", "tblSize"]) {
-    const s = ctl[key] as HTMLSelectElement | undefined;
-    if (s) echoChoice(s, pt === undefined ? undefined : String(pt), DOC_SIZES.map(String), DOC_SIZES.filter((n) => n < (pt ?? 0)).length);
+    const box = ctl[key] as HTMLInputElement | undefined;
+    if (box && (force || document.activeElement !== box)) box.value = state?.sizePt === undefined ? "" : String(state.sizePt);
   }
   // Three sentences the file could have written — 没提过底色 / 提了「没有」 / 提了某个颜色名 — three readings of
   // the box. Leaving it blank is the first, and only the `none` option spells the second.
@@ -1403,6 +1458,12 @@ function echoSpin(box: HTMLInputElement, twips: number | undefined): void {
   const want = twips === undefined ? "" : twipText(twips);
   box.value = want;
   box.dataset.echo = want;
+}
+
+/** 字号框此刻该显示的那一句：光标所在那枚 run 说的磅数；说不出就是空（「没提过」），不替它编一个数。 */
+function sizeEcho(): string {
+  const pt = editor?.markState().sizePt;
+  return pt === undefined ? "" : String(pt);
 }
 
 /**

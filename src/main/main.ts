@@ -413,7 +413,7 @@ function smoke(): void {
         // 必须同顶同高。量的是一只盒子的两条边，报的是「对不对齐」和宽度，不报文档里的任何东西。
         // 这一腿会咬：把 applyStyle 开头那条「读不出正文位置就先把选区放回页面」的恢复拿掉，真实壳里回的是
         // fontBoxSpans=0、fontBoxEcho=0（用户看到的就是那次彻底的静默），装回来才是 1、1。
-        const sizeBox = document.querySelector("#ribbon select.pick");
+        const sizeBox = document.querySelector("#ribbon input.sizebox");
         const faceRect = faceBox?.getBoundingClientRect();
         const sizeRect = sizeBox?.getBoundingClientRect();
         const ribbonPair = faceRect && sizeRect && Math.abs(faceRect.top - sizeRect.top) < 0.5 && Math.abs(faceRect.height - sizeRect.height) < 0.5 && Math.round(faceRect.width) === 130 ? 1 : 0;
@@ -1710,12 +1710,13 @@ function smoke(): void {
           const tfGroups = [...document.querySelectorAll("#ribbon .rbar[data-tab='table'] .grp")];
           const tfGroupIdx = tfGroups.findIndex((g) => [...g.querySelectorAll("button")].map((b) => b.textContent).join("|") === "粗|斜|线");
           const tfGroup = tfGroupIdx < 0 ? null : tfGroups[tfGroupIdx];
-          const tfCtlN = tfGroup ? tfGroup.querySelectorAll(".facebox,.pick,.rb,.swatch").length : -1;
+          const tfCtlN = tfGroup ? tfGroup.querySelectorAll(".facebox,.sizebox,.pick,.rb,.swatch").length : -1;
           const tfFaceW = tfFaceNow() ? Math.round(tfFaceNow().getBoundingClientRect().width) : -1;
           const tfPrevDist = tfGroupIdx > 0 && [...tfGroups[tfGroupIdx - 1].querySelectorAll("button")].some((b) => b.textContent === "分布行") ? 1 : 0;
           const tfNextAlign = tfGroupIdx >= 0 && tfGroupIdx + 1 < tfGroups.length &&
             [...tfGroups[tfGroupIdx + 1].querySelectorAll("button")].map((b) => b.textContent).join("|") === "↑|↕|↓|左|中|右" ? 1 : 0;
-          const tfSel = (label) => [...document.querySelectorAll("#ribbon .rbar[data-tab='table'] select")].find((s) => s.title === label);
+          // 字号那一格 #221 起是 ComboBox（input.sizebox 带 datalist），不再是 select；其余几格照旧。
+          const tfSel = (label) => [...document.querySelectorAll("#ribbon .rbar[data-tab='table'] select, #ribbon .rbar[data-tab='table'] input.sizebox")].find((s) => s.title === label);
           const tfNatural = tfBar?.scrollWidth ?? -1;
           const tfVisible = tfBar?.clientWidth ?? -1;
           const tfRoverPresent = document.querySelector("#ribbon .rover") ? 1 : 0;
@@ -1765,7 +1766,7 @@ function smoke(): void {
             sel.dispatchEvent(new Event("change", { bubbles: true }));
             return 1;
           };
-          const tfHomeSel = (label) => [...document.querySelectorAll("#ribbon .rbar[data-tab='home'] select")].find((s) => s.title === label);
+          const tfHomeSel = (label) => [...document.querySelectorAll("#ribbon .rbar[data-tab='home'] select, #ribbon .rbar[data-tab='home'] input.sizebox")].find((s) => s.title === label);
           // 两页那枚「字体颜色」色板（CT_Home.kuip:108 与 CT_TableTools.kuip:147 同一条 ksoCmd）。
           const tfColorBox = () => document.querySelector("#ribbon .rbar[data-tab='table'] input.swatch[title='字体颜色']");
           const tfHomeColorBox = () => document.querySelector("#ribbon .rbar[data-tab='home'] input.swatch[title='字体颜色']");
@@ -2547,6 +2548,151 @@ function smoke(): void {
             pages: document.querySelectorAll("#view .page").length,
           };
         }
+        // #221：字号框在装机这只壳里走一趟。那一格在 WPS 里是 ComboBox（KxWpsFontSizeComboBoxCommand，
+        // fontSizeList 21 档、fixedWidth="60"）：下拉只列那 21 档，而框里还能打字。这一腿问四件事——
+        // 下拉是不是那 21 档（24/42 不在）、框与同一对里的字体框同顶同高且宽 60、三段各摆一种起始态
+        // （号1 自己说 14.5 不在档上 / 号2 什么都没说框空着 / 号3 自己说 12），打进来的数按半点落笔。
+        // 每一步只在「此刻还不是那个数」时敲一次，所以第二趟起手盘上已经是这一句，一敲也不打。
+        const sizeDoc = (document.getElementById("title")?.textContent ?? "").includes("字号框");
+        let sizeLeg = null;
+        if (sizeDoc) {
+          const szPara = (needle) => [...document.querySelectorAll("#view .page .para")].find((x) => (x.textContent ?? "").includes(needle));
+          const szBox = () => document.querySelector("#ribbon .rbar[data-tab='home'] input.sizebox");
+          const szTwin = () => document.querySelector("#ribbon .rbar[data-tab='table'] input.sizebox");
+          const szFace = () => document.querySelector("#ribbon .rbar[data-tab='home'] input.facebox");
+          const szPut = (needle) => {
+            const el = szPara(needle);
+            if (!el) return 0;
+            // 按**文字节点**两端铺选区（与真人拖选落下的形状一样）：markState 从选区起点那一枚节点往上问字号，
+            // 起在 .para 上就问不到 run 自己那一句（它在那枚 span 上，不在段上）。
+            // 认的是**装着这几个字的那一枚节点**，不是段里的第一枚：前几腿会给末段点一颗列表符号，段头先多出
+            // 一枚 .bullet，从第一枚文字起选，问到的就是符号那一格，不是这段字自己穿的字号。
+            const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+            let node = null;
+            for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+              if ((n.textContent ?? "").includes(needle)) {
+                node = n;
+                break;
+              }
+            }
+            if (!node) return 0;
+            const r = document.createRange();
+            r.setStart(node, 0);
+            r.setEnd(node, (node.textContent ?? "").length);
+            const s = document.getSelection();
+            s?.removeAllRanges();
+            if (s) s.addRange(r);
+            el.closest(".page")?.focus?.();
+            document.dispatchEvent(new Event("selectionchange"));
+            return 1;
+          };
+          // 回显由 selectionchange 那一趟刷，而框自己还捏着焦点时它不写（正在打字那格不动）——先 blur 再问。
+          const szEcho = (needle) => {
+            szBox()?.blur();
+            szPut(needle);
+            return szBox()?.value ?? "?";
+          };
+          // 纸上量的是那枚文字所在元素的 computed 字号（pt 折成 px 是 4/3，13.5pt → 18px）：与 markState 问的是
+          // 同一处——装着这几个字的那枚文字节点往上的第一枚元素（不是段头那颗列表符号）。
+          const szPx = (needle) => {
+            const el = szPara(needle);
+            if (!el) return -1;
+            const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+            for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+              if ((n.textContent ?? "").includes(needle)) return round1(parseFloat(getComputedStyle(n.parentElement ?? el).fontSize));
+            }
+            return round1(parseFloat(getComputedStyle(el).fontSize));
+          };
+          const szType = (needle, text) => {
+            szPut(needle);
+            const b = szBox();
+            if (!b) return 0;
+            b.value = text;
+            b.dispatchEvent(new Event("change", { bubbles: true }));
+            return 1;
+          };
+          const szBox0 = szBox();
+          const szFace0 = szFace();
+          // 先回到「开始」那一档：字号框只在那一页上，别的档看不见也点不着。
+          const szHomeTab = [...document.querySelectorAll(".rtabs button")].find((b) => b.textContent === "开始");
+          if (szHomeTab && !szHomeTab.classList.contains("on")) {
+            szHomeTab.click();
+            await wait(220);
+          }
+          szBox0?.focus();
+          await wait(160);
+          const szFocus = document.activeElement === szBox0 ? 1 : 0;
+          const szListEl = document.getElementById("doc-sizes") ? 1 : 0;
+          const szList = [...document.querySelectorAll("#doc-sizes option")].map((o) => o.value);
+          const szRect = szBox0?.getBoundingClientRect();
+          const szFaceRect = szFace0?.getBoundingClientRect();
+          const szTwin0 = szTwin();
+          const szTwinList = szTwin0?.getAttribute("list") ?? "";
+          const szTwinType = szTwin0?.type ?? "";
+          szBox0?.blur();
+          const szEcho0 = { a: szEcho("号1"), b: szEcho("号2"), c: szEcho("号3") };
+          const szSel = (() => {
+            const s = document.getSelection();
+            return s && s.rangeCount ? (s.isCollapsed ? "collapsed" : "range") : "none";
+          })();
+          const szPx0 = { a: szPx("号1"), b: szPx("号2"), c: szPx("号3") };
+          const szClicks = [];
+          // 号2 起手什么都没说：打 13.7 → 按半点落到 13.5，框里也只留 13.5（纸上 18px）。
+          if (szEcho("号2") === "") {
+            szType("号2", "13.7");
+            await wait(240);
+            szClicks.push("号2:13.7");
+          }
+          const szRound = { echo: szEcho("号2"), px: szPx("号2") };
+          // 打进来的不是磅数就不落笔：框退回件里此刻那一句，纸上不动。
+          if (szEcho("号2") === "13.5") {
+            szType("号2", "abc");
+            await wait(240);
+            szClicks.push("号2:abc");
+          }
+          const szJunk = { echo: szEcho("号2"), px: szPx("号2") };
+          if (szEcho("号2") !== "72") {
+            szType("号2", "72");
+            await wait(240);
+            szClicks.push("号2:72");
+          }
+          // 24 不在 WPS 那 21 档里（fontSizeList 无 24）：能打字的这条路正是为了这种数。
+          if (szEcho("号3") !== "24") {
+            szType("号3", "24");
+            await wait(240);
+            szClicks.push("号3:24");
+          }
+          const szAfter = {};
+          for (const n of ["号1", "号2", "号3"]) szAfter[n] = { echo: szEcho(n), px: szPx(n) };
+          fire("solo:save");
+          await wait(1400);
+          sizeLeg = {
+            tag: szBox0?.tagName ?? "",
+            type: szBox0?.type ?? "",
+            listId: szBox0?.getAttribute("list") ?? "",
+            twinTag: szTwin0?.tagName ?? "",
+            twinType: szTwinType,
+            twinList: szTwinList,
+            listCount: szList.length,
+            listHas24: szList.includes("24") ? 1 : 0,
+            listHas42: szList.includes("42") ? 1 : 0,
+            listHas5: szList.includes("5") ? 1 : 0,
+            listHas72: szList.includes("72") ? 1 : 0,
+            w: szRect ? round1(szRect.width) : -1,
+            dh: szRect && szFaceRect ? round1(szRect.height - szFaceRect.height) : -99,
+            dtop: szRect && szFaceRect ? round1(szRect.top - szFaceRect.top) : -99,
+            focus: szFocus,
+            listEl: szListEl,
+            sel: szSel,
+            echo0: szEcho0,
+            px0: szPx0,
+            round: szRound,
+            junk: szJunk,
+            after: szAfter,
+            clicks: szClicks.join(","),
+            savedDirty: (document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0,
+          };
+        }
         // 上面那些落点把光标留在了格里；后面那三条断命令与图片要按这一趟原本的位置落在正文里，所以先放回纸的末尾。
         const pageNow = document.querySelector("#view .page");
         const lastBlock = pageNow?.children[pageNow.children.length - 1];
@@ -3237,7 +3383,7 @@ function smoke(): void {
         const recovered = { cells: document.querySelectorAll(".sheet-wrap td").length, title: document.getElementById("title")?.textContent };
         // The run ends on a modified document, so quitting goes through the unsaved prompt.
         // A PDF the export asked for shows up in saveAsWrites, next to the pptx/xlsx saves.
-        return { docPart, bandLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
+        return { docPart, bandLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
       })()`;
       void last?.webContents
         .executeJavaScript(probe)

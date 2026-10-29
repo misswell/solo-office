@@ -217,7 +217,8 @@
          `minimumWidth="130"`、`layoutOnLeft="true"`，字号紧跟其后），所以这一对必须是同一只盒子：高度在这里写死，
          不靠 `<select>` 的 UA 默认值——`<input>` 自己量出来是 20，两格并排就错开 1px 顶边。宽度才各自说。 */
       select.pick,
-      input.facebox {
+      input.facebox,
+      input.sizebox {
         font: inherit;
         font-size: 12px;
         color: var(--ink);
@@ -228,6 +229,8 @@
         height: 22px;
       }
       input.facebox { width: 130px; }
+      /* 字号那一格是 WPS 的 ComboBox：`CT_TableTools.kuip` 声明 `fixedWidth="60"`，与同一对里的字体框同高同顶。 */
+      input.sizebox { width: 60px; }
       input.swatch { width: 24px; height: 22px; padding: 0; border: 1px solid #3a404a; border-radius: 5px; background: #262b33; }
 
       /* ---- main split ---- */

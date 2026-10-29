@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Inline, Paragraph } from "../src/core/docx.js";
-import { WordDocument } from "../src/core/docx.js";
+import { parseSizePt, WordDocument } from "../src/core/docx.js";
 import { writeDocx } from "../src/core/write-docx.js";
 import { childSpans, elementContent, OpcPackage, text } from "../src/core/opc.js";
 import { makeHighlightDocx, makeOnOffDocx, makeRunPropsDocx, makeTextFillDocx, makeUnderlineDocx } from "./helpers/make-run.js";
@@ -132,6 +132,27 @@ describe("docx run property fidelity", () => {
     expect(out).toContain('<w:sz w:val="20"/><w:szCs w:val="20"/>');
     expect(out).toContain('w:eastAsia="仿宋"');
     expect(out).not.toContain('w:val="21"');
+  });
+
+  it("takes a typed size to the nearest half point before it reaches w:sz", () => {
+    // `w:sz` counts half-points (§17.18.60), so 13.7 in the box can only be said as 13.5 on the page.
+    expect(parseSizePt("13.7")).toBe(13.5);
+    expect(parseSizePt("10.5")).toBe(10.5);
+    expect(parseSizePt(" 12 ")).toBe(12);
+    expect(parseSizePt("13.7 ")).toBe(13.5);
+    // Not a number, not half a point, or past the box's ceiling: no size at all, so the caller writes nothing.
+    expect(parseSizePt("abc")).toBeUndefined();
+    expect(parseSizePt("")).toBeUndefined();
+    expect(parseSizePt("0")).toBeUndefined();
+    expect(parseSizePt("0.2")).toBeUndefined();
+    expect(parseSizePt("-1")).toBeUndefined();
+    expect(parseSizePt("1639")).toBeUndefined();
+    expect(parseSizePt("1e3")).toBeUndefined();
+
+    const doc = open(makeRunPropsDocx());
+    const typed = parseSizePt("13.7")!;
+    const out = rPrOf(retyped(doc, "字号成对", { ...runAt(doc, "字号成对"), sizePt: typed }), "字号成对");
+    expect(out).toContain('<w:sz w:val="27"/><w:szCs w:val="27"/>');
   });
 
   it("keeps a run whose every child is machinery the model has no case for", () => {

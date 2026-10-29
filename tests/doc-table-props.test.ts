@@ -165,7 +165,9 @@ describe("docx 表格属性：w:tblPr 里那四句的落笔处", () => {
 
   it("画得出来：对齐、缩进、固定列宽与默认边距都按模型走，不是按件里那一句", () => {
     const before = open(FULL);
-    expect(tableCss(before)).toContain("margin-left:auto;margin-right:auto");
+    // 居中且说了缇宽（5000 缇 = 333.33px）：按 `calc` 摆，同张表那枚 288 缇（19.2px）加在摆好之后。
+    // 旧的「两个 auto」在这里会双双归 0，把 288 缇整枚吞掉——见 `tableAlign` 头注与 #213。
+    expect(tableCss(before)).toContain("margin-left:calc(50% - 166.66666666666666px + 19.2px);margin-right:auto");
     expect(tableCss(before)).toContain("table-layout:fixed");
     // 108 缇 = 7.2px（`twipsToPx` 的 15 缇/px）。
     expect(cellCss(before)).toContain("padding-left:7.2px");

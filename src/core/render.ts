@@ -776,12 +776,38 @@ function tableWidth(t: Table): string {
   return `width:${twipsToPx(t.widthTwips)}px;`;
 }
 
-/** `w:jc` and `w:tblInd`: where the table sits inside the text column, and how far it leans right. */
+/**
+ * `w:jc` 与 `w:tblInd`：这张表在栏里坐哪，说完之后再偏多少。
+ *
+ * 受众（授权 46 件 / 28 份模板名，`.scratch/tbl-place-audience.py` 逐枚问 `w:tblPr`）：58 张表里
+ * `w:jc` 说 `center` **14 枚 / 2 份模板名**（`left` / `right` / `start` / `end` **各 0 枚**、谁都没说 44 枚），
+ * `w:tblInd` 说非 0 缇 **28 枚 / 3 份模板名**（−687…+288，其中负 **4 枚**），**两句同时说的 8 枚**。
+ * 更要紧的是几何：那 14 枚居中的表里 **5 枚比栏宽还宽**（`bidding document.dotm` 栏宽 8844 缇，
+ * 网格和 9,231 / 9,500 / 9,637 / 9,803 / 9,806）。`margin-left:auto;margin-right:auto` 在盒子比容器宽时
+ * **双双归 0**，整枚溢出全落在右边，离左沿 0px、离右沿 −64px；而「居中」这句话说的就是把溢出分给两边。
+ * 这一格不需要取证 WPS：任何一种读法（纯居中、居中再按缩进偏）都不会让一枚比栏宽还宽的表贴左沿溢出。
+ *
+ * `w:tblInd` 在对齐一说出之后还作不作数——**未取证**：learn.microsoft.com 在本侧取不到正文，
+ * WPS 自带的 `WPSQuickLook.appex` 在离线烟测里挂住不交图（按 PID 收干净，未开过窗口），
+ * Apple 的 `textutil` 导入器把 `tblW`/`jc`/`tblInd` **三档全丢**（`/tmp/tblind/*.html`，当不了裁判）。
+ * 这里取「两句都上身」：件既然写了那枚缇，就把它加在摆好之后（−687 缇 = −45.8px 是一眼看得见的偏），
+ * 而不是把数字吞掉——吞掉是替文件做了一次它自己没做的决定。
+ */
 function tableAlign(t: Table): string {
-  const indent = t.indentTwips ? `margin-left:${twipsToPx(t.indentTwips)}px;` : "";
-  if (t.align === "center") return `margin-left:auto;margin-right:auto;`;
+  const indent = twipsToPx(t.indentTwips ?? 0);
+  // `calc` 里的负数要写成 ` - 45.8px`，不能是 ` + -45.8px`：CSS 的加减号两侧都得有空格。
+  const signed = (px: number): string => (px === 0 ? "" : px > 0 ? ` + ${px}px` : ` - ${-px}px`);
+  if (t.align === "center") {
+    const px = t.widthType === "dxa" && t.widthTwips !== undefined ? twipsToPx(t.widthTwips) : undefined;
+    // 说了缇宽就按 `calc` 摆：`auto` 在盒子过宽时归 0，`calc` 容得下负值，溢出这才分给两边。
+    // 没说缇宽（授权口径里 `center` 且不写 dxa 宽的是 **0 枚**）才退回浏览器的 auto 居中，缩进照样上身。
+    if (px === undefined)
+      return `margin-left:auto;margin-right:auto;${indent ? `position:relative;left:${indent}px;` : ""}`;
+    return `margin-left:calc(50% - ${px / 2}px${signed(indent)});margin-right:auto;`;
+  }
   if (t.align === "right") return `margin-left:auto;`;
-  return indent;
+  // 没说对齐（44 枚）时 `w:tblInd` 就是左缩进：0 受众的 `right` 那档不动，别把没说的形状发明出来。
+  return indent ? `margin-left:${indent}px;` : "";
 }
 
 /** `w:vAlign` on a cell, in the words CSS uses for the same thing. */

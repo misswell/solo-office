@@ -315,6 +315,25 @@ function smoke(): void {
             kids: [...page.children].map((e) => e.tagName + "." + String(e.className).split(" ")[0]).join("|"),
           };
         }
+        // #213：正文里的表在栏里坐哪（w:jc 与 w:tblInd 上身之后浏览器算完的那一格）。同一条只读腿，
+        // 在读带子这一跳之前、壳刚画完那张纸的时候量；件由 .scratch/make-table-place-smoke.ts 现拼，
+        // 六张表照授权口径的形状排：过宽居中 / 居中不说缩进 / 居中+288 / 居中−687 / 只说缩进 / 什么都没说。
+        // 问的是**矩形**（离正文内容盒左沿多远、表自己宽多少）加行内样式那串字面，不动一个字的文档内容。
+        let tablePlaceLeg = null;
+        {
+          const pCss = getComputedStyle(page);
+          const pRect = page.getBoundingClientRect();
+          const cL = pRect.left / zz + parseFloat(pCss.paddingLeft || "0");
+          const cR = pRect.right / zz - parseFloat(pCss.paddingRight || "0");
+          tablePlaceLeg = {
+            colW: round1(cR - cL),
+            padL: round1(parseFloat(pCss.paddingLeft || "0")),
+            tables: [...page.querySelectorAll("table")].map((el) => {
+              const r = el.getBoundingClientRect();
+              return { css: el.getAttribute("style") ?? "", gL: round1(r.left / zz - cL), gR: round1(cR - r.right / zz), w: round1(r.width / zz) };
+            }),
+          };
+        }
         const blocks = page.children.length;
         const last = page.children[blocks - 1];
         const range = document.createRange();
@@ -2589,7 +2608,7 @@ function smoke(): void {
         const recovered = { cells: document.querySelectorAll(".sheet-wrap td").length, title: document.getElementById("title")?.textContent };
         // The run ends on a modified document, so quitting goes through the unsaved prompt.
         // A PDF the export asked for shows up in saveAsWrites, next to the pptx/xlsx saves.
-        return { docPart, bandLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
+        return { docPart, bandLeg, tablePlaceLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
       })()`;
       void last?.webContents
         .executeJavaScript(probe)

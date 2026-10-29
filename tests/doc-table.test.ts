@@ -171,7 +171,8 @@ describe("docx table rendering", () => {
     const html = page();
     expect(html).toContain("table-layout:fixed;");
     expect(html).toContain("width:100%;");
-    expect(html).toContain("margin-left:auto;margin-right:auto;");
+    // 说了 pct 宽（没有缇宽可算半径）→ 退回浏览器的 auto 居中，但那枚 108 缇缩进照样上身（#213）。
+    expect(html).toContain("margin-left:auto;margin-right:auto;position:relative;left:7.2px;");
     expect(html).toContain("border-top:1px solid #FF0000;");
     expect(html).toContain("border-top:1px dashed currentColor;");
     expect(html).toContain("border-bottom:1px dashed currentColor;");

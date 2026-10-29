@@ -264,13 +264,15 @@ function smoke(): void {
         const title = document.getElementById("title")?.textContent;
         const page = view?.querySelector(".page");
         if (!page) return { title, view: view?.firstElementChild?.className, heading: view?.querySelector("h1, .para")?.textContent?.slice(0, 40) };
-        // #211：带子里那一段说自己坐在哪（w:jc 与 w:framePr）——这一腿一枚也不按，也不打字，所以在最开头那一跳
-        // （选区+插字）之前读：读的是壳刚画完、还没被本烟测牵动过的那张纸。第二趟开的是第一趟写回的那份，
+        // #211/#212：带子里那一段说自己坐在哪（w:jc、w:framePr，再是横向缩进 w:ind）——这一腿一枚也不按，也不打字，
+        // 所以在最开头那一跳（选区+插字）之前读：读的是壳刚画完、还没被本烟测牵动过的那张纸。第二趟开的是第一趟写回的那份，
         // 于是「两趟读数一字不差 + 盘上 footer 字节一字未改」就是装机壳自己把落点画出来、又原样带回的唯一证据。
-        // 件由 .scratch/make-band-place-smoke.ts 现拼（照 tests/helpers/make-band-place.ts 的同一份形状，带子 8 段）。
+        // 件由 .scratch/make-band-place-smoke.ts 现拼（照 tests/helpers/make-band-place.ts 的同一份形状，带子 11 段：
+        // 前 8 段是 #211 的居中与框，后 3 段是 #212 的缩进——自己说的 right、链上借来的首行、自己那句 0 顶掉链上那一枚）。
         // 问三样：① 壳把那句落点写没写进行内样式（style 属性字面，与缩放无关）；② 写了之后盒子与那一行墨在带子
-        // 内容盒里落到哪（框摆右的那一枚必须贴右沿，锚在纸上那一枚照旧走常规流）；③ 正文上沿与纸缝数——这两格
-        // 不动才谈得上「落点只上身在这一行，没牵动铺排」。量的全是距离与属性，一个字的文档内容也不出页面。
+        // 内容盒里落到哪（框摆右的那一枚必须贴右沿，锚在纸上那一枚照旧走常规流；右缩进收的是盒子、首行缩进动的只是墨）；
+        // ③ 正文上沿与纸缝数——这两格不动才谈得上「落点只上身在这一行，没牵动铺排」。量的全是距离与属性，
+        // 一个字的文档内容也不出页面。
         // 几何按纸的单位算：rect 会跟着 zoom 放大，getComputedStyle 的 padding 却不放大（DOM 门禁那一腿踩过同一坑）。
         const zPaper = (el) => { const z = parseFloat(getComputedStyle(el).zoom); return z > 0 ? z : 1; };
         const round1 = (n) => Math.round(n * 10) / 10;

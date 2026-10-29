@@ -1147,6 +1147,17 @@ export interface BandPlace {
    * `word/styles.xml` 里按 `w:pStyle → w:basedOn` 走）。此前带子里一枚排版属性都没贴，所以那 14 段居中全画在左沿。
    */
   align?: string;
+  /**
+   * `w:pPr/w:ind`: this paragraph's own statement over the one its `w:pStyle` chain lends, resolved by the same
+   * referee the body paragraphs use (`indResolve`), so 段自己用任一枚答过这一件事时链上另一枚不许叠上来。
+   *
+   * 授权 46 份的眉脚部件里这一族有受众，两半各是量的（`.scratch/band-ind-tabs-audience.py` 与
+   * `.scratch/band-place-slots-audience.py`，同 46 件口径、逐段配对）：**段自己说 4 段**，枚枚只说
+   * `w:right="360"`（2 个全路径件 / 1 份模板名）；**链上借来 8 段**，说的是 `w:firstLine` 422 / 883 配
+   * `w:firstLineChars="200"`（首行缩进 2 字符），链上 0 段借 left/right。此前带子里这一段与正文那一格
+   * 用同一句话答的两枚都被丢掉：右缩进画到纸沿、首行缩进一格不缩。
+   */
+  ind?: IndentFields;
   /** `w:pPr/w:framePr` — the frame that paragraph is drawn as. See `FramePlace`. */
   frame?: FramePlace;
 }
@@ -4340,8 +4351,14 @@ export class WordDocument {
       return Number.isFinite(n) ? n : undefined;
     };
     const out: BandPlace = {};
-    const align = attrs("jc")?.val ?? this.paraLent(attrs("pStyle")?.val)?.align;
+    const lent = this.paraLent(attrs("pStyle")?.val);
+    const align = attrs("jc")?.val ?? lent?.align;
     if (align) out.align = align;
+    // 缩进按正文同一条裁判合：段落自己那一句先答，答过的那一件事链上不许再叠（`indResolve`）。带子的段不是一份
+    // `Paragraph`，它住在这一次 span 扫描里，所以属性是从 `attrsOf` 的裸名取的（见 `indOfAttrs`）。
+    const ownInd = attrs("ind");
+    const ind = indResolve(indOfAttrs((a) => ownInd?.[a]), lent);
+    if (Object.values(ind).some((v) => v !== undefined)) out.ind = ind;
     const frame = attrs("framePr");
     if (frame) {
       const f: FramePlace = {};
@@ -4354,7 +4371,7 @@ export class WordDocument {
       if (y !== undefined) f.yTwips = y;
       out.frame = f;
     }
-    return out.align === undefined && out.frame === undefined ? undefined : out;
+    return out.align === undefined && out.frame === undefined && out.ind === undefined ? undefined : out;
   }
 
   /**
@@ -4586,9 +4603,18 @@ function spacingOf(spacing: any): Partial<ParaStyle> {
  * "the file said nothing", since the second is what lets its style's indent through.
  */
 function indOf(ind: any): Partial<ParaStyle> {
+  return indOfAttrs((attr) => ind?.[`@_${attr}`]);
+}
+
+/**
+ * 一枚 `w:ind` 的六个槽，按属性名取——取的方式不定：正文那一条路从解析好的树上读 `@_left`，带子那一条路从
+ * **保存要拼回去的那同一次 span 扫描**里读 `attrsOf` 的裸名。两处必须共用同一张「属性名 → 模型字段」表，
+ * 否则同一句话在正文与带子里会解析成两件不同的事。
+ */
+function indOfAttrs(get: (attr: string) => string | undefined): Partial<ParaStyle> {
   const out: Record<string, number> = {};
   const take = (field: keyof ParaStyle, attr: string): void => {
-    const v = num(ind?.[`@_${attr}`]);
+    const v = num(get(attr));
     if (v !== undefined) out[field] = v;
   };
   take("indentLeft", "left");
@@ -4601,7 +4627,7 @@ function indOf(ind: any): Partial<ParaStyle> {
 }
 
 /** 段落自己那句 `w:ind` 与链上那枚合出来的六枚缩进——同一件事的两枚写法在这里定谁答过。 */
-type IndentFields = Pick<ParaStyle, "indentLeft" | "indentLeftChars" | "indentRight" | "indentFirstLine" | "indentFirstLineChars" | "indentHanging">;
+export type IndentFields = Pick<ParaStyle, "indentLeft" | "indentLeftChars" | "indentRight" | "indentFirstLine" | "indentFirstLineChars" | "indentHanging">;
 
 /**
  * 段落自己的一句 `w:ind` 加上样式链借来的那枚，合出页面要画的六属性。

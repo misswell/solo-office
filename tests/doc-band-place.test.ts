@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { WordDocument, twipsToPx } from "../src/core/docx.js";
+import { WordDocument, twipsToPx, type BandPlace } from "../src/core/docx.js";
 import { writeDocx } from "../src/core/write-docx.js";
 import { OpcPackage, text } from "../src/core/opc.js";
 import { renderWord } from "../src/core/render.js";
 import { PLACE_FOOTER, makeBandPlaceDocx } from "./helpers/make-band-place.js";
 
 /**
- * 带子里那一段落在哪（#211）。
+ * 带子里那一段落在哪（#211、#212）。
  *
  * 受众是量出来的，不是想出来的：授权 46 份的 `word/header*.xml` / `word/footer*.xml` 共 76 段，`w:jc` 自己说
  * `center` 的 12 枚（6 个全路径件 / 3 份模板名）、从样式链借来的 52 枚（`left` 48 / `both` 2 / `center` 2）、
@@ -14,6 +14,11 @@ import { PLACE_FOOTER, makeBandPlaceDocx } from "./helpers/make-band-place.js";
  * w:vAnchor="text" w:hAnchor="margin" w:y="1"` 加 `w:xAlign` right ×4 / center ×2，坐在带 PAGE 域那一段上
  * （`.scratch/band-para-align-audience.py`）。借来的那一档与自家页眉样式写明的 `w:jc w:val="left"` 相撞，
  * 所以「居中」不是重述，是纸面与文件分歧的地方。
+ *
+ * 横向缩进是同一张纸上的另一问（#212，`.scratch/band-ind-tabs-audience.py`）：段自己说的 `w:ind` **4 枚，枚枚
+ * 都是 `w:right="360"`**（2 个全路径件 / 1 份模板名 `office rental contract.dotm`），链上借来的落在 **8 段**上、
+ * 只说首行（`w:firstLine="422" w:firstLineChars="200"` ×6 与 `883` ×2，枚枚不带 `w:left`/`w:right`）。与正文
+ * #165 同一只裁法：段自己用 `w:firstLineChars="0"` 答过首行，链上那枚缇就不许再叠上来。
  */
 
 const openBand = () => {
@@ -35,7 +40,7 @@ const bandLineAt = (html: string, i: number): string => (html.match(/<div class=
 describe("docx 页眉页脚：段自己说的落点读进模型", () => {
   it("每段一格，格数与段数一样", () => {
     const band = openBand();
-    expect(band.paragraphs.length).toBe(8);
+    expect(band.paragraphs.length).toBe(11);
     expect(band.place?.length).toBe(band.paragraphs.length);
     expect(band.editable).toBe(true);
   });
@@ -60,6 +65,30 @@ describe("docx 页眉页脚：段自己说的落点读进模型", () => {
   it("谁都没说的那一段不替它编一句", () => {
     const band = openBand();
     expect(band.place?.[7]).toBeUndefined();
+  });
+});
+
+describe("docx 页眉页脚：段自己说的横向缩进读进模型", () => {
+  it("自己说的右缩进按文件那枚缇记下来", () => {
+    // 授权 46 份带子里段自己说的 `w:ind` 只有这一种形状（4 枚，枚枚 `w:right="360"`）。
+    const band = openBand();
+    expect(band.place?.[8]?.ind).toEqual({ indentRight: 360 });
+    expect(band.place?.[8]?.align).toBeUndefined();
+    expect(band.place?.[8]?.frame).toBeUndefined();
+  });
+
+  it("链上借来的首行缩进两枚都带上，只说缩进的段也有格可站", () => {
+    const band = openBand();
+    expect(band.place?.[9]?.ind).toEqual({ indentFirstLine: 422, indentFirstLineChars: 200 });
+    // 「什么都没说」那一段之外，一格里只站着缩进时它仍要在账上——早先的守卫把这种段当成没说过话，整格丢掉。
+    expect(band.place?.[9]).toBeDefined();
+  });
+
+  it("段自己用字符那枚答过首行，链上那枚缇就不许再叠上来", () => {
+    // §17.3.1.14 让字符压过缇、§17.7.2 让自己压过样式，与正文 #165 是同一只 `indResolve`：这一格是那条裁法
+    // 在带子里也有腿的证据，不是又写了一遍解释。
+    const band = openBand();
+    expect(band.place?.[10]?.ind).toEqual({ indentFirstLineChars: 0 });
   });
 });
 
@@ -100,6 +129,26 @@ describe("docx 页眉页脚：段自己说的落点画上纸", () => {
   it("没说过落点的那一段一个属性都不多", () => {
     expect(bandLine(html, "什么都没说")).toBe(`<div class="hf-p">什么都没说</div>`);
   });
+
+  it("自己说的右缩进写在这一格的右边距上", () => {
+    // 带子的内容盒就是节的页边距盒（`renderWord` 那句 `padding-left:var(--pad-l);padding-right:var(--pad-r)`），
+    // 所以 `w:ind w:right` 与正文的同一枚落在同一条 CSS 属性上——不是又发明一只尺。
+    expect(bandLine(html, "自己说右缩进")).toBe(
+      `<div class="hf-p" style="margin-right:${twipsToPx(360)}px">自己说右缩进</div>`,
+    );
+  });
+
+  it("链上借来的首行缩进上纸，缇那枚按 §17.3.1.14 压过字符那枚", () => {
+    expect(bandLine(html, "链上借来首行缩进")).toBe(
+      `<div class="hf-p" style="text-indent:${twipsToPx(422)}px">链上借来首行缩进</div>`,
+    );
+  });
+
+  it("段自己把首行说成 0，链上那枚缇就不许把它缩回去", () => {
+    // 这一格是 `indResolve` 也为带子服务的证据：不带这条裁法时，页面上这一段会顶着链上那 422 缇的首行缩进，
+    // 而文件说的是「首行不缩进」。与正文 #165 同一只裁判，没有第二份解释。
+    expect(bandLine(html, "自己说的不缩首行")).toBe(`<div class="hf-p">自己说的不缩首行</div>`);
+  });
 });
 
 describe("docx 页眉页脚：落点只上行，不动字节", () => {
@@ -119,8 +168,12 @@ describe("docx 页眉页脚：落点只上行，不动字节", () => {
   it("保存后再读，落点一格都不挪", () => {
     const doc = WordDocument.openBytes(makeBandPlaceDocx());
     const again = WordDocument.openBytes(writeDocx(doc)).sectionBand("footer", 0);
-    expect(again?.place?.map((p) => [p?.align, p?.frame?.xAlign, p?.frame?.hAnchor])).toEqual(
-      doc.sectionBand("footer", 0)?.place?.map((p) => [p?.align, p?.frame?.xAlign, p?.frame?.hAnchor]),
-    );
+    const say = (place?: (BandPlace | undefined)[]) =>
+      place?.map((p) => [p?.align, p?.frame?.xAlign, p?.frame?.hAnchor, p?.ind?.indentRight, p?.ind?.indentFirstLine, p?.ind?.indentFirstLineChars]);
+    expect(say(again?.place)).toEqual(say(doc.sectionBand("footer", 0)?.place));
+    // 缩进与对齐、框一样只是「读出来画上去」的：新落的三格缩进不许在保存清单里排成待写，也不许在重读时改口。
+    expect(again?.place?.map((p) => p?.ind?.indentRight)).toEqual([
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, 360, undefined, undefined,
+    ]);
   });
 });

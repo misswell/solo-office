@@ -1,4 +1,4 @@
-import type { Block, BandPlace, Carried, CarriedInline, HeaderFooter, Inline, NumberLevel, PageBorder, Paragraph, PropSlot, RowInfo, Section, Table, TableBorder, TableCell, WordDocument } from "./docx.js";
+import type { Block, BandPlace, Carried, CarriedInline, HeaderFooter, IndentFields, Inline, NumberLevel, PageBorder, Paragraph, PropSlot, RowInfo, Section, Table, TableBorder, TableCell, WordDocument } from "./docx.js";
 import { DEFAULT_SECTION, hasLine, LINE_ONE, MARGIN_SIDES, PAGE_BORDER_SIDES, PBDR_ORDER, headingLevel, lineGridPitchTwips, twipsToPx } from "./docx.js";
 import type { CommentAnchor } from "./comments.js";
 import type { Presentation, Shape, SlideParagraph } from "./pptx.js";
@@ -267,22 +267,43 @@ function wordRuns(inlines: Inline[], state: CommentState): string {
 /**
  * The paragraph's first-line indent as one CSS value, from whichever of the two spellings the file put its
  * weight behind: the twips value when it states a non-zero one, otherwise the character count (WPS writes 首行
- * 缩进 2 字符 as `w:firstLineChars="200"`), and a `w:hanging` pulls the other way. Both are stated in 1,147 of
- * the quarantined cohort's elements and their ratio is always a font size, so choosing the twips value there
- * draws what WPS drew; the 88 that state a positive `w:firstLine` next to `w:firstLineChars="0"` are the reason
- * the character form does not simply win, as §17.3.1.14 has it. `w:ind` has not been re-counted on the authorized
- * 46 份, so 1,147 / 88 / 236 below are 待重证.
+ * 缩进 2 字符 as `w:firstLineChars="200"`), and a `w:hanging` pulls the other way.
  *
- * A `w:firstLineChars` with no twips counterpart — 236 elements — is drawn in `em`, which makes it follow this
- * page's own font size rather than the document's. 未取证 how wide WPS makes it, since the size WPS measures
- * the character against is the paragraph mark's, and the model does not carry that as a number.
+ * 授权 46 件（28 份模板名）的 2,474 枚 `w:ind` 里，首行那一问的形状是：只有缇 **900 枚**（18 件 / 9 名）、两种都写
+ * 且字符非 0 **624 枚**（24 件 / 13 名）、缇非 0 配 `w:firstLineChars="0"` **94 枚**（12 件 / 6 名）、只有悬挂缇
+ * 206 枚、只剩字符档 **0 枚**（`.scratch/ind-authority-shapes.py`）。所以按缇不是绕过规范的字面（§17.3.1.14 说两种
+ * 都写时 `w:firstLine` 应被忽略）而不说：624 枚里 1 em 折回 **546 枚落在常见字号 ±0.6pt 内**（12pt 就占 492 枚），
+ * 那几格两档说的是同一处，按哪一档都画得对；剩下 **78 枚两档互相不对**（折回来 5–28.1pt，都不是这一段的字高），
+ * 按缇画的是文件明说的数、按字符画要先猜「量的是哪一号字」——**未取证** WPS 在那 78 枚上摆哪一处（WPS 侧实据仍卡在
+ * 首次启动那一页），先取不需要猜的那一档。
+ *
+ * 别把这一族的两枚 94 读成一枚：上面那 94 是**缇与字符同时写、而字符说 0**；`indResolve` 记的那 94 是
+ * `w:hanging` 加 `w:firstLineChars="0"` 而**完全不写 `w:firstLine`**（写 `w:firstLineChars="0"` 的一共 762 枚：
+ * 668 枚不写缇、94 枚写了非零缇）。数法与口径都记在那两条注释里。
+ *
+ * 只剩字符档那一支（授权口径 0 枚受众）留着是规范的正面情形：写了 `w:firstLineChars` 而没写缇，按 `em` 走本页字号。
+ * 未取证 WPS 把 `em` 量在谁身上——它该量段落标记的那一号字，而模型没把段落标记的字号带成一个数。
  */
-const firstLineIndent = (p: Paragraph): string => {
+const firstLineIndent = (p: IndentFields): string => {
   const twips = p.indentFirstLine ?? (p.indentHanging === undefined ? undefined : -p.indentHanging);
   if (twips) return `${twipsToPx(twips)}px`;
   const chars = p.indentFirstLineChars ?? 0;
   return chars > 0 ? `${(chars / 100).toFixed(2)}em` : "";
 };
+
+/**
+ * 缩进这一族换成三条声明。正文的段与带子里的段**共用这一只映射**：两处问的是同一句话（`w:ind` 与链上借来的那枚，
+ * 已经由 `indResolve` 裁过谁答过），分成两份写迟早会漂——带子那一族先有的正是这条（`w:jc` 曾经有两份解释）。
+ * `w:*Chars` 只在上首行那一格（`firstLineChars` 跟着 `em` 走），left 那枚字符数仍由命令面按缇落，不在这里发明宽度。
+ */
+function indentCss(p: IndentFields): string[] {
+  const out: string[] = [];
+  if (p.indentLeft) out.push(`margin-left:${twipsToPx(p.indentLeft)}px`);
+  if (p.indentRight) out.push(`margin-right:${twipsToPx(p.indentRight)}px`);
+  const first = firstLineIndent(p);
+  if (first) out.push(`text-indent:${first}`);
+  return out;
+}
 
 /** Three decimals is enough to place a line on a page and keeps the declaration readable in the DOM. */
 const roundPx = (px: number): number => Math.round(px * 1000) / 1000;
@@ -474,10 +495,7 @@ const betweenOf = (p: Paragraph, next: Block | undefined): TableBorder | undefin
 function renderParagraph(p: Paragraph, doc: WordDocument, counters: Map<string, number>, state: CommentState, gridPx?: number, next?: Block): string {
   const style: string[] = [];
   if (p.align && ALIGN[p.align]) style.push(`text-align:${ALIGN[p.align]}`);
-  if (p.indentLeft) style.push(`margin-left:${twipsToPx(p.indentLeft)}px`);
-  if (p.indentRight) style.push(`margin-right:${twipsToPx(p.indentRight)}px`);
-  const first = firstLineIndent(p);
-  if (first) style.push(`text-indent:${first}`);
+  style.push(...indentCss(p));
   if (p.spacingBefore !== undefined) style.push(`margin-top:${twipsToPx(p.spacingBefore)}px`);
   if (p.spacingAfter !== undefined) style.push(`margin-bottom:${twipsToPx(p.spacingAfter)}px`);
   style.push(...paraBox(p, betweenOf(p, next)));
@@ -1072,6 +1090,11 @@ function bandPlaceCss(p?: BandPlace): string {
     out.push(`top:${twipsToPx(f.yTwips)}px`);
   }
   if (p.align && ALIGN[p.align]) out.push(`text-align:${ALIGN[p.align]}`);
+  // 缩进问的是「这一格离锚盒的左右沿各留多少」，与 `xAlign` 那一推问的不是同一件事，所以两条都要上身：先按文件
+  // 说的把盒子收成它的落点，再由 auto 边距把收好的那一截推到声明的那一侧。授权 46 份里两样都说的段 0 段
+  // （那 4 段自己说 right、8 段链上借 firstLine，与 6 枚 framePr 不同段——`.scratch/band-place-slots-audience.py`），
+  // 这一条叠法因此没有实据可对，留着只是不把两问当成一问。
+  out.push(...indentCss(p.ind ?? {}));
   return out.join(";");
 }
 

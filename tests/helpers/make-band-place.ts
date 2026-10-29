@@ -26,6 +26,15 @@ const CT_STY = "application/vnd.openxmlformats-officedocument.wordprocessingml.s
  *
  * ③ 那一格的 `right` 不是从 46 份的带子里读到的（那里的段自己只说 `center`），它是自家 `STYLED_HEADER` 那一族
  * 早就写着的形状：留这一格是让「自己说的盖住样式说的」这条优先级有断言可站，不代表语料说过 right。
+ *
+ * 后三格是缩进那一族，各有出处（`.scratch/band-ind-tabs-audience.py`）：段自己说的 `w:ind` **4 枚，枚枚都是
+ * `w:right="360"`**（2 个全路径件 / **1 份**模板名 `office rental contract.dotm`）；链上借来的 `w:ind` 落在 **8 段**
+ * 上，只说首行（`w:firstLine="422" w:firstLineChars="200"` ×6、`w:firstLine="883" w:firstLineChars="200"` ×2），
+ * **枚枚不带 `w:left`/`w:right`**——所以「借来的左右缩进」这一格没有语料，画它等于编它。三格因此只钉住已量到的
+ * 两个形状（自己说的 right、链上说的首行）加一条优先级（自己的 `w:firstLineChars="0"` 顶掉链上的首行）。
+ * 同一轮重数的 `w:tabs`（自己说 12 段 / 20 枚定义，链上借 58 段各 2 枚，但带子里真正的制表符只有 **2 枚**）不进
+ * 这些格：带子的段是 `white-space:pre-wrap` 下的裸 `\t`，给它定位要先改 DOM 结构，动到 `textContent` 读回与可编辑
+ * 克隆的光标，是另一笔账。
  */
 export const PLACE_FOOTER =
   `${XML_DECL}<w:ftr xmlns:w="${NS_W}" xmlns:r="${NS_REL}">` +
@@ -41,6 +50,9 @@ export const PLACE_FOOTER =
   `<w:p><w:pPr><w:framePr w:wrap="around" w:hAnchor="text" w:x="108" w:y="1"/></w:pPr>` +
   `<w:r><w:t>只说偏移不说对齐</w:t></w:r></w:p>` +
   `<w:p><w:pPr><w:pStyle w:val="BandQuiet"/><w:rPr><w:sz w:val="18"/></w:rPr></w:pPr><w:r><w:t>什么都没说</w:t></w:r></w:p>` +
+  `<w:p><w:pPr><w:ind w:right="360"/></w:pPr><w:r><w:t>自己说右缩进</w:t></w:r></w:p>` +
+  `<w:p><w:pPr><w:pStyle w:val="BandFirst"/></w:pPr><w:r><w:t>链上借来首行缩进</w:t></w:r></w:p>` +
+  `<w:p><w:pPr><w:pStyle w:val="BandFirst"/><w:ind w:firstLineChars="0"/></w:pPr><w:r><w:t>自己说的不缩首行</w:t></w:r></w:p>` +
   `</w:ftr>`;
 
 /**
@@ -57,6 +69,7 @@ export const PLACE_STYLES =
   `<w:style w:type="paragraph" w:styleId="BandDeep"><w:name w:val="band deep"/><w:basedOn w:val="BandLent"/></w:style>` +
   `<w:style w:type="paragraph" w:styleId="BandLeft"><w:name w:val="band left"/><w:pPr><w:jc w:val="left"/></w:pPr></w:style>` +
   `<w:style w:type="paragraph" w:styleId="BandQuiet"><w:name w:val="band quiet"/></w:style>` +
+  `<w:style w:type="paragraph" w:styleId="BandFirst"><w:name w:val="band first"/><w:pPr><w:ind w:firstLine="422" w:firstLineChars="200"/></w:pPr></w:style>` +
   `</w:styles>`;
 
 /** The body's section, pointing at that footer, in the order the authorized templates write the reference. */

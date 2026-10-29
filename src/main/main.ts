@@ -2154,6 +2154,129 @@ function smoke(): void {
             pages: document.querySelectorAll("#view .page").length,
           };
         }
+        // #219：测量单位三档（毫米/英寸/磅）——「表格属性 → 左缩进」那格在每一档下摆什么字面、填进去的数按哪一档的
+        // 缇数落笔。单位走产品自己那条路：状态栏「测量单位」那格 → 「选项」对话框 → 确定（单位只活在这个窗口里，
+        // 量完按回厘米交出去）。三张表各起始一句 w:tblInd（288 / −129 / 907 缇），各填一种新缇数：纸上挪的距离与
+        // 盘上那句都得对上；第四张一句都没说——格子必须空着（「没说」不是 0），按「取消」一个字节也不许动。
+        // 这一段整篇在模板字符串里：不写反引号、不写美元花括号。
+        const tuDoc = (document.getElementById("title")?.textContent ?? "").includes("表格单位");
+        let tableUnitsLeg = null;
+        if (tuDoc) {
+          // 修订先按回关着（与 #214 同一条路）：别的腿把跟踪开着交过来，开着落这一击会在 tblPr 里多一枚
+          // w:tblPrChange，盘上就出现两句 w:tblInd（新值与记录里的旧值），这一族的字节账说不清是谁写的。
+          // 量完按回原样交给后面的腿。
+          const tuTrackBtn = () => [...document.querySelectorAll("#ribbon button.rb")].find((b) => b.textContent === "修订");
+          const tuTrackOn = () => (tuTrackBtn()?.classList.contains("on") ? 1 : 0);
+          const tuTrack0 = tuTrackOn();
+          if (tuTrack0) {
+            tuTrackBtn()?.click();
+            await wait(320);
+          }
+          const tuTrackOff = tuTrackOn();
+          const tuTable = (needle) => [...document.querySelectorAll("#view .page table.doc-table")].find((t) => (t.textContent ?? "").includes(needle));
+          const tuGap = (needle) => {
+            const t = tuTable(needle);
+            const p = t ? t.closest(".page") : null;
+            if (!t || !p) return null;
+            const z = zPaper(p);
+            const cs = getComputedStyle(p);
+            const r = p.getBoundingClientRect();
+            const left = r.left / z + parseFloat(cs.paddingLeft || "0");
+            const box = t.getBoundingClientRect();
+            return { l: round1(box.left / z - left), w: round1(box.width / z) };
+          };
+          const tuCell = () => document.querySelector(".solo-doc-status-unit")?.textContent ?? "";
+          const tuPickUnit = async (u) => {
+            document.querySelector(".solo-doc-status-unit")?.click();
+            await wait(240);
+            const d = document.querySelector(".solo-op-dialog");
+            const open = d && d.open ? 1 : 0;
+            const radio = d ? d.querySelector("input[name='op-unit'][value='" + u + "']") : null;
+            const pre = radio ? (radio.checked ? 1 : 0) : 0;
+            radio?.click();
+            await wait(80);
+            d?.querySelector(".solo-op-apply")?.click();
+            await wait(300);
+            return { open: open, radio: radio ? 1 : 0, pre: pre, closed: document.querySelector(".solo-op-dialog") ? 0 : 1, cell: tuCell() };
+          };
+          const tuPut = (needle) => {
+            const cell = tuTable(needle)?.querySelector("td");
+            if (!cell) return 0;
+            const rg = document.createRange();
+            rg.selectNodeContents(cell);
+            rg.collapse(true);
+            const s = document.getSelection();
+            s?.removeAllRanges();
+            if (s) s.addRange(rg);
+            cell.focus?.();
+            document.dispatchEvent(new Event("selectionchange"));
+            return 1;
+          };
+          const tuDlg = () => document.querySelector(".solo-tp-dialog");
+          const tuField = (n) => tuDlg()?.querySelector("[name='" + n + "']") ?? null;
+          const tuLabelUnit = () => {
+            const lab = tuField("tp-indent")?.parentElement;
+            const t = lab ? String(lab.textContent) : "";
+            const a = t.indexOf("（");
+            const e = t.indexOf("）");
+            return a >= 0 && e > a ? t.slice(a + 1, e) : "";
+          };
+          const tuDirty = () => ((document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0);
+          const tuOpen = async (needle) => {
+            const put = tuPut(needle);
+            await wait(240);
+            const bar = document.querySelector("#ribbon .rbar[data-tab='table']");
+            if (bar?.hidden === true) [...document.querySelectorAll(".rtabs button")].find((b) => b.textContent === "表格工具")?.click();
+            await wait(200);
+            const btn = [...document.querySelectorAll("#ribbon .rbar[data-tab='table'] button")].find((b) => b.textContent === "属性");
+            const disabled = btn?.disabled === true ? 1 : 0;
+            if (btn) btn.click();
+            await wait(300);
+            return { put: put, btnPresent: btn ? 1 : 0, disabled: disabled, open: tuDlg()?.open === true ? 1 : 0 };
+          };
+          const tuSet = (el, v) => {
+            if (!el) return 0;
+            el.value = v;
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+            return 1;
+          };
+          const tuHit = (sel) => {
+            const b = tuDlg()?.querySelector(sel);
+            return b ? (b.click(), 1) : 0;
+          };
+          const tuSteps = [];
+          const tuPlan = [["毫米表", "mm", "毫米", "20"], ["英寸表", "in", "英寸", "0.75"], ["磅表", "pt", "磅", "36"]];
+          for (const [name, u, cn, literal] of tuPlan) {
+            const pick = await tuPickUnit(u);
+            const g0 = tuGap(name);
+            const o = await tuOpen(name);
+            const echo = { unit: tuLabelUnit(), indent: tuField("tp-indent")?.value ?? "?" };
+            const dirty0 = tuDirty();
+            const set = tuSet(tuField("tp-indent"), literal);
+            await wait(140);
+            const err = tuDlg()?.querySelector(".solo-tp-error")?.textContent ?? "";
+            const applied = tuHit(".solo-tp-apply");
+            await wait(460);
+            tuSteps.push({ name: name, unit: u, cn: cn, literal: literal, pick: pick, open: o, echo: echo, set: set, err: err, applied: applied, gone: tuDlg() ? 0 : 1, g0: g0, g1: tuGap(name), dirty0: dirty0, dirty1: tuDirty() });
+          }
+          {
+            const pick = await tuPickUnit("cm");
+            const g0 = tuGap("无缩进表");
+            const o = await tuOpen("无缩进表");
+            const echo = { unit: tuLabelUnit(), indent: tuField("tp-indent")?.value ?? "?" };
+            const dirty0 = tuDirty();
+            const cancelled = tuHit(".solo-tp-cancel");
+            await wait(320);
+            tuSteps.push({ name: "无缩进表", unit: "cm", cn: "厘米", literal: "", pick: pick, open: o, echo: echo, set: 0, err: "", applied: 0, cancelled: cancelled, gone: tuDlg() ? 0 : 1, g0: g0, g1: tuGap("无缩进表"), dirty0: dirty0, dirty1: tuDirty() });
+          }
+          fire("solo:save");
+          await wait(1000);
+          if (tuTrack0) {
+            tuTrackBtn()?.click();
+            await wait(320);
+          }
+          tableUnitsLeg = { unitCellEnd: tuCell(), trackBefore: tuTrack0, trackOff: tuTrackOff, trackBack: tuTrackOn(), steps: tuSteps, dialogsLeft: document.querySelectorAll(".solo-tp-dialog, .solo-op-dialog").length, savedDirty: tuDirty() };
+        }
         // #215：「允许西文在单词中间换行」那一勾在**装机这只壳**里走一趟并落回盘上。DOM 探针（.scratch/wrap-dom.ts）
         // 证的是同一个 openParaSpacing/setParagraphSpacing 在浏览器页里的形状；只有装机壳能给的那一条是：
         // 壳把自己写回盘上的那份再读回来、照它摆，且同一句话第二次说时不再多写一个字节。三摆问三种起始态：
@@ -2975,7 +3098,7 @@ function smoke(): void {
         const recovered = { cells: document.querySelectorAll(".sheet-wrap td").length, title: document.getElementById("title")?.textContent };
         // The run ends on a modified document, so quitting goes through the unsaved prompt.
         // A PDF the export asked for shows up in saveAsWrites, next to the pptx/xlsx saves.
-        return { docPart, bandLeg, tablePlaceLeg, tablePropsWriteLeg, wrapLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
+        return { docPart, bandLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
       })()`;
       void last?.webContents
         .executeJavaScript(probe)

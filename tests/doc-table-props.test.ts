@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { WordDocument, signTableRevision, syncTableProps, tableShapeOf } from "../src/core/docx.js";
-import type { Table } from "../src/core/docx.js";
+import { WordDocument, rowShapeOf, signRowRevision, signTableRevision, syncRowAlign, syncTableProps, tableShapeOf } from "../src/core/docx.js";
+import type { RowInfo, Table } from "../src/core/docx.js";
 import { writeDocx } from "../src/core/write-docx.js";
 import { renderWord } from "../src/core/render.js";
 import { OpcPackage, text } from "../src/core/opc.js";
@@ -275,5 +275,135 @@ describe("docx 表格属性：w:tblPr 里那四句的落笔处", () => {
     expect(cssAt(doc, 2)).toBe(cssAt(doc, 1));
     expect(cssAt(doc, 1)).toContain("margin-left:calc(50% - 166.66666666666666px);margin-right:auto;");
     expect(cssAt(doc, 1)).not.toContain(" + ");
+  });
+});
+
+/** 第 n 枚 `w:trPr`（一枚 `w:trPrChange` 里装的是行的孩子、不会再套一枚 `w:trPr`，所以非贪婪就到本枚的尾）。 */
+const trPrOf = (xml: string, nth = 0): string => (xml.match(/<w:trPr\b[\s\S]*?<\/w:trPr>/g) ?? [])[nth] ?? "";
+/** 这一行自己的那一份属性（`w:trPr` 的每枚孩子在读侧就并到 `RowInfo` 上）。 */
+const rowInfoAt = (doc: WordDocument, n: number): RowInfo | undefined => tableOf(doc).rows[n]?.[0]?.row;
+const trCssAt = (doc: WordDocument, n: number): string =>
+  (renderWord(doc).match(/<tr\b[^>]*>/g) ?? []).map((t) => / style="([^"]*)"/.exec(t)?.[1] ?? "")[n] ?? "";
+
+/**
+ * 「表格属性」第二片：行自己那句 `w:trPr/w:jc`（§17.4.75）。读、画、存三腿在 #29 就接上了，这一片补的是落笔处。
+ *
+ * 摆的是数出来的三种形状（`.scratch/row-jc-shape-audience.py`：授权 46 件里 190 枚说的全是
+ * `<w:jc w:val="center"/>`，孩子序只有 `cantSplit+trHeight+jc`(18)、`trHeight+jc`(154)、`jc`(18) 三种，
+ * `jc` 永远收尾；`left` 一枚也没明写过）。WPS 那一格摆在哪张对话框**未取证**，所以这里不拿它当分组依据，
+ * 只钉「件里说过的那一句改得动、存得下、读得回来，且只换它自己那一枚」。
+ */
+describe("docx 表格属性：行那一句 w:trPr/w:jc 的落笔处", () => {
+  /** 四行按件里的三种形状各摆一行，再加一行整枚 `w:trPr` 都没写的。 */
+  const ROWS = pack(
+    `<w:tbl><w:tblPr><w:tblStyle w:val="a3"/><w:tblW w:w="0" w:type="auto"/><w:tblLook w:val="04A0"/></w:tblPr>` +
+      `<w:tblGrid><w:gridCol w:w="1800"/></w:tblGrid>` +
+      `<w:tr><w:trPr><w:cantSplit/><w:trHeight w:val="600"/><w:jc w:val="center"/></w:trPr>` +
+      `<w:tc><w:p><w:r><w:t>一</w:t></w:r></w:p></w:tc></w:tr>` +
+      `<w:tr><w:trPr><w:trHeight w:val="600" w:hRule="atLeast"/><w:jc w:val="center"/></w:trPr>` +
+      `<w:tc><w:p><w:r><w:t>二</w:t></w:r></w:p></w:tc></w:tr>` +
+      `<w:tr><w:trPr><w:jc w:val="center"/></w:trPr>` +
+      `<w:tc><w:p><w:r><w:t>三</w:t></w:r></w:p></w:tc></w:tr>` +
+      `<w:tr><w:tc><w:p><w:r><w:t>四</w:t></w:r></w:p></w:tc></w:tr>` +
+      `</w:tbl>`,
+  );
+
+  it("只换点过名的那一枚：兄弟孩子逐字节不动，`CT_TrPr` 的序照旧", () => {
+    const doc = open(ROWS);
+    expect(rowInfoAt(doc, 0)).toMatchObject({ keepTogether: true, heightTwips: 600, jc: "center" });
+    syncRowAlign(rowInfoAt(doc, 0)!, "right");
+    expect(trPrOf(save(doc), 0)).toBe('<w:trPr><w:cantSplit/><w:trHeight w:val="600"/><w:jc w:val="right"/></w:trPr>');
+    // 正控制：没被点名的三行留在原地（同一趟保存不该顺手改别处的行）。
+    expect(trPrOf(save(doc), 1)).toBe('<w:trPr><w:trHeight w:val="600" w:hRule="atLeast"/><w:jc w:val="center"/></w:trPr>');
+    expect(trPrOf(save(doc), 2)).toBe('<w:trPr><w:jc w:val="center"/></w:trPr>');
+  });
+
+  it("「左对齐」= 摘掉那一句，不是补一句 `val=\"left\"`：这一族说左的方式就是什么都不写", () => {
+    const doc = open(ROWS);
+    const info = rowInfoAt(doc, 1)!;
+    syncRowAlign(info, "");
+    expect(info.jc).toBeUndefined();
+    // 字段与字节同一步退：`rowShapeOf` 是记录里的「改之前」，留着 `jc` 就是拒绝时把没说过的一句话摆回去。
+    expect(rowShapeOf(info)).toEqual({ heightTwips: 600, heightRule: "atLeast" });
+    const out = trPrOf(save(doc), 1);
+    expect(out).toBe('<w:trPr><w:trHeight w:val="600" w:hRule="atLeast"/></w:trPr>');
+    expect(out).not.toContain("left");
+  });
+
+  it("行说过别的话但没说这一句时，新的一枚按 `CT_TrPr` 的序坐在 `hidden` 之前", () => {
+    const doc = open(ROWS);
+    const info: RowInfo = { header: true, hidden: true };
+    doc.blocks.filter((b): b is Table => b.kind === "table")[0]!.rows[0]!.forEach((cell) => {
+      cell.row = info;
+    });
+    info.slots = [
+      { tag: "tblHeader", xml: '<w:tblHeader w:val="1"/>' },
+      { tag: "hidden", xml: "<w:hidden/>" },
+    ];
+    syncRowAlign(info, "center");
+    expect(info.slots?.map((s) => s.tag)).toEqual(["tblHeader", "jc", "hidden"]);
+    expect(trPrOf(save(doc), 0)).toBe('<w:trPr><w:tblHeader w:val="1"/><w:jc w:val="center"/><w:hidden/></w:trPr>');
+  });
+
+  it("整枚 `w:trPr` 都没有的行（编辑器造的）：字段就够，写出器按模型把这一句拼出来", () => {
+    const doc = open(ROWS);
+    expect(rowInfoAt(doc, 3)).toBeUndefined(); // 读侧不给没说的行造一份属性
+    const table = tableOf(doc);
+    const info: RowInfo = {};
+    for (const cell of table.rows[3]!) cell.row = info;
+    syncRowAlign(info, "center");
+    expect(trPrOf(save(doc), 3)).toBe('<w:trPr><w:jc w:val="center"/></w:trPr>');
+  });
+
+  it("存了再开还是那一句，第二次存同一串字节：不双写、不漂", () => {
+    const doc = open(ROWS);
+    syncRowAlign(rowInfoAt(doc, 2)!, "right");
+    const once = writeDocx(doc);
+    const xml = save(doc);
+    expect(xml.match(/<w:trPr><w:jc/g) ?? []).toHaveLength(1);
+    const again = open(once);
+    expect(rowInfoAt(again, 2)?.jc).toBe("right");
+    const twice = text(OpcPackage.from(writeDocx(again)).bytes("word/document.xml")!);
+    expect(twice).toBe(xml);
+  });
+
+  it("画得出来：行那一句坐在 `<tr>` 上，段自己说了话的那一处按 §17.3.1.8 盖过它", () => {
+    const doc = open(ROWS);
+    expect(trCssAt(doc, 0)).toContain("text-align:center;");
+    // 行高与行对齐落在同一枚 `<tr>` 上：600 缇 ÷ 15 = 40px。
+    expect(trCssAt(doc, 1)).toContain("height:40px;text-align:center;");
+    expect(trCssAt(doc, 3)).toBe("");
+    // 段说了「左」的那一格不再跟着行居中：优先级是段 > 格 > 行，行那句只在段没说时借过去。
+    const stated = pack(
+      `<w:tbl><w:tblGrid><w:gridCol w:w="1800"/></w:tblGrid>` +
+        `<w:tr><w:trPr><w:jc w:val="center"/></w:trPr>` +
+        `<w:tc><w:p><w:pPr><w:jc w:val="left"/></w:pPr><w:r><w:t>甲</w:t></w:r></w:p></w:tc></w:tr>` +
+        `</w:tbl>`,
+    );
+    const html = renderWord(open(stated));
+    expect(/<tr\b[^>]*>/.exec(html)?.[0]).toContain("text-align:center;");
+    // 段自己那一枚 `<div class="para">` 上写的是 `text-align:left`——纸上是两处不同的元素，行那句没有盖住它。
+    expect(/<div class="para"[^>]*>/.exec(html)?.[0]).toContain("text-align:left");
+  });
+
+  it("开着修订：那一枚 `w:trPrChange` 带的是改之前那一整套，拒绝把件里那句放回原位", () => {
+    const doc = open(ROWS);
+    const info = rowInfoAt(doc, 0)!;
+    const was = rowShapeOf(info);
+    const wasSlots = info.slots ?? [];
+    syncRowAlign(info, "right");
+    signRowRevision(info, { id: 77, author: "顾峰" }, was, wasSlots);
+    const bytes = writeDocx(doc);
+    const xml = text(OpcPackage.from(bytes).bytes("word/document.xml")!);
+    expect(xml).toContain('<w:trPrChange w:id="77" w:author="顾峰">');
+    // 记录里是行改之前说过的三句，不是只有这一句——拒绝要摆回的是那一整套。
+    expect(/<w:trPrChange[\s\S]*?<\/w:trPrChange>/.exec(xml)?.[0]).toContain('<w:jc w:val="center"/>');
+
+    const reopened = open(bytes);
+    expect(reopened.resolveRevisions("reject", 77)).toBe(1);
+    expect(rowInfoAt(reopened, 0)).toMatchObject({ keepTogether: true, heightTwips: 600, jc: "center" });
+    const back = save(reopened);
+    expect(back).not.toContain("<w:trPrChange");
+    expect(trPrOf(back, 0)).toBe('<w:trPr><w:cantSplit/><w:trHeight w:val="600"/><w:jc w:val="center"/></w:trPr>');
   });
 });

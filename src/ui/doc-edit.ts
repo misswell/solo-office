@@ -1,7 +1,7 @@
-import type { Block, BorderSet, Carried, CarriedInline, CellStyle, FormatRevision, HeaderFooter, HfSegment, Inline, LineSpacingRule, MarginTwips, ParaStyle, PageGeometry, PageSetup, Paragraph, ParagraphFormatRevision, PropSlot, Revision, RevisionEntry, RowInfo, RowStyle, RunStyle, Section, Table, TableBorder, TableCell, TablePropsPatch, TableStyle, WordDocument } from "../core/docx.js";
+import type { Block, BorderSet, Carried, CarriedInline, CellStyle, FormatRevision, HeaderFooter, HfSegment, Inline, LineSpacingRule, MarginTwips, ParaStyle, PageGeometry, PageSetup, Paragraph, ParagraphFormatRevision, PropSlot, Revision, RevisionEntry, RowInfo, RowStyle, RunStyle, Section, Table, TableBorder, TableCell, TablePropsDialogPatch, TablePropsPatch, TableStyle, WordDocument } from "../core/docx.js";
 import type { CommentAnchor, DocComment } from "../core/comments.js";
 import { bodyShape, commentTexts } from "../core/comments.js";
-import { DEFAULT_SECTION, EAST_ASIAN_TEXT, MARGIN_SIDES, RUN_STYLE_KEYS, applyFacePick, applyRunPatch, borderDelta, carriedShape, cellShapeOf, countTexts, hasLine, lineGridPitchTwips, ownParaStyle, ownRunStyle, paraSpacingPitch, paragraphTextsOf, rowShapeOf, runStyleOf, samePropValue, sectionEndsOf, signCellPlaceRevision, signCellRevision, signRowRevision, signTableRevision, stampNow, syncCellBox, syncCellVAlign, syncParaSlots, syncRowHeader, syncRowHeight, syncTableBox, syncTableProps, tableShapeOf, twipsToPx } from "../core/docx.js";
+import { DEFAULT_SECTION, EAST_ASIAN_TEXT, MARGIN_SIDES, RUN_STYLE_KEYS, applyFacePick, applyRunPatch, borderDelta, carriedShape, cellShapeOf, countTexts, hasLine, lineGridPitchTwips, ownParaStyle, ownRunStyle, paraSpacingPitch, paragraphTextsOf, rowShapeOf, runStyleOf, samePropValue, sectionEndsOf, signCellPlaceRevision, signCellRevision, signRowRevision, signTableRevision, stampNow, syncCellBox, syncCellVAlign, syncParaSlots, syncRowAlign, syncRowHeader, syncRowHeight, syncTableBox, syncTableProps, tableShapeOf, twipsToPx } from "../core/docx.js";
 import type { CellWhere, TableEdit } from "../core/doc-table-ops.js";
 import { allCells, applyRowHeights, cellOuterSides, cellRangeFor, cellRect, columnCells, cellsInRect, cellsInSweep, deleteCellHere, deleteColumnHere, deleteRowHere, deleteTableBlock, distributeColumns, distributeRows, gridColumns, gridWidths, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, setColumnWidth, splitHere, splitTableAt, tableToText, type RowHeightMove, type TableTextSeparator } from "../core/doc-table-ops.js";
 import { IMAGE_EXT_BY_MIME } from "../core/media.js";
@@ -3647,18 +3647,25 @@ export class DocEditor {
 
   /**
    * 「表格属性」的读数：选中的每张表**自己说过**的那四句——对齐 `w:jc`、左缩进 `w:tblInd`、固定列宽
-   * `w:tblLayout`、默认单元格边距 `w:tblCellMar`。摆的是件里那一句，不是页面的缺省；几张表说法不一致时
-   * 摆第一张的并说一句 `mixed`（与「边框与底纹」同一条口径）。
+   * `w:tblLayout`、默认单元格边距 `w:tblCellMar`；再加上选区盖住的每一行自己说过的那句对齐 `w:trPr/w:jc`。
+   * 摆的是件里那一句，不是页面的缺省；几张表、几行说法不一致时摆第一份的并说一句 `mixed`（与「边框与底纹」同一条口径）。
    */
   tablePropsState(): TablePropsState | undefined {
     const segments = this.selectionTableSegments();
     if (!segments.length) return undefined;
     const first = segments[0]!.table;
+    // 行那一句逐行问（与 `setCellHeight` 同一口径：选区盖住哪几行就问哪几行）。编辑器自己造的行没有
+    // `RowInfo`，它「什么都没说」——读端不替它现造一份，那是写端的事。
+    const rowAligns = segments.flatMap((segment) => {
+      const indexes = [...new Set(segment.cells.map((where) => where.row))].sort((a, b) => a - b);
+      return indexes.map((index) => segment.table.rows[index]?.[0]?.row?.jc);
+    });
     const state: TablePropsState = {
       ...(first.align !== undefined ? { align: first.align } : {}),
       ...(first.indentTwips !== undefined ? { indentTwips: first.indentTwips } : {}),
       ...(first.layout !== undefined ? { layout: first.layout } : {}),
       ...(first.cellMargin !== undefined ? { cellMargin: { ...first.cellMargin } } : {}),
+      ...(rowAligns[0] !== undefined ? { rowAlign: rowAligns[0] } : {}),
     };
     // 逐格问「选的这几张表在这一句上说不一致」：不一致的那一格摆「不改」而不是第一张的说法，
     // 否则原样确定会把这些表**改成第一张的**，用户一个字没填却动了文件。
@@ -3678,6 +3685,10 @@ export class DocEditor {
         state.mixed = true;
       }
     }
+    if (rowAligns.length > 1 && rowAligns.some((v) => v !== rowAligns[0])) {
+      state.differ = { ...state.differ, rowAlign: true };
+      state.mixed = true;
+    }
     return state;
   }
 
@@ -3692,8 +3703,12 @@ export class DocEditor {
    * 「表格属性」这一击的落笔处：逐张表只写**这一击点过名、且与它自己那句不一样**的那几句，本来就这么说的表
    * 一个字节不动（所以「原样确定」不改文件）。开着修订时与 `setTableBox` 同形留一枚 `w:tblPrChange`。
    * 宽度不在这条腿里：`w:tblW` 由网格那条腿（`setTableWidth`）写，两条腿写同一句会互相顶掉。
+   *
+   * `patch.rows` 落的是**选区盖住的每一行**那句 `w:trPr/w:jc`：与表那几句合在**同一次落笔**里，
+   * 所以对话框点一次「确定」在撤销栈上是一件事，退一次就全回去。行那一句逐行签 `w:trPrChange`、
+   * 整击共用一枚 `w:id`（与行高、标题行重复同一出口：在审核者眼里这一击是一件事）。
    */
-  setTableProps(patch: TablePropsPatch): boolean {
+  setTableProps(patch: TablePropsDialogPatch): boolean {
     const caret = this.caretPath();
     const edits = this.selectionTableSegments().flatMap((segment) => {
       const table = segment.table;
@@ -3717,13 +3732,40 @@ export class DocEditor {
       if (!Object.keys(diff).length) return [];
       return [{ table, diff, wasShape: tableShapeOf(table), wasXml: table.tblPrXml }];
     });
-    if (!edits.length) return false;
+    const wantRow = patch.rows?.align;
+    const rowEdits: { info: RowInfo; was: RowStyle; wasSlots: PropSlot[] }[] = [];
+    if (wantRow !== undefined) {
+      const seen = new Set<RowInfo>();
+      for (const segment of this.selectionTableSegments()) {
+        for (const where of segment.cells) {
+          const row = segment.table.rows[where.row];
+          if (!row?.length) continue;
+          let info = row[0].row;
+          if (!info) {
+            info = {};
+            for (const cell of row) cell.row = info;
+          }
+          if (seen.has(info) || (info.jc ?? "") === wantRow) continue;
+          seen.add(info);
+          rowEdits.push({ info, was: rowShapeOf(info), wasSlots: info.slots ?? [] });
+        }
+      }
+    }
+    if (!edits.length && !rowEdits.length) return false;
     this.snapshot(caret);
     for (const edit of edits) {
       syncTableProps(edit.table, edit.diff);
       if (this.trackRevisions && edit.table.revFormat?.author !== this.authorName) {
         this.revSeq += 1;
         signTableRevision(edit.table, { id: this.revSeq, author: this.authorName, date: stampNow() }, edit.wasShape, edit.wasXml);
+      }
+    }
+    if (wantRow !== undefined) {
+      if (rowEdits.length && this.trackRevisions) this.revSeq += 1;
+      for (const edit of rowEdits) {
+        syncRowAlign(edit.info, wantRow);
+        if (this.trackRevisions)
+          signRowRevision(edit.info, { id: this.revSeq, author: this.authorName, date: stampNow() }, edit.was, edit.wasSlots);
       }
     }
     this.repaintWithSelection(caret);

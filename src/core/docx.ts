@@ -5726,6 +5726,23 @@ export type TablePropsPatch = {
   cellMargin?: MarginTwips;
 };
 
+/**
+ * 「表格属性」那一击**行**那一段碰得到的句子：行自己那句对齐 `w:trPr/w:jc`（§17.4.75）。
+ * 缺的键 = 这一句不改；`""` = 摘掉那一句，回到「没说」那一档（左）。
+ *
+ * **行高、允许跨页断行、标题行重复不在这一份里**：前两句各有各的腿（`setCellHeight` 落 `w:trHeight`、
+ * 表格工具「标题行重复」落 `w:tblHeader`），对话框再摆一格就是两个主人写同一句；`w:cantSplit` 则是
+ * 铺排里还没有落笔处——引擎把每一行当成一枚整单位铺（`doc-layout.ts:unitsOfBlock` 那一支），勾与不勾
+ * 画出来是同一张纸，摆一格就是写一句纸面不认的字节。
+ */
+export type RowPropsPatch = { align?: "left" | "center" | "right" | "" };
+
+/**
+ * 「表格属性」那一次「确定」的全部落笔：表自己那几句 + 选区盖住的每一行那几句。
+ * 合成一份而不是两次点击，是为了撤销栈——对话框一次「确定」在用户手里是一件事，拆成两击要退两次。
+ */
+export type TablePropsDialogPatch = TablePropsPatch & { rows?: RowPropsPatch };
+
 /** 这四句写回表自己的 `w:tblPr`，模型字段同一步跟上——再画一遍与再存一遍说的得是同一件事。 */
 export function syncTableProps(t: Table, patch: TablePropsPatch): void {
   if (patch.align !== undefined) t.align = patch.align || undefined;
@@ -5867,6 +5884,27 @@ export function syncRowHeader(row: RowInfo, on: boolean): void {
   }
   const prefix = slotPrefix(row.slots);
   row.slots = upsertSlot(row.slots, "tblHeader", `<${prefix}:tblHeader/>`, TRPR_CHILD_ORDER);
+}
+
+/**
+ * 行对齐那一击写回行自己那句 `w:trPr/w:jc`（§17.4.75，`ST_JcTable` 只有 `left`/`center`/`right` 三档）。
+ * 与行高、表头那两条同两分：字段给纸面读（`render.ts:rowStyle` 把这一句落在 `<tr>` 上，格与段从它继承），
+ * 孩子给写出与「拒绝」读——读过件的行是按枚带回 `w:trPr` 孩子的，光改字段存盘会发现那一句还是件里的。
+ *
+ * `""` = 摘掉那一枚孩子，不写 `<w:jc w:val="left"/>`：这一族缺省就是左，「没说」与「明说 left」在纸上是
+ * 同一张纸，补一句文件没说的 `left` 就是替它发明（与 `setCellAlign` 清掉段那句 `w:jc` 同一条口径，
+ * 两页对着同一份文档不写出两种字节）。件里那句是认不出的档（如 `start`）时，选 `center` 就是原位换掉它。
+ */
+export function syncRowAlign(row: RowInfo, align: string): void {
+  if (align) row.jc = align;
+  else delete row.jc;
+  if (!row.slots?.length) return;
+  if (!align) {
+    row.slots = row.slots.filter((s) => s.tag !== "jc");
+    return;
+  }
+  const prefix = slotPrefix(row.slots);
+  row.slots = upsertSlot(row.slots, "jc", `<${prefix}:jc ${prefix}:val="${align}"/>`, TRPR_CHILD_ORDER);
 }
 
 /** 一套属性在孩子里说过的那几枚：别人的待裁决不算进这一份快照。 */

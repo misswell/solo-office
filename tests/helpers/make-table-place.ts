@@ -41,6 +41,12 @@ export function tableXml(tag: string, widthTwips: number, pr: string): string {
 const CENTER = `<w:jc w:val="center"/>`;
 const indent = (twips: number): string => `<w:tblInd w:w="${twips}" w:type="dxa"/>`;
 
+/** 把一枚 `w:trPr` 插进**最后**那一行——件里的行各有自己的说法，两张一模一样的行问不出「逐行派发」。 */
+const withRowPr = (tbl: string, trPr: string): string => {
+  const at = tbl.lastIndexOf("<w:tr>");
+  return tbl.slice(0, at + "<w:tr>".length) + trPr + tbl.slice(at + "<w:tr>".length);
+};
+
 /** 六张表，按甲乙丙丁戊己排；DOM 探针与装机烟测都按这一序问。 */
 export const PLACE_TABLES =
   tableXml("甲", 9637, CENTER) +
@@ -60,8 +66,17 @@ export const BARE_TABLES = PLACE_TABLES.replace(/<w:jc[^/]*\/>/g, "").replace(/<
  * - 摆2 只说居中 → 原样确定：一个字节也不该动（纸上仍是 `calc(50% - 166.66666666666666px)`，没有带号的那一截）；
  * - 摆3 说居中 + 288 → 只把左缩进填成 `0`：盘上那句是**明写的 0**（`w:w="0"`），不是删掉——
  *   「说了 0」与「没说」在纸上画到同一处，在盘上是两句话（授权 46 份里 `w:tblInd` 说 0 的有 30 枚，见 §154）。
+ *
+ * #216 给摆3 的**末行**另加一句行的话（`w:trPr/w:jc`）：表那三句问的是「逐张表」，行那一句问的是「逐行」，
+ * 两张一模一样的行问不出这条派发。那一枚的形状是数出来的（`.scratch/row-jc-shape-audience.py`：授权 46 件里
+ * 190 枚说的全是 `center`，孩子序只有 `cantSplit+trHeight+jc`(18)、`trHeight+jc`(154)、`jc`(18) 三种，`jc` 永远收尾），
+ * 这里取最常见那一支 `trHeight+jc`——**「左对齐」把 `jc` 摘掉时 `trHeight` 得留在原位**，所以兄弟孩子必须有。
+ * 摆1 与摆2 的行一句都没说：摆1 要问「凭空多出这一枚」，摆2 要问「没点名的不许被发明成 0/center」。
  */
-export const EDIT_TABLES = tableXml("摆1", 5000, "") + tableXml("摆2", 5000, CENTER) + tableXml("摆3", 5000, CENTER + indent(288));
+export const EDIT_TABLES =
+  tableXml("摆1", 5000, "") +
+  tableXml("摆2", 5000, CENTER) +
+  withRowPr(tableXml("摆3", 5000, CENTER + indent(288)), `<w:trPr><w:trHeight w:val="600"/>${CENTER}</w:trPr>`);
 
 /** 六张摆位表 + 三张待改表：#214 的装机件用这一份，前六张的形状与 #213 逐字相同。 */
 export const PLACE_AND_EDIT = PLACE_TABLES + EDIT_TABLES;

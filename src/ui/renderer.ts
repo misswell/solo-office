@@ -910,7 +910,7 @@ function buildDocRibbon(): void {
   //  · 「查看网格线」说的是**屏幕上画不画导引线**这一句，文件里没有它（下面那枚 `showGridlines` 说清了为什么），
   //    家里画得出来也回得了显，所以摆。
   const props = group("table");
-  button(props, "tableProps", "属性", "表格对齐、左缩进、固定列宽与默认单元格边距（WPS：Table Properties）", () => editor?.openTableProps());
+  button(props, "tableProps", "属性", "表与行的对齐、左缩进、固定列宽与默认单元格边距（WPS：Table Properties）", () => editor?.openTableProps());
   button(props, "gridlines", "查看网格线", "把文件里没说过线的那些格子边，在屏幕上画成导引线（WPS：View Gridlines）；导引线上不了纸", () => {
     showGridlines = !showGridlines;
     syncDocRibbon();

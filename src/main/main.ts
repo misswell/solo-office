@@ -1970,11 +1970,13 @@ function smoke(): void {
         // 落的是左对齐 + 缩进、量完整条撤销——它证的是「按得动、纸跟着动、撤得回」，不是「落得到盘上」；而 #213 把
         // 居中那一支换成 calc 之后，「居中 + 缇」这条**从没被点过**：授权 58 张表里 14 枚说居中、8 枚两句同说，
         // 落笔面只走过 #213 之前那条分得开的档。这一腿按件名「写盘」认领自己那三张，别家的字节账一律不牵动。
-        // 三张各占一种起始态，问三种形状：
-        // 摆1 两句都没说 → 点居中 + 0.5 厘米（盘上凭空多出两枚，纸上走 calc 那一支）；
-        // 摆2 只说居中 → 原样确定（一个字节也不许多写，脏字也不许多亮）；
-        // 摆3 说居中 + 288 → 只把左缩进填成 0（盘上必须是**明写的 0**，不是删掉——「说了 0」与「没说」画到同一处，
-        // 文件里却是两句话：授权 46 份里 w:tblInd 说 0 的有 30 枚，见 §154）。
+        // 三张各占一种起始态，问三种形状（每行问两半：表那一句在 w:tblPr 里，#216 新接的行那一句 w:trPr/w:jc 在行自己身上）：
+        // 摆1 表与行两句都没说 → 表点居中 + 0.5 厘米、行点居中（盘上凭空多出三枚，纸上走 calc 那一支、只有光标那一行挪）；
+        // 摆2 表只说居中 → 原样确定（一个字节也不许多写，脏字也不许多亮，表那句也不许抄给行）；
+        // 摆3 表说居中 + 288、末行说 trHeight 600 + 居中 → 光标放末行，左缩进填成 0（盘上必须是**明写的 0**，不是删掉——
+        // 「说了 0」与「没说」画到同一处，文件里却是两句话：授权 46 份里 w:tblInd 说 0 的有 30 枚，见 §154），
+        // 行那句选「左对齐」（= 摘掉 w:jc，不许补一句 val=left；授权 190 枚行对齐里 left 一枚也没明写过，见 §157），
+        // 同座的兄弟孩子 w:trHeight 得留在原位——摘一句不许顺手把邻座也搬走。
         // 落完按壳自己的 solo:save 写回；第二趟直接开上一趟写回的那份——起手摆出来的就该是上一趟落下的那两枚，
         // 且再点一次同样的值不再动字节。这一段整篇在模板字符串里：不写类型、不写反引号、正则不带转义。
         const tpwDoc = (document.getElementById("title")?.textContent ?? "").includes("写盘");
@@ -2010,11 +2012,22 @@ function smoke(): void {
             const r = t.getBoundingClientRect();
             return { css: t.getAttribute("style") ?? "", gL: round1(r.left / b.z - b.left), gR: round1(b.right - r.right / b.z), w: round1(r.width / b.z), boxW: round1(b.right - b.left) };
           };
-          // 光标放回那张表的第一格：命令按选区派发，光标不在表里时「属性」那枚是灰的——那不该由这一腿绕过。
+          // #216：行那一句（w:trPr/w:jc）落在**那一行自己**那枚 tr 上，不在表上——所以逐行读，表那一句的读数管不到它。
+          // 行内样式同时带着兄弟孩子那一句（摆3 末行的「height:40px」= 600 缇 ÷ 15）：摘掉居中时它得留在原处。
+          const tpwRowRead = (needle) => {
+            const t = tpwTable(needle);
+            if (!t) return null;
+            return [...t.querySelectorAll("tr")].map((tr) => ({
+              css: tr.getAttribute("style") ?? "",
+              align: getComputedStyle(tr).textAlign,
+            }));
+          };
+          // 光标放回那张表第一格（或指定那一行的第一格）：命令按选区派发，光标不在表里时「属性」那枚是灰的——那不该由这一腿绕过。
           // 照 #190 那一腿的做法（selectNodeContents + collapse），不抓格子里那个 span 的第一个孩子：
           // 格子里那一串是壳自己画的，画成什么形状不该由这一腿来假设。
-          const tpwPut = (needle) => {
-            const cell = tpwTable(needle)?.querySelector("td");
+          const tpwPut = (needle, rowIdx) => {
+            const rows = tpwTable(needle)?.querySelectorAll("tr");
+            const cell = rows?.[rowIdx ?? 0]?.querySelector("td");
             if (!cell) return 0;
             const rg = document.createRange();
             rg.selectNodeContents(cell);
@@ -2043,8 +2056,8 @@ function smoke(): void {
             el.dispatchEvent(new Event(kind, { bubbles: true }));
             return 1;
           };
-          const tpwOpen = async (needle) => {
-            const put = tpwPut(needle);
+          const tpwOpen = async (needle, rowIdx) => {
+            const put = tpwPut(needle, rowIdx);
             await wait(220);
             const bar = document.querySelector("#ribbon .rbar[data-tab='table']");
             const shown = bar?.hidden === false ? 1 : 0;
@@ -2062,6 +2075,9 @@ function smoke(): void {
             fixed: tpwField("tp-fixed")?.checked === true ? 1 : 0,
             margin: ["top", "left", "bottom", "right"].map((s) => tpwField("tp-m-" + s)?.value ?? "?").join(","),
             unit: tpwUnit(),
+            // #216：行那一句是**另一格**（tp-row-align），读的是光标所在那一行自己那句，不被表那句带着走。
+            rowAlign: tpwField("tp-row-align")?.value ?? "?",
+            rowOpts: tpwField("tp-row-align")?.options?.length ?? 0,
           });
           const tpwApply = () => {
             const b = tpwDlg()?.querySelector(".solo-tp-apply");
@@ -2069,42 +2085,48 @@ function smoke(): void {
           };
           const dirtyNow = () => ((document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0);
           const tpwSteps = [];
-          // 摆1：什么都没说 → 居中 + 0.5 厘米。
+          // 摆1：表与行两句都没说 → 表那半点居中 + 0.5 厘米，行那半点居中：一次「确定」落两处，
+          // 盘上凭空多出三枚（tblPr 的 jc/tblInd 加行自己那枚 trPr/jc），纸上只有光标那一行挪。
           {
             const o = await tpwOpen("摆1");
             const before = tpwRead("摆1");
+            const rowsBefore = tpwRowRead("摆1");
             const echo = tpwEcho();
             const dirtyBefore = dirtyNow();
             const setAlign = tpwSet(tpwField("tp-align"), "center", "change");
             const setIndent = tpwSet(tpwField("tp-indent"), "0.5", "input");
+            const setRow = tpwSet(tpwField("tp-row-align"), "center", "change");
             await wait(140);
             const err = tpwDlg()?.querySelector(".solo-tp-error")?.textContent ?? "";
             const applied = tpwApply();
             await wait(420);
-            tpwSteps.push({ name: "摆1", ...o, echo: echo, dirtyBefore: dirtyBefore, setAlign: setAlign, setIndent: setIndent, err: err, applied: applied, gone: tpwDlg() ? 0 : 1, before: before, after: tpwRead("摆1"), dirtyAfter: dirtyNow() });
+            tpwSteps.push({ name: "摆1", ...o, echo: echo, dirtyBefore: dirtyBefore, setAlign: setAlign, setIndent: setIndent, setRow: setRow, err: err, applied: applied, gone: tpwDlg() ? 0 : 1, before: before, rowsBefore: rowsBefore, rows: tpwRowRead("摆1"), after: tpwRead("摆1"), dirtyAfter: dirtyNow() });
           }
-          // 摆2：只说居中 → 一格不碰，直接按「确定」。
+          // 摆2：表只说居中、行没说 → 一格不碰，直接按「确定」：表那句不许抄给行。
           {
             const o = await tpwOpen("摆2");
             const before = tpwRead("摆2");
+            const rowsBefore = tpwRowRead("摆2");
             const echo = tpwEcho();
             const dirtyBefore = dirtyNow();
             const applied = tpwApply();
             await wait(420);
-            tpwSteps.push({ name: "摆2", ...o, echo: echo, dirtyBefore: dirtyBefore, err: "", applied: applied, gone: tpwDlg() ? 0 : 1, before: before, after: tpwRead("摆2"), dirtyAfter: dirtyNow() });
+            tpwSteps.push({ name: "摆2", ...o, echo: echo, dirtyBefore: dirtyBefore, err: "", applied: applied, gone: tpwDlg() ? 0 : 1, before: before, rowsBefore: rowsBefore, rows: tpwRowRead("摆2"), after: tpwRead("摆2"), dirtyAfter: dirtyNow() });
           }
-          // 摆3：居中 + 288 → 只把左缩进改成 0。
+          // 摆3：表说居中 + 288、末行说 trHeight 600 + 居中 → 光标放**末行**，只把左缩进改成 0、行那句选「左对齐」（= 摘掉）。
           {
-            const o = await tpwOpen("摆3");
+            const o = await tpwOpen("摆3", 1);
             const before = tpwRead("摆3");
+            const rowsBefore = tpwRowRead("摆3");
             const echo = tpwEcho();
             const dirtyBefore = dirtyNow();
             const setIndent = tpwSet(tpwField("tp-indent"), "0", "input");
+            const setRow = tpwSet(tpwField("tp-row-align"), "left", "change");
             await wait(140);
             const err = tpwDlg()?.querySelector(".solo-tp-error")?.textContent ?? "";
             const applied = tpwApply();
             await wait(420);
-            tpwSteps.push({ name: "摆3", ...o, echo: echo, dirtyBefore: dirtyBefore, setIndent: setIndent, err: err, applied: applied, gone: tpwDlg() ? 0 : 1, before: before, after: tpwRead("摆3"), dirtyAfter: dirtyNow() });
+            tpwSteps.push({ name: "摆3", ...o, echo: echo, dirtyBefore: dirtyBefore, setIndent: setIndent, setRow: setRow, err: err, applied: applied, gone: tpwDlg() ? 0 : 1, before: before, rowsBefore: rowsBefore, rows: tpwRowRead("摆3"), after: tpwRead("摆3"), dirtyAfter: dirtyNow() });
           }
           fire("solo:save");
           await wait(1000);
@@ -2127,7 +2149,7 @@ function smoke(): void {
             // 第二趟的起手与这一串同一处，才是「壳把自己写回的那份读回来、照它摆」——比步骤里那次紧跟的读数更晚、更硬。
             final: ["摆1", "摆2", "摆3"].map((n) => {
               const r = tpwRead(n);
-              return { name: n, css: r?.css ?? "", gL: r?.gL ?? null, gR: r?.gR ?? null, w: r?.w ?? null, boxW: r?.boxW ?? null };
+              return { name: n, css: r?.css ?? "", gL: r?.gL ?? null, gR: r?.gR ?? null, w: r?.w ?? null, boxW: r?.boxW ?? null, rows: tpwRowRead(n) };
             }),
             pages: document.querySelectorAll("#view .page").length,
           };

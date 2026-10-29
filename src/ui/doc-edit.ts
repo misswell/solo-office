@@ -3415,7 +3415,7 @@ export class DocEditor {
   paraSpacingState(): ParaSpacingState | undefined {
     const targets = this.selectionParagraphs();
     if (!targets.length) return undefined;
-    const agree = <K extends "spacingBefore" | "spacingAfter" | "lineSpacing" | "lineSpacingRule" | "snapToGrid" | "wordWrap">(key: K): Paragraph[K] | undefined => {
+    const agree = <K extends "spacingBefore" | "spacingAfter" | "lineSpacing" | "lineSpacingRule" | "snapToGrid" | "wordWrap" | "widowControl" | "keepNext" | "keepLines" | "pageBreakBefore">(key: K): Paragraph[K] | undefined => {
       const first = targets[0]![key];
       return targets.every((p) => p[key] === first) ? first : undefined;
     };
@@ -3426,10 +3426,19 @@ export class DocEditor {
       lineRule: agree("lineSpacingRule"),
       snapToGrid: agree("snapToGrid"),
       wordWrap: agree("wordWrap"),
+      widowControl: agree("widowControl"),
+      keepNext: agree("keepNext"),
+      keepLines: agree("keepLines"),
+      pageBreakBefore: agree("pageBreakBefore"),
     };
     state.linePitchTwips = targets.map((p) => paraSpacingPitch(p)).find((x) => x !== undefined);
     state.snapMixed = targets.length > 1 && state.snapToGrid === undefined;
     state.wrapMixed = targets.length > 1 && state.wordWrap === undefined;
+    // 四颗勾的两态摆不出「不一致」：`agree` 把不一致的那些键交成 `undefined`，对话框按缺省摆（孤行控制勾着、
+    // 其余三颗没勾），所以另交一个 `keepMixed` 让那行小字说出来。逐键与第一段比，与 `agree` 同一个基准。
+    state.keepMixed =
+      targets.length > 1 &&
+      (["widowControl", "keepNext", "keepLines", "pageBreakBefore"] as const).some((key) => targets.some((p) => p[key] !== targets[0]![key]));
     const at = this.doc.blocks.indexOf(targets[0]);
     const block = at < 0 ? this.caretPath()?.path[0] ?? 0 : at;
     const sections = this.doc.sections.length ? this.doc.sections : [DEFAULT_SECTION];
@@ -3446,7 +3455,7 @@ export class DocEditor {
   }
 
   /**
-   * ribbon 行距下拉与「段落」对话框共用的落笔处。**只写用户动过的那一句**：五个键都不在补丁里就整击作废，
+   * ribbon 行距下拉与「段落」对话框共用的落笔处。**只写用户动过的那一句**：补丁里一个键都没有就整击作废，
    * 连撤销栈都不进——与 `shiftParagraphIndent` 已经在边上时同一个判定。`w:line` 与 `w:lineRule` 必须同进同出
    * （授权口径那 3,948 枚——`word/document.xml` 3,924 + `word/footnotes.xml` 12 + `word/endnotes.xml` 12，
    * `.scratch/spacing-part-scope.py`——里 0 枚只写一边），所以补丁交了 `line` 就一定带着规则；只交一半会被读成上一份的规则，
@@ -3455,7 +3464,8 @@ export class DocEditor {
   setParagraphSpacing(patch: ParaSpacingPatch): boolean {
     const targets = this.selectionParagraphs();
     if (!targets.length) return false;
-    if (patch.beforeTwips === undefined && patch.afterTwips === undefined && patch.line === undefined && patch.snapToGrid === undefined && patch.wordWrap === undefined) return false;
+    const keys = ["beforeTwips", "afterTwips", "line", "snapToGrid", "wordWrap", "widowControl", "keepNext", "keepLines", "pageBreakBefore"] as const;
+    if (keys.every((key) => patch[key] === undefined)) return false;
     this.snapshot(this.caretPath());
     for (const paragraph of targets) {
       const was = carriedShape(paragraph);
@@ -3468,6 +3478,12 @@ export class DocEditor {
       }
       if (patch.snapToGrid !== undefined) paragraph.snapToGrid = patch.snapToGrid;
       if (patch.wordWrap !== undefined) paragraph.wordWrap = patch.wordWrap;
+      // 「换行和分页」四颗勾（§17.3.2.90 / §17.3.1.14 / §17.3.1.13 / §17.3.1.65）同一支三态笔：`syncParaSlots`
+      // 按 `true` 裸写、`false` 写 `w:val="0"`，字段退回 `undefined`（这一段没说）时那枚槽位归还样式链。
+      if (patch.widowControl !== undefined) paragraph.widowControl = patch.widowControl;
+      if (patch.keepNext !== undefined) paragraph.keepNext = patch.keepNext;
+      if (patch.keepLines !== undefined) paragraph.keepLines = patch.keepLines;
+      if (patch.pageBreakBefore !== undefined) paragraph.pageBreakBefore = patch.pageBreakBefore;
       syncParaSlots(paragraph);
       // 这一本账是**全账**（`carriedShape`：`PARA_STYLE_KEYS` 写得出句子的，与只靠 `w:pPr` 槽位带回的那八项都算），
       // 所以单动「对齐到网格」或「允许西文在单词中间换行」这一枚也看得出改了口；记录带的是改之前那一句的字段与

@@ -4884,8 +4884,9 @@ export function carriedShape(p: Paragraph): ParaStyle {
  *
  * `snapToGrid` is in this set (round #134) because the checkbox needs both halves of it: a paragraph borrowing
  * `w:snapToGrid w:val="0"` from its style shows the box unchecked, and only against this snapshot does the write
- * side recognise that statement as the style's rather than as a click. The three keep flags are deliberately
- * not here, exactly as they are not in `PARA_STYLE_KEYS` — `nextSplit` re-derives them by the same test.
+ * side recognise that statement as the style's rather than as a click. The three keep flags joined for the same
+ * reason in #220 — 「换行和分页」的四颗勾 can turn a borrowed 「开」 off, which takes a `w:val="0"` on the
+ * paragraph, and the write side can only tell that apart from silence by what the paragraph drew on the way in.
  */
 function paraReadSnapshot(p: Paragraph): ParaStyle {
   return {
@@ -4907,6 +4908,12 @@ function paraReadSnapshot(p: Paragraph): ParaStyle {
     pageBreakBefore: p.pageBreakBefore || undefined,
     numPr: p.numPr,
     outlineLevel: p.outlineLevel,
+    // 三条保持规则（#220）：与 `snapToGrid` 同一条来路。写侧要拿它判「段上没有这一枚时，用户拨的这一下来得算不算数」——
+    // 从样式链借来「开」的段，用户勾掉它得在段落上写一句 `w:val="0"` 才盖得住，而参照只能是入件时画着的那一份。
+    // `nextSplit` 不读这本账（它拿旧链 `before` 比，见那里的说明），所以这里补上不改变拆段的口径。
+    keepNext: p.keepNext,
+    keepLines: p.keepLines,
+    widowControl: p.widowControl,
     snapToGrid: p.snapToGrid,
     wordWrap: p.wordWrap,
     // 框与底纹进这本账与 `snapToGrid` 同一个理由：写出侧只把**这一击动过的**说出去，而「动过」是对着入件时
@@ -5305,7 +5312,6 @@ export function syncParaSlots(p: Paragraph): void {
     if (slots.some((s) => s.tag === tag) || !samePropValue(p.asRead?.[key], value)) wanted.push({ tag, xml });
   };
   keep("pStyle", "styleId", p.styleId, `<${prefix}:pStyle w:val="${esc(p.styleId ?? "")}"/>`);
-  keep("pageBreakBefore", "pageBreakBefore", p.pageBreakBefore, `<${prefix}:pageBreakBefore/>`);
   keep("jc", "align", p.align, `<${prefix}:jc w:val="${esc(p.align ?? "")}"/>`);
   keep(
     "numPr",
@@ -5401,6 +5407,43 @@ export function syncParaSlots(p: Paragraph): void {
       xml: p.snapToGrid ? `<${prefix}:snapToGrid/>` : `<${prefix}:snapToGrid ${prefix}:val="0"/>`,
     });
   }
+  // 「换行和分页」那四枚（孤行控制 `w:widowControl` §17.3.2.90、与下段同页 `w:keepNext` §17.3.1.14、段中不分页
+  // `w:keepLines` §17.3.1.13、段前分页 `w:pageBreakBefore` §17.3.1.65）与上面两枚开关同一支三态笔：字段
+  // `undefined` = 这一段没说（照样式链与缺省），`true` 裸写，`false` 写 `w:val="0"`。说关的拼法不是从 ECMA 的
+  // 句法推的：授权 46 份正文里 180 枚 `w:pageBreakBefore` 全写 `w:val="0"`、0 枚写开（#166 量过），
+  // 而三条保持规则在段自己那一层也全是 `w:val="0"`（`w:keepNext` 200 枚、`w:keepLines` 200 枚、
+  // `w:widowControl` 160 枚，`.scratch/toggle-lent-chain.ts`）。没动过的段落一个字节不动：`moved()`
+  // 只认字段与入件时那一份不同，从样式链借来的话照旧归样式。
+  const KEEP_SWITCHES: [keyof ParaStyle, string][] = [
+    ["keepNext", "keepNext"], ["keepLines", "keepLines"], ["widowControl", "widowControl"], ["pageBreakBefore", "pageBreakBefore"],
+  ];
+  /**
+   * 槽位此刻说的那个布尔：裸写 = 开，`w:val="0"/"false"/"off"` = 关；没有这一枚元素 = 这一段没说。
+   * 认领的判据是「字节与字段说的不是同一件事」，不是「字段动过」：同一趟编辑里先勾上再取消，槽位已经在段上了，
+   * 只比 `moved()` 会把它留在原处（勾子撤回了，纸上却还断着页）；反过来，件自己写 `w:val="false"` 而字段也是关，
+   * 两者同义，这一枚一个字节都不该重写。
+   */
+  const slotSwitch = (tag: string): boolean | undefined => {
+    const xml = slots.find((s) => s.tag === tag)?.xml;
+    if (xml === undefined) return undefined;
+    const val = /(?:[A-Za-z_][\w.-]*:)?val="([^"]*)"/.exec(xml)?.[1];
+    return val === undefined ? true : !(val === "0" || val === "false" || val === "off");
+  };
+  const keepMoved = new Set<string>();
+  for (const [key, tag] of KEEP_SWITCHES) {
+    const value = p[key];
+    if (value === undefined) continue;
+    const stated = slotSwitch(tag);
+    // 段上已经有这一枚：与**字节**比，写的是不是同一件事（这样同一趟里勾上再取消看得见，件自己的
+    // `w:val="false"` 也不会被当成「说了开」重写一遍）。段上还没有这一枚：与入件时画着的那一份比——
+    // 从样式链借来的「开」要在段落上写一句关才算数，而缺省本来就是关的那几枚（`w:pageBreakBefore`）
+    // 不该替段落多写一枚 `w:val="0"`。
+    if (stated === undefined ? value !== (p.asRead?.[key] === true) : stated !== value) keepMoved.add(tag);
+  }
+  for (const [key, tag] of KEEP_SWITCHES) {
+    if (!keepMoved.has(tag)) continue;
+    wanted.push({ tag, xml: p[key] ? `<${prefix}:${tag}/>` : `<${prefix}:${tag} ${prefix}:val="0"/>` });
+  }
   // 框：逐边对着读快照比，只有动过的那几边重写；没动的边——这一段自己写的、还有从样式链借来的——一个字节不动。
   // 借来的那一份尤其要说清：`asRead.borders` 里就有它（入件时页面上画的那一整套），把它抄进段落自己的
   // `w:pBdr` 就是替文件编一句「这一段说过框」，而它说的只有被改过的那一边。
@@ -5417,9 +5460,9 @@ export function syncParaSlots(p: Paragraph): void {
   if (shdMoved) {
     wanted.push({ tag: "shd", xml: shadingSlotXml(slots.find((s) => s.tag === "shd")?.xml, shdFill, prefix) });
   }
-  // 断页那一枚只在「说了要」时认领：`keep` 对 false 一言不发，若这里照样认领，件自己那句
+  // 断页那一枚也只在这支三态笔说了话时认领：`keep` 对 false 一言不发，若这里照样认领，件自己那句
   // `<w:pageBreakBefore w:val="0"/>`（授权 46 份里 180 枚）会在认领时连同槽位一起消失。
-  const owned = new Set(["pStyle", ...(p.pageBreakBefore === true ? ["pageBreakBefore"] : []), "numPr", "jc",
+  const owned = new Set(["pStyle", "numPr", "jc", ...keepMoved,
     ...(indMoved ? ["ind"] : []), ...(spacingMoved ? ["spacing"] : []),
     ...(wrapMoved ? ["wordWrap"] : []),
     ...(snapMoved ? ["snapToGrid"] : []), ...(box ? ["pBdr"] : []), ...(shdMoved ? ["shd"] : [])]);

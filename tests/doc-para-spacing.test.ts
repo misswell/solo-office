@@ -3,7 +3,7 @@ import type { Paragraph } from "../src/core/docx.js";
 import { LINE_ONE, carriedShape, lineGridPitchTwips, linePitchTwips, paraSpacingPitch, paraStyleOf, syncParaSlots, WordDocument } from "../src/core/docx.js";
 import { writeDocx } from "../src/core/write-docx.js";
 import { childSpans, elementContent, OpcPackage, text } from "../src/core/opc.js";
-import { makeChainDocx, makeGridRevisionDocx, makeSpacingDocx, makeWrapRevisionDocx } from "./helpers/make-paragraph.js";
+import { makeChainDocx, makeGridRevisionDocx, makeKeepRevisionDocx, makeSpacingDocx, makeWrapRevisionDocx } from "./helpers/make-paragraph.js";
 import { renderWord } from "../src/core/render.js";
 
 const part = (bytes: Uint8Array): string => text(OpcPackage.from(bytes).bytes("word/document.xml")!);
@@ -488,5 +488,190 @@ describe("docx 「允许西文在单词中间换行」", () => {
     // 「允许」是 Head 说的话，Body 没说，所以新段不该认领它。
     expect(findPara(lent, "借来的").wordWrap).toBe(true);
     expect(borrowed.wordWrap).toBeUndefined();
+  });
+});
+
+/** 那一段自己写下的某一枚 `w:pPr` 直接孩子（按标签找，段落标记 `w:rPr` 里的同名元素不算）。 */
+const childOf = (xml: string, needle: string, tag: string): string => childSpans(pPrOf(xml, needle)).find((k) => k.tag === tag)?.xml ?? "";
+
+/**
+ * 「换行和分页」那四颗勾的**写出**侧（§17.3.2.90 `w:widowControl`、§17.3.1.14 `w:keepNext`、
+ * §17.3.1.13 `w:keepLines`、§17.3.1.65 `w:pageBreakBefore`）。
+ *
+ * 这四枚的读与铺排早在 #125~#127 / #166 就归了文件，缺的是**任何一条能改它的命令**：`syncParaSlots` 原来的
+ * `keep()` 对 `false` 一言不发，`pageBreakBefore` 还只认领「说要断」那一半——勾上能写，取消勾选写不掉。
+ *
+ * 拼法是量出来的（授权 46 份，`.scratch/toggle-lent-chain.ts`）：`w:pageBreakBefore` 180 枚**全写** `w:val="0"`、
+ * 0 枚写开；`w:keepNext` 200 枚、`w:keepLines` 200 枚、`w:widowControl` 160 枚也都以 `w:val="0"` 说关。所以开 = 裸写、
+ * 关 = `w:val="0"`，与 `w:snapToGrid`/`w:wordWrap` 同一条三态笔。位置由 `PPR_ORDER` 定：`keepNext → keepLines →
+ * pageBreakBefore → widowControl` 排在 `w:pStyle` 之后、`w:spacing` 之前。
+ */
+describe("docx 段落「换行和分页」四颗勾", () => {
+  const KEEP = makeSpacingDocx(
+    [
+      { keep: '<w:keepNext w:val="0"/>', spacing: 'w:line="240" w:lineRule="auto"', text: "说不与下段同页的" },
+      { keep: "<w:keepNext/>", text: "裸写与下段同页的" },
+      { keep: '<w:widowControl w:val="0"/>', text: "关掉孤行控制的" },
+      { keep: '<w:keepNext w:val="false"/>', text: "用 false 说关的" },
+      { keep: "<w:pageBreakBefore/>", spacing: 'w:before="120"', text: "段前分页的" },
+      { spacing: 'w:before="120"', text: "只说了段距的" },
+      { pStyle: "Lent", text: "保持规则靠样式的" },
+      { text: "什么都没说的" },
+    ],
+    "<w:keepLines/>",
+  );
+
+  it("裸写算开，`w:val=\"0\"` 与 `w:val=\"false\"` 算关，没提才是没说；样式链借来的也算", () => {
+    const doc = open(KEEP);
+    expect(findPara(doc, "裸写与下段同页的").keepNext).toBe(true);
+    expect(findPara(doc, "说不与下段同页的").keepNext).toBe(false);
+    expect(findPara(doc, "用 false 说关的").keepNext).toBe(false);
+    expect(findPara(doc, "关掉孤行控制的").widowControl).toBe(false);
+    expect(findPara(doc, "段前分页的").pageBreakBefore).toBe(true);
+    expect(findPara(doc, "只说了段距的").keepLines).toBeUndefined();
+    expect(findPara(doc, "什么都没说的").pageBreakBefore).toBe(false);
+    // 「段中不分页」是这个样式说的，段落自己一句没写。
+    expect(findPara(doc, "保持规则靠样式的").keepLines).toBe(true);
+    expect(findPara(doc, "保持规则靠样式的").pPrSlots?.map((s) => s.tag)).toEqual(["pStyle"]);
+  });
+
+  it("一件没动过地存一遍，那几段整句 `w:pPr` 一个字节都不变", () => {
+    const round = save(open(KEEP));
+    for (const needle of ["说不与下段同页的", "裸写与下段同页的", "关掉孤行控制的", "用 false 说关的", "段前分页的", "只说了段距的", "保持规则靠样式的"])
+      expect(pPrOf(round, needle)).toBe(pPrOf(part(KEEP), needle));
+    // `w:val="false"` 与字段同义（都是关），认领判据比的是「字节与字段说的是不是同一件事」，不是拼法。
+    expect(childOf(round, "用 false 说关的", "keepNext")).toBe('<w:keepNext w:val="false"/>');
+  });
+
+  it("把读到的值原样交回去不是用户的话：一个字节都不写", () => {
+    const doc = open(KEEP);
+    for (const [needle, key, value] of [
+      ["说不与下段同页的", "keepNext", false],
+      ["裸写与下段同页的", "keepNext", true],
+      ["关掉孤行控制的", "widowControl", false],
+      ["段前分页的", "pageBreakBefore", true],
+    ] as const) {
+      const p = findPara(doc, needle);
+      p[key] = value;
+      syncParaSlots(p);
+      expect(pPrOf(save(doc), needle)).toBe(pPrOf(part(KEEP), needle));
+    }
+  });
+
+  it("段落没说过而用户勾上时，新写的一枚按件里的拼法落在 `w:spacing` 之前", () => {
+    const doc = open(KEEP);
+    const p = findPara(doc, "只说了段距的");
+    expect(p.keepLines).toBeUndefined();
+    p.keepLines = true;
+    syncParaSlots(p);
+    expect(pPrOf(save(doc), "只说了段距的")).toBe('<w:keepLines/><w:spacing w:before="120"/>');
+    // 同一份件里另一段没被这一击碰到：它的字节与原句一模一样（`w:val="false"` 也照原样留着）。
+    expect(pPrOf(save(doc), "用 false 说关的")).toBe(pPrOf(part(KEEP), "用 false 说关的"));
+  });
+
+  it("勾掉写 `w:val=\"0\"`，勾上裸写；同一趟里先勾上再取消，槽位跟着字段回到「关」", () => {
+    const off = open(KEEP);
+    const bare = findPara(off, "裸写与下段同页的");
+    bare.keepNext = false;
+    syncParaSlots(bare);
+    expect(pPrOf(save(off), "裸写与下段同页的")).toBe('<w:keepNext w:val="0"/>');
+
+    const on = open(KEEP);
+    const stated = findPara(on, "说不与下段同页的");
+    stated.keepNext = true;
+    syncParaSlots(stated);
+    expect(pPrOf(save(on), "说不与下段同页的")).toBe('<w:keepNext/><w:spacing w:line="240" w:lineRule="auto"/>');
+
+    // 段前分页此前只认领「说要断」那一半：勾掉之后裸写那枚留在段上，纸上照旧断页。现在按字段重写。
+    const pbb = open(KEEP);
+    const before = findPara(pbb, "段前分页的");
+    before.pageBreakBefore = false;
+    syncParaSlots(before);
+    expect(pPrOf(save(pbb), "段前分页的")).toBe('<w:pageBreakBefore w:val="0"/><w:spacing w:before="120"/>');
+
+    // 同一个会话里连拨两次：第二拨的参照是刚写下的那一枚，不是入件时的快照。
+    const twice = open(KEEP);
+    const p = findPara(twice, "只说了段距的");
+    p.keepNext = true;
+    syncParaSlots(p);
+    expect(childOf(save(twice), "只说了段距的", "keepNext")).toBe("<w:keepNext/>");
+    p.keepNext = false;
+    syncParaSlots(p);
+    expect(pPrOf(save(twice), "只说了段距的")).toBe('<w:keepNext w:val="0"/><w:spacing w:before="120"/>');
+  });
+
+  it("样式链借来的那一枚不抄进段落；用户改口说关时段落自己认领", () => {
+    const doc = open(KEEP);
+    const p = findPara(doc, "保持规则靠样式的");
+    expect(pPrOf(save(doc), "保持规则靠样式的")).toBe('<w:pStyle w:val="Lent"/>');
+    p.keepLines = false;
+    syncParaSlots(p);
+    expect(pPrOf(save(doc), "保持规则靠样式的")).toBe('<w:pStyle w:val="Lent"/><w:keepLines w:val="0"/>');
+  });
+
+  it("整段没有 `w:pPr` 时由字段拼这一句，存下去再读回来不再改字节", () => {
+    const doc = open(KEEP);
+    const p = findPara(doc, "什么都没说的");
+    expect(p.pPrSlots).toBeUndefined();
+    p.keepNext = true;
+    const once = writeDocx(doc);
+    expect(pPrOf(part(once), "什么都没说的")).toBe("<w:keepNext/>");
+    const again = open(once);
+    expect(findPara(again, "什么都没说的").keepNext).toBe(true);
+    expect(pPrOf(part(writeDocx(again)), "什么都没说的")).toBe("<w:keepNext/>");
+  });
+
+  it("拨过之后 `carriedShape` 说得出改了口（修订记录才留得下）", () => {
+    const doc = open(KEEP);
+    const p = findPara(doc, "只说了段距的");
+    const was = JSON.stringify(carriedShape(p));
+    p.widowControl = false;
+    syncParaSlots(p);
+    expect(JSON.stringify(carriedShape(p))).not.toBe(was);
+    expect((carriedShape(p) as Record<string, unknown>).widowControl).toBe(false);
+  });
+
+  it("拒绝那条改动：记录没说的那一枚被清回去，说过的那一枚按记录的字节还回来", () => {
+    const doc = open(makeKeepRevisionDocx());
+    const added = findPara(doc, "不分页是刚加上的");
+    expect(added.keepLines).toBe(true);
+    expect(doc.resolveRevisions("reject", 41)).toBe(1);
+    // 记录那一句没有 `w:keepLines`，样式链也没借，所以这一段回到「自己没说」。
+    expect(added.keepLines).toBeUndefined();
+    expect(childOf(save(doc), "不分页是刚加上的", "keepLines")).toBe("");
+    expect(childOf(save(open(writeDocx(doc))), "不分页是刚加上的", "keepLines")).toBe("");
+
+    const removed = findPara(doc, "孤行是刚被删掉的");
+    expect(removed.widowControl).toBeUndefined();
+    expect(doc.resolveRevisions("reject", 42)).toBe(1);
+    expect(removed.widowControl).toBe(false);
+    expect(pPrOf(save(doc), "孤行是刚被删掉的")).toBe('<w:widowControl w:val="0"/><w:spacing w:line="300" w:lineRule="auto"/>');
+  });
+
+  it("四颗勾进纸面：画出来的那一段带着铺排要读的那几枚 `data-`", () => {
+    // `render.ts` 把这三枚开关盖成 `data-` 属性，`doc-layout.ts` 的 `layoutUnits` 再按它们量段与页的边界
+    // （#125~#127 钉的就是那半边）。这一条钉的是新写进模型的字段真的走到了画面上。
+    // 按段切，不按页切：同一页上别的段也带着这几枚 `data-`，整页一比就分不出是谁的。
+    const para = (html: string, needle: string): string =>
+      html.split('<div class="para').find((s) => s.includes(needle))?.split("</div>")[0] ?? "";
+    const doc = open(KEEP);
+    const kept = findPara(doc, "只说了段距的");
+    const off = findPara(doc, "裸写与下段同页的");
+    kept.keepNext = true;
+    kept.keepLines = true;
+    kept.widowControl = false;
+    off.keepNext = false;
+    for (const p of [kept, off]) syncParaSlots(p);
+    const html = renderWord(doc);
+    expect(para(html, "只说了段距的")).toContain('data-keep-next="1"');
+    expect(para(html, "只说了段距的")).toContain('data-keep-lines="1"');
+    expect(para(html, "只说了段距的")).toContain('data-widow="0"');
+    expect(para(html, "裸写与下段同页的")).not.toContain('data-keep-next="1"');
+    // 段前分页那一颗是有 CSS 腿的（`page-break-before:always`），勾掉它纸上的那一处就得让出来。
+    expect(para(html, "段前分页的")).toContain("page-break-before:always");
+    const pbb = findPara(doc, "段前分页的");
+    pbb.pageBreakBefore = false;
+    syncParaSlots(pbb);
+    expect(para(renderWord(doc), "段前分页的")).not.toContain("page-break-before:always");
   });
 });

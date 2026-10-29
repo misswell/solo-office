@@ -2408,6 +2408,145 @@ function smoke(): void {
             pages: document.querySelectorAll("#view .page").length,
           };
         }
+        // #220：「段落 → 换行和分页」那四颗勾在**装机这只壳**里走一趟并落回盘上。四摆问四种起始态：
+        // 摆1 段前分页此刻没说 → 勾上之后这张纸要重切（这一段挪到新一张的纸沿、纸数多一张）；
+        // 摆2 自己说了与下段同页（裸写一枚）→ 摆出来勾着，原样确定一个字节不多写；
+        // 摆3 自己说了关孤行控制 → 摆出来没勾，勾上之后段落裸写一枚（WPS 拼「开」就是裸写，授权口径 46 件）；
+        // 摆4 段中不分页是样式 Lent 说的 → 摆出来勾着但段落不认领，原样确定之后仍不多写这一枚。
+        // 跟踪改动先按回关着（与 #214/#215 同一条路），量完按回原样交给后面的腿。
+        // 那四枚记号在纸上由 render.ts 盖成 data-keep-next / data-keep-lines / data-widow 与 page-break-before 那一句，
+        // 所以这一腿既读对话框那一格，也读纸上那一段到底摆着哪几枚。
+        const keepDoc = (document.getElementById("title")?.textContent ?? "").includes("分页四勾");
+        let keepLeg = null;
+        if (keepDoc) {
+          const keepTrackBtn = () => [...document.querySelectorAll("#ribbon button.rb")].find((b) => b.textContent === "修订");
+          const keepTrackOn = () => (keepTrackBtn()?.classList.contains("on") ? 1 : 0);
+          const keepTrack0 = keepTrackOn();
+          if (keepTrack0) {
+            keepTrackBtn()?.click();
+            await wait(320);
+          }
+          const keepTrackOff = keepTrackOn();
+          const keepPara = (needle) => [...document.querySelectorAll("#view .page .para")].find((x) => (x.textContent ?? "").includes(needle));
+          const keepPut = (needle) => {
+            const el = keepPara(needle);
+            if (!el) return 0;
+            const node = document.createTreeWalker(el, NodeFilter.SHOW_TEXT).nextNode();
+            if (!node) return 0;
+            const rg = document.createRange();
+            rg.setStart(node, 0);
+            rg.collapse(true);
+            const s = document.getSelection();
+            s?.removeAllRanges();
+            if (s) s.addRange(rg);
+            el.closest(".page")?.focus?.();
+            document.dispatchEvent(new Event("selectionchange"));
+            return 1;
+          };
+          // 纸数是**画出来的**：一张连续的 .page 由条带切成几张，条带一条不多一张。页归属按条带上沿比。
+          const keepStrips = () => [...document.querySelectorAll("#view .solo-sheet-strip")].map((x) => parseFloat(x.style.top) || 0).sort((a, b) => a - b);
+          const keepMarks = (needle) => {
+            const el = keepPara(needle);
+            if (!el) return null;
+            const cs = getComputedStyle(el);
+            const page = el.closest(".page");
+            const z = page ? zPaper(page) : 1;
+            const pr = page ? page.getBoundingClientRect() : null;
+            const er = el.getBoundingClientRect();
+            const strips = keepStrips();
+            const top = pr ? round1((er.top - pr.top) / z) : -1;
+            const sheet = strips.filter((t) => t < top - 1).length;
+            const sheetTop = sheet ? strips[sheet - 1] : 0;
+            return {
+              next: el.hasAttribute("data-keep-next") ? 1 : 0,
+              lines: el.hasAttribute("data-keep-lines") ? 1 : 0,
+              widow: el.getAttribute("data-widow") === "0" ? 0 : 1,
+              before: cs.breakBefore === "always" || cs.pageBreakBefore === "always" ? 1 : 0,
+              top: top,
+              sheet: sheet,
+              pages: strips.length + 1,
+              // 这一段离它那一张的上沿多远：段前分页落笔后它就贴着新一张的沿（只剩上边距与页缝那道让位）。
+              fromSheetTop: round1(top - sheetTop),
+            };
+          };
+          const keepDlg = () => document.querySelector(".solo-pg-dialog");
+          const keepField = (n) => keepDlg()?.querySelector('[name="' + n + '"]') ?? null;
+          const keepSelect = () => [...document.querySelectorAll("#ribbon select")].find((x) => x.title === "行距");
+          const keepOpen = async (needle) => {
+            const put = keepPut(needle);
+            await wait(280);
+            const sel = keepSelect();
+            if (sel) {
+              sel.value = "more";
+              sel.dispatchEvent(new Event("change", { bubbles: true }));
+            }
+            await wait(340);
+            const d = keepDlg();
+            const on = (n) => (keepField(n)?.checked ? 1 : 0);
+            const rows = d ? [...d.querySelectorAll(".solo-pg-keep label span")] : [];
+            return {
+              put: put,
+              sel: sel ? 1 : 0,
+              open: d?.open === true ? 1 : 0,
+              labels: rows.map((r) => String(r.textContent).trim()).join("/"),
+              widow: on("pg-widow"),
+              next: on("pg-keep-next"),
+              lines: on("pg-keep-lines"),
+              before: on("pg-break-before"),
+              hint: d?.querySelector('[data-hint="pg-keep"]')?.textContent ?? "",
+              before120: keepField("pg-before")?.value ?? "?",
+            };
+          };
+          const keepApply = async () => {
+            const b = keepDlg()?.querySelector(".solo-pg-apply");
+            const hit = b ? (b.click(), 1) : 0;
+            await wait(460);
+            return { applied: hit, gone: keepDlg() ? 0 : 1 };
+          };
+          const keepDirty = () => ((document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0);
+          const keepSteps = [];
+          for (const name of ["摆1", "摆2", "摆3", "摆4"]) {
+            const o = await keepOpen(name);
+            const marksBefore = keepMarks(name);
+            const pagesBefore = keepStrips().length + 1;
+            const dirtyBefore = keepDirty();
+            // 只在「此刻没勾」时落一次：第二趟起手那四格已经是第一趟写回的那一句，于是这一腿一次也不按。
+            const clicked = [];
+            if (name === "摆1" && o.before === 0 && keepField("pg-break-before")) {
+              keepField("pg-break-before").click();
+              clicked.push("pg-break-before");
+            }
+            if (name === "摆3" && o.widow === 0 && keepField("pg-widow")) {
+              keepField("pg-widow").click();
+              clicked.push("pg-widow");
+            }
+            if (clicked.length) await wait(260);
+            const hintAfter = keepDlg()?.querySelector('[data-hint="pg-keep"]')?.textContent ?? "";
+            const ap = await keepApply();
+            keepSteps.push({
+              name: name, ...o, hintAfter: hintAfter, clicked: clicked.join(","), ...ap,
+              dirtyBefore: dirtyBefore, dirtyAfter: keepDirty(),
+              marksBefore: marksBefore, marksAfter: keepMarks(name),
+              pagesBefore: pagesBefore, pagesAfter: keepStrips().length + 1,
+            });
+          }
+          fire("solo:save");
+          await wait(1400);
+          if (keepTrack0) {
+            keepTrackBtn()?.click();
+            await wait(320);
+          }
+          keepLeg = {
+            trackBefore: keepTrack0,
+            trackOff: keepTrackOff,
+            trackBack: keepTrackOn(),
+            steps: keepSteps,
+            savedDirty: keepDirty(),
+            dialogsLeft: document.querySelectorAll(".solo-pg-dialog").length,
+            final: ["摆1", "摆2", "摆3", "摆4"].map((n) => ({ name: n, ...keepMarks(n) })),
+            pages: document.querySelectorAll("#view .page").length,
+          };
+        }
         // 上面那些落点把光标留在了格里；后面那三条断命令与图片要按这一趟原本的位置落在正文里，所以先放回纸的末尾。
         const pageNow = document.querySelector("#view .page");
         const lastBlock = pageNow?.children[pageNow.children.length - 1];
@@ -3098,7 +3237,7 @@ function smoke(): void {
         const recovered = { cells: document.querySelectorAll(".sheet-wrap td").length, title: document.getElementById("title")?.textContent };
         // The run ends on a modified document, so quitting goes through the unsaved prompt.
         // A PDF the export asked for shows up in saveAsWrites, next to the pptx/xlsx saves.
-        return { docPart, bandLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
+        return { docPart, bandLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
       })()`;
       void last?.webContents
         .executeJavaScript(probe)

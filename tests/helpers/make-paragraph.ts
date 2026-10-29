@@ -161,6 +161,11 @@ export function makeSpacingDocx(
     readonly snapToGrid?: string;
     /** `w:wordWrap`（「允许西文在单词中间换行」）同一条拼法：空串是裸写=说了允许，`w:val="0"` 是明着不许。 */
     readonly wordWrap?: string;
+    /**
+     * 「换行和分页」那四枚（`w:keepNext`/`w:keepLines`/`w:pageBreakBefore`/`w:widowControl`）的原样字节。
+     * 它们按 `PPR_ORDER` 排在 `w:pStyle` 之后、`w:wordWrap` 之前，顺序由调用方拼。
+     */
+    readonly keep?: string;
     /** Extra children appended to this paragraph's `w:pPr`, for the shapes that are not paragraph properties. */
     readonly markRPr?: string;
     /** Extra children of this paragraph's one run's `w:rPr`. */
@@ -175,6 +180,7 @@ export function makeSpacingDocx(
       .map((e) => {
         const kids = [
           e.pStyle ? `<w:pStyle w:val="${e.pStyle}"/>` : "",
+          e.keep ?? "",
           // `w:wordWrap` 排在 `w:snapToGrid` 之前，与 `PPR_ORDER` 同一条（`w:kinsoku` 之后、`w:overflowPunct` 之前）。
           // 件里说了这一枚的 200 段枚枚裸写（授权口径 `.scratch/cjk-typo-audience.py`），`w:val="0"` 是本机自己造的形状。
           e.wordWrap === undefined ? "" : `<w:wordWrap${e.wordWrap ? ` ${e.wordWrap}` : ""}/>`,
@@ -255,6 +261,23 @@ export function makeWrapRevisionDocx(): Uint8Array {
     `<w:p><w:pPr><w:spacing w:line="300" w:lineRule="auto"/>` +
     `<w:pPrChange ${REV(32, "林晓")}><w:pPr><w:wordWrap w:val="0"/><w:spacing w:line="300" w:lineRule="auto"/></w:pPr></w:pPrChange></w:pPr>` +
     `<w:r><w:t>换行是刚被删掉的</w:t></w:r></w:p>` +
+    `<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800"/></w:sectPr>`;
+  return pack(document, STYLES);
+}
+
+/**
+ * The same two shapes for 「换行和分页」's keeps: one now says `<w:keepLines/>` while its record says nothing,
+ * one now says nothing while its record says `w:widowControl w:val="0"`. Neither key is in `PARA_STYLE_KEYS`'
+ * write half, so refusing has to clear the field *and* drop the slot.
+ */
+export function makeKeepRevisionDocx(): Uint8Array {
+  const document =
+    `<w:p><w:pPr><w:keepLines/><w:spacing w:line="300" w:lineRule="auto"/>` +
+    `<w:pPrChange ${REV(41, "顾峰")}><w:pPr><w:spacing w:line="300" w:lineRule="auto"/></w:pPr></w:pPrChange></w:pPr>` +
+    `<w:r><w:t>不分页是刚加上的</w:t></w:r></w:p>` +
+    `<w:p><w:pPr><w:spacing w:line="300" w:lineRule="auto"/>` +
+    `<w:pPrChange ${REV(42, "林晓")}><w:pPr><w:widowControl w:val="0"/><w:spacing w:line="300" w:lineRule="auto"/></w:pPr></w:pPrChange></w:pPr>` +
+    `<w:r><w:t>孤行是刚被删掉的</w:t></w:r></w:p>` +
     `<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800"/></w:sectPr>`;
   return pack(document, STYLES);
 }

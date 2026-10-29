@@ -85,6 +85,8 @@ const CSS = `
 .solo-pg-snap { display: grid; gap: 3px; font-size: 12px; color: #4b5563; }
 .solo-pg-snap > span { display: flex; align-items: center; gap: 7px; }
 .solo-pg-snap input { width: 14px; height: 14px; flex: none; margin: 0; padding: 0; }
+.solo-pg-keep { border: 0; margin: 0; padding: 0; display: grid; gap: 4px; min-width: 0; }
+.solo-pg-keep legend { padding: 0; font-size: 12px; color: #4b5563; }
 .solo-pg-error { margin: 0; min-height: 18px; color: #b42318; font-size: 12px; }
 .solo-pg-dialog footer { display: flex; gap: 8px; justify-content: flex-end; }
 .solo-pg-dialog footer button { padding: 5px 14px; border-radius: 7px; border: 1px solid #c9d3e6; background: #f5f7fb; cursor: pointer; font: inherit; }
@@ -114,6 +116,14 @@ export type ParaSpacingPatch = {
   snapToGrid?: boolean;
   /** `w:wordWrap`：勾着 = 允许西文在单词中间换行，没勾 = 明着不许。缺省是不许，所以键不存在与没勾画同一张纸。 */
   wordWrap?: boolean;
+  /** `w:widowControl`：勾着 = 孤行控制（页界两边各留至少两行）。缺省就是开，所以没勾才要写一句。键不存在 = 不改。 */
+  widowControl?: boolean;
+  /** `w:keepNext`：勾着 = 与下段同页。缺省是关。键不存在 = 不改。 */
+  keepNext?: boolean;
+  /** `w:keepLines`：勾着 = 段中不分页（整段的行不放两页）。缺省是关。键不存在 = 不改。 */
+  keepLines?: boolean;
+  /** `w:pageBreakBefore`：勾着 = 段前分页。缺省是关。键不存在 = 不改。 */
+  pageBreakBefore?: boolean;
 };
 
 /** 打开时对话框上摆的那份数，来自段落**解析后**的状态（样式链借来的也算，那正是页面上画的）。 */
@@ -135,6 +145,11 @@ export type ParaSpacingState = ParaSpacingPatch & {
    * （缺省就是「不许」，所以没说的也摆成没勾），于是由那行小字说明，用户改过勾选才把同一个答案写给全部。
    */
   wrapMixed?: boolean;
+  /**
+   * 所选跨段且那几段对「换行和分页」那四颗勾说法不一致。四颗勾都只有「勾着／没勾」两态（孤行控制缺省开、
+   * 其余三颗缺省关，所以「没说」与某一态画同一张纸），于是由那行小字说明；用户改过的那几颗按同一份写给全部。
+   */
+  keepMixed?: boolean;
 };
 
 /** 一个 `w:line` 折算成「几倍行距」，只在 `auto` 那一族里有意义（`LINE_ONE` = 单倍，§17.3.1.27）。 */
@@ -193,6 +208,13 @@ export function showParaSpacingDialog(state: ParaSpacingState, apply: (patch: Pa
     </div>
     <label class="solo-pg-snap"><span><input type="checkbox" name="pg-snap">如果定义了文档网格，则对齐到网格</span><small class="solo-pg-hint" data-hint="pg-snap"></small></label>
     <label class="solo-pg-snap"><span><input type="checkbox" name="pg-wrap">允许西文在单词中间换行</span><small class="solo-pg-hint" data-hint="pg-wrap"></small></label>
+    <fieldset class="solo-pg-keep"><legend>换行和分页</legend>
+    <label class="solo-pg-snap"><span><input type="checkbox" name="pg-widow">孤行控制</span></label>
+    <label class="solo-pg-snap"><span><input type="checkbox" name="pg-keep-next">与下段同页</span></label>
+    <label class="solo-pg-snap"><span><input type="checkbox" name="pg-keep-lines">段中不分页</span></label>
+    <label class="solo-pg-snap"><span><input type="checkbox" name="pg-break-before">段前分页</span></label>
+    <small class="solo-pg-hint" data-hint="pg-keep"></small>
+    </fieldset>
     <p class="solo-pg-error" role="status"></p>
     <footer><button type="button" class="solo-pg-cancel">取消</button><button type="submit" class="solo-pg-apply">确定</button></footer></form>`;
 
@@ -202,6 +224,10 @@ export function showParaSpacingDialog(state: ParaSpacingState, apply: (patch: Pa
   const value = field("pg-value");
   const snap = field("pg-snap");
   const wrap = field("pg-wrap");
+  const widow = field("pg-widow");
+  const keepNext = field("pg-keep-next");
+  const keepLines = field("pg-keep-lines");
+  const breakBefore = field("pg-break-before");
   const rule = dialog.querySelector<HTMLSelectElement>('select[name="pg-rule"]')!;
   const valueUnit = dialog.querySelector<HTMLElement>("[data-value-unit]")!;
   const valueLabel = dialog.querySelector<HTMLElement>("[data-value-label]")!;
@@ -216,6 +242,8 @@ export function showParaSpacingDialog(state: ParaSpacingState, apply: (patch: Pa
   // 「允许西文在单词中间换行」（`w:wordWrap`，§17.4.77）第三只 `wrapTouched`，纪律同上一条，只是缺省相反：这一枚
   // 没写就算**不许**，所以没说的段落摆成没勾——摆成没勾同样不等于用户说了，不交这一笔。
   let wrapTouched = false;
+  // 「换行和分页」那四颗勾共用第四只 `keepTouched`：摆出来的样子不等于用户说了，逐颗与 `keepShown` 比对才进补丁。
+  let keepTouched = false;
   const pick = (): string => {
     const { line, lineRule } = state;
     if (line === undefined) return "auto:1";
@@ -228,6 +256,14 @@ export function showParaSpacingDialog(state: ParaSpacingState, apply: (patch: Pa
   snap.checked = state.snapToGrid !== false;
   // 这一枚的缺省是「不许」，所以 `undefined`（这一段没说）与 `false`（明着不许）都摆成没勾：页面画的本来就是不许。
   wrap.checked = state.wordWrap === true;
+  // 「换行和分页」四颗：孤行控制的缺省是**开**（§17.3.2.90），所以只有明写着关才没勾；其余三颗缺省是关，
+  // 只有明写着开才勾。四颗都按「勾着/没勾」两态摆，跨段不一致由那行小字说明。
+  widow.checked = state.widowControl !== false;
+  keepNext.checked = state.keepNext === true;
+  keepLines.checked = state.keepLines === true;
+  breakBefore.checked = state.pageBreakBefore === true;
+  /** 开窗时这四颗摆的样子：只有用户真的拨过某一颗，那一条才进补丁（与段前段后「留空＝不改」同一条纪律）。 */
+  const keepShown = { widow: widow.checked, keepNext: keepNext.checked, keepLines: keepLines.checked, breakBefore: breakBefore.checked };
   /** 「设置值」那一格装的是倍数还是长度，跟着行距那一档走；单倍/1.5/2 自己说完了数，格子禁用。 */
   const needsValue = (): boolean => NEEDS_VALUE.has(rule.value);
   const isMultiple = (): boolean => rule.value === "auto";
@@ -282,6 +318,17 @@ export function showParaSpacingDialog(state: ParaSpacingState, apply: (patch: Pa
       : wrap.checked
         ? "行尾放不下整个西文词时，把它拦腰折断（中文那一侧的禁则本件不改变）。"
         : "西文词整词换行：这一行放不下就把整个词挪到下一行。";
+    // 「换行和分页」四颗勾。孤行控制的缺省是开，所以「没说」也摆成勾着——这两态摆不出三态，跨段说法不一致时
+    // 由这一行说明；平常时候把这四颗此刻的后果说成一句话，让用户按「确定」之前在纸上就知道会怎么变。
+    const keepHint = dialog.querySelector<HTMLElement>('[data-hint="pg-keep"]')!;
+    const holds = [breakBefore.checked ? "段前分页" : "", keepNext.checked ? "与下段同页" : "", keepLines.checked ? "段中不分页" : ""].filter(Boolean);
+    keepHint.textContent = state.keepMixed && !keepTouched
+      ? "所选几段说法不一致：这四颗勾有的开、有的关。拨过的那几颗会按同一个答案写给全部。"
+      : holds.length
+        ? `${holds.join("、")}；${widow.checked ? "孤行控制开（页界两边各留至少两行）" : "孤行控制关（页界旁可以只剩一行）"}。`
+        : widow.checked
+          ? "孤行控制开：页界两边各至少留两行，不把单行留在页尾或页头。"
+          : "孤行控制关：页界旁边可以只剩一行。";
   };
   const build = (): ParaSpacingPatch | undefined => {
     const b = readGap(before, u);
@@ -296,6 +343,10 @@ export function showParaSpacingDialog(state: ParaSpacingState, apply: (patch: Pa
     if (a.value !== undefined) patch.afterTwips = a.value;
     if (snapTouched) patch.snapToGrid = snap.checked;
     if (wrapTouched) patch.wordWrap = wrap.checked;
+    if (widow.checked !== keepShown.widow) patch.widowControl = widow.checked;
+    if (keepNext.checked !== keepShown.keepNext) patch.keepNext = keepNext.checked;
+    if (keepLines.checked !== keepShown.keepLines) patch.keepLines = keepLines.checked;
+    if (breakBefore.checked !== keepShown.breakBefore) patch.pageBreakBefore = breakBefore.checked;
     if (touched) {
       if (needsValue()) {
         const v = Number(value.value.trim());
@@ -332,6 +383,7 @@ export function showParaSpacingDialog(state: ParaSpacingState, apply: (patch: Pa
     if (name === "pg-rule") touched = true;
     if (name === "pg-snap") snapTouched = true;
     if (name === "pg-wrap") wrapTouched = true;
+    if (name === "pg-widow" || name === "pg-keep-next" || name === "pg-keep-lines" || name === "pg-break-before") keepTouched = true;
     syncValueBox();
     syncHints();
     build();

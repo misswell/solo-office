@@ -147,7 +147,19 @@ function paragraphProps(p: Paragraph): string {
   const has = (key: keyof ParaStyle): boolean => own[key] !== undefined;
   const parts: string[] = [];
   if (has("styleId")) parts.push(`<w:pStyle w:val="${XML_ESC(p.styleId ?? "")}"/>`);
-  if (has("pageBreakBefore")) parts.push("<w:pageBreakBefore/>");
+  // 「换行和分页」那四枚（§17.3.1.14 `w:keepNext`、§17.3.1.13 `w:keepLines`、§17.3.1.65 `w:pageBreakBefore`、
+  // §17.3.2.90 `w:widowControl`）在没有 `w:pPr` 的段上只有字段可说——编辑器拆出来的段、以及件根本没写 `w:pPr` 的那几段。
+  // 写不写看**状态变没变**而不是「字段真不真」：`pageBreakBefore` 的字段缺省就是 `false`，照 `ownParaStyle` 那套
+  // 「非假才写」的说法，取消勾选（真→假）就一句话都没有，纸上照旧断页；反过来照「与读快照不同就写」，新建出来的段
+  // （`asRead` 只有样式链那一份）每一段都会多出一句 `<w:pageBreakBefore w:val="0"/>`——替文件编一句它没说过的话。
+  // 拼法照件：开 = 裸写，关 = `w:val="0"`（授权 46 份里这四枚说关的一律这么写，`.scratch/toggle-lent-chain.ts`）。
+  // `CT_PPr` 把这四枚排在 `w:pStyle` 之后、`w:numPr` 之前。
+  for (const tag of ["keepNext", "keepLines", "pageBreakBefore", "widowControl"] as const) {
+    const was = p.asRead?.[tag] === true;
+    const now = p[tag] === true;
+    if (was === now) continue;
+    parts.push(now ? `<w:${tag}/>` : `<w:${tag} w:val="0"/>`);
+  }
   if (has("numPr")) parts.push(`<w:numPr><w:ilvl w:val="${p.numPr!.ilvl}"/><w:numId w:val="${p.numPr!.numId}"/></w:numPr>`);
   // 框与底纹两条路共用同一个口径 `paraBorderChanges`：**只有这一击动过的边**说出去。带 `w:pPr` 的段落由
   // `syncParaSlots` 逐边认领（那条路保住件原来的字节与模型没有字段的那些属性），只剩字段的这一段才由这里说——

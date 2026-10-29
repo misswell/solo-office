@@ -6584,6 +6584,22 @@ export function applyRunPatch(inline: Inline, patch: Partial<RunStyle>): Inline 
 }
 
 /**
+ * 「清除格式」落在一枚 run 上的样子：把模型自己有字段的那一整组直接格式（`RUN_STYLE_KEYS` 那 11 项）删掉，
+ * 这段字回到段落样式与样式阶梯给它的那一套；段落格式（对齐/缩进/行距）在段上，不在这里动。
+ *
+ * 模型没有字段的槽一枚也不碰（`w:rStyle`、`w:lang`、`w:kern`、`w:bCs`/`w:iCs`、`w:w`、`w:fitText`…）——
+ * 那些话不是这个模型说的，替它删就是替件作一句没人说过的决定。授权 46 件正文与带子里 7,300 枚 run，
+ * 6,972 枚带模型字段，**只有 34 枚**（`w:rStyle` 26、`w:lang` 8）点了这一枚会一个字也不动
+ * （`.scratch/clear-format-audience.py`）。WPS 真机这一枚清到哪一层（字符样式 `w:rStyle` 清不清、
+ * 与 `w:b` 并排的 `w:bCs` 清不清）仍未取证。
+ */
+export function clearRunStyle(inline: Inline): Inline {
+  const out: Inline = { ...inline };
+  for (const key of RUN_STYLE_KEYS) delete out[key];
+  return out;
+}
+
+/**
  * A link with no colour of its own is drawn underlined. That is a look this reader puts on, not a `w:u` the
  * file wrote — the `w:Hyperlink` character style is what underlines it — so the read snapshot is told as well,
  * or a save would spell into the run an underline nobody asked for.

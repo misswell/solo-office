@@ -780,10 +780,6 @@ function buildDocRibbon(): void {
   button(nav, "", "全选", "选中整篇", () => selectAllDoc());
 
   const font = group("home");
-  button(font, "bold", "粗", "加粗 ⌘B", () => style({ bold: !editor?.markState().bold }));
-  button(font, "italic", "斜", "斜体 ⌘I", () => style({ italic: !editor?.markState().italic }));
-  button(font, "under", "线", "下划线 ⌘U", () => style({ underline: editor?.markState().underline ? "none" : "single" }));
-  button(font, "strike", "删", "删除线", () => style({ strike: !editor?.markState().strike }));
   // 字体框与字号框在 WPS 里是一对：`CT_Home.kuip:110-111` 把 `FontNameInHomeTab` 与 `FontSize` 同挂在 `RB_Font` 的
   // `font_info_pair` 里，字体在前、`minimumWidth="130"`。表格工具页那一组（`CT_TableTools.kuip:133`）是同一对里的
   // 另一条声明 `FontNameInTableToolTab`，只把 `minimumWidth` 报成 112——两页各一枚框，共用的只有这张清单与落笔。
@@ -800,8 +796,9 @@ function buildDocRibbon(): void {
     box.onfocus = () => fillFaceList();
     box.onchange = () => {
       const name = box.value.trim();
-      // 清空那一格不当命令办：这一页说不出「这段取消脸」该往件里写哪一句（「没提过」只能靠原件那半边的字节带回，
-      // 而 ribbon 上没有「清除格式」这一条），真机 WPS 那一格被清空后写什么仍未取证。
+      // 清空那一格不当命令办：这一页说不出「这段取消脸」该往件里写哪一句（「没提过」只能靠原件那半边的字节带回）。
+      // 旁边那一枚「清除格式」撤的是整组直接格式，不是「只把这一格清空、别的都留着」；真机 WPS 那一格被清空后
+      // 写什么仍未取证。
       if (name) style({ font: name });
     };
     ctl[key] = box;
@@ -840,7 +837,18 @@ function buildDocRibbon(): void {
     return box;
   };
   font.append(sizeBox("size"));
-  swatch(font, "color", "字体颜色", "#c00000", (v) => style({ color: v }));
+  // 组内次序照 WPS `CT_Home.kuip` 的 `RB_Font`（同一份里的 id 序）：字体名 → 字号 → 清除格式 → 加粗 → 斜体 → 下划线
+  // →（上标/下标、文字效果）→ 突出显示 → 字体颜色。清除格式是 `ClearFormatsRainbow`（`idMso="ClearFormatting"`、
+  // `ksoCmd="ClearFormats"`、`icon="eraser_kd"`、`hotKey="E"`），就排在字号与加粗之间；中文界面字面「清除格式」
+  // 见 `mui/zh_CN/wps.qm`（`.qm` 是 UTF-16BE，只用来确认这四个字，不搬任何资源）。
+  button(font, "clearfmt", "清除格式", "清除所选文字的直接格式（字体/字号/粗细/斜体/下划线/删除线/颜色/突出显示/上下标/字距）；段落格式与段落样式不动", () => {
+    editor?.clearFormat();
+    syncDocRibbon();
+  });
+  button(font, "bold", "粗", "加粗 ⌘B", () => style({ bold: !editor?.markState().bold }));
+  button(font, "italic", "斜", "斜体 ⌘I", () => style({ italic: !editor?.markState().italic }));
+  button(font, "under", "线", "下划线 ⌘U", () => style({ underline: editor?.markState().underline ? "none" : "single" }));
+  button(font, "strike", "删", "删除线", () => style({ strike: !editor?.markState().strike }));
   chooser(
     font,
     "highlight",
@@ -853,6 +861,7 @@ function buildDocRibbon(): void {
       syncDocRibbon();
     },
   );
+  swatch(font, "color", "字体颜色", "#c00000", (v) => style({ color: v }));
 
   const align = group("home");
   button(align, "left", "左", "左对齐", () => editor?.setParagraph({ align: "" }));

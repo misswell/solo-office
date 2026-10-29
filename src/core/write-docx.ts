@@ -331,7 +331,9 @@ const RUN_PROPS: {
     tags: ["rFonts"],
     spell: (r, prefix, source) =>
       !r.font && !r.fontEastAsia
-        ? ""
+        ? source
+          ? withoutRunFaces(source)
+          : ""
         : source
           ? putRunFonts(source, prefix, r)
           : rFontsTag(movedFaces(r), prefix),
@@ -409,6 +411,25 @@ const RUN_PROPS: {
       r.charSpacingTwips === undefined ? "" : `<${prefix}:spacing w:val="${Math.round(r.charSpacingTwips)}"/>`,
   },
 ];
+
+/**
+ * A `w:rFonts` whose two faces the model has both given up (清除格式) keeps the attributes it has no field for:
+ * `w:cs`/`w:cstheme` name another script's face and `w:hint` is a hint, not a face. Dropping the element whole
+ * would take those with it; an element left with nothing but its own name is dropped, since an empty `w:rFonts`
+ * says nothing the file meant to say.
+ */
+function withoutRunFaces(xml: string): string {
+  const gt = xml.indexOf(">");
+  if (gt < 0) return "";
+  const head = xml.slice(0, gt);
+  const selfClosed = head.endsWith("/");
+  const open = (selfClosed ? head.slice(0, -1) : head)
+    .replace(/\s[\w.-]+:(?:ascii|hAnsi|asciiTheme|hAnsiTheme|eastAsia|eastAsiaTheme)="[^"]*"/g, "")
+    .trimEnd();
+  const name = /^<[^\s/>]+/.exec(open)?.[0] ?? "";
+  if (open === name) return "";
+  return `${open}${selfClosed ? "/>" : ">"}${selfClosed ? "" : xml.slice(gt + 1)}`;
+}
 
 /**
  * `w:rFonts` with the faces the model moved put onto the element as it was written. Only the attributes whose

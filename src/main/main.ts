@@ -2693,6 +2693,143 @@ function smoke(): void {
             savedDirty: (document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0,
           };
         }
+        // #223：清除格式在装机这只壳里走一趟。WPS 把这一枚摆在 RB_Font 里字体名与字号之后、加粗之前
+        // （CT_Home.kuip 的 ClearFormatsRainbow，idMso="ClearFormatting"、icon="eraser_kd"、
+        // hotKey="E"），中文界面字面「清除格式」（mui/zh_CN/wps.qm）。这一腿问四件事——
+        // 组内次序（字体框/字号框/清除格式/加粗自左向右）、甲组整组直接格式被撤到与什么都没说的丙组同脸、
+        // 乙组那枚只有 w:rStyle/w:lang 的 run 一个字节不动、连按第二次不再变。
+        const cfDoc = (document.getElementById("title")?.textContent ?? "").includes("清除格式");
+        let clearLeg = null;
+        if (cfDoc) {
+          const cfHomeTab = [...document.querySelectorAll(".rtabs button")].find((b) => b.textContent === "开始");
+          if (cfHomeTab && !cfHomeTab.classList.contains("on")) {
+            cfHomeTab.click();
+            await wait(220);
+          }
+          // 前面几腿把「修订」开着交过来（量的是别的族，量完按回原样）。开着落这一击，撤干净的 rPr 旁边会
+          // 多一枚 w:rPrChange 记着原来那组话——那是修订那一族要问的形状，与本族「整组直接格式撤掉了没有」
+          // 混在一张纸上，反读就说不清是谁写的。先按回关着（走产品自己那枚开关），量完按回原样。
+          // 开着清一次会留哪一枚改由 #149 那一族的单测管。
+          const cfTrackBtn = () => [...document.querySelectorAll("#ribbon button.rb")].find((b) => b.textContent === "修订");
+          const cfTrackOn = () => (cfTrackBtn()?.classList.contains("on") ? 1 : 0);
+          const cfTrack0 = cfTrackOn();
+          if (cfTrack0) {
+            cfTrackBtn()?.click();
+            await wait(320);
+          }
+          const cfTrackOff = cfTrackOn();
+          const cfPara = (needle) => [...document.querySelectorAll("#view .page .para")].find((x) => (x.textContent ?? "").includes(needle));
+          const cfPut = (needle) => {
+            const el = cfPara(needle);
+            if (!el) return 0;
+            const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+            let node = null;
+            for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+              if ((n.textContent ?? "").includes(needle)) {
+                node = n;
+                break;
+              }
+            }
+            if (!node) return 0;
+            const r = document.createRange();
+            r.setStart(node, 0);
+            r.setEnd(node, (node.textContent ?? "").length);
+            const s = document.getSelection();
+            s?.removeAllRanges();
+            if (s) s.addRange(r);
+            el.closest(".page")?.focus?.();
+            document.dispatchEvent(new Event("selectionchange"));
+            return 1;
+          };
+          const cfLook = (needle) => {
+            const el = cfPara(needle);
+            if (!el) return { w: "-1" };
+            const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+            let host = el;
+            for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+              if ((n.textContent ?? "").includes(needle)) {
+                host = n.parentElement ?? el;
+                break;
+              }
+            }
+            // 上下标的缩一圈套在 run 自己那一枚里面：纸上的线、底色、字号都写在**外面**那一枚上，
+            // 从里面问只问得到继承来的那几项。往上走到 run 自己那一枚为止——再往上那一圈是修订的壳
+            // （.page .rev-fmt 自己画一条点线表示「这一枚的格式被改过」），它的线不是 run 说的线，
+            // 问到它头上会把「清干净了」读成还剩一条下划线。
+            const cfRev = (n) => !!n && (n.classList.contains("rev-fmt") || n.classList.contains("rev"));
+            while (host.parentElement && host.parentElement !== el && !cfRev(host.parentElement)) host = host.parentElement;
+            let wrap = host;
+            while (wrap.parentElement && wrap.parentElement !== el) wrap = wrap.parentElement;
+            const cs = getComputedStyle(host);
+            return {
+              w: cs.fontWeight,
+              style: cs.fontStyle,
+              deco: cs.textDecorationLine,
+              color: cs.color,
+              size: round1(parseFloat(cs.fontSize)),
+              bg: cs.backgroundColor,
+              va: cs.verticalAlign,
+              fmtRev: wrap.classList.contains("rev-fmt") ? 1 : 0,
+              u: host.getAttribute("data-u") ?? "",
+            };
+          };
+          const cfSizeBox = () => document.querySelector("#ribbon .rbar[data-tab='home'] input.sizebox");
+          const cfFaceBox = () => document.querySelector("#ribbon .rbar[data-tab='home'] input.facebox");
+          const cfBtn = () => [...document.querySelectorAll("#ribbon .rbar[data-tab='home'] button")].find((b) => (b.textContent ?? "").trim() === "清除格式");
+          const cfBold = () => [...document.querySelectorAll("#ribbon .rbar[data-tab='home'] button")].find((b) => (b.getAttribute("title") ?? "").startsWith("加粗"));
+          // 回显跟着 selectionchange 走，而框还捏着焦点时不刷——先 blur 再问（与字号那一腿同一条）。
+          const cfEcho = (needle) => {
+            cfSizeBox()?.blur();
+            cfFaceBox()?.blur();
+            cfPut(needle);
+            return { size: cfSizeBox()?.value ?? "?", face: cfFaceBox()?.value ?? "?", bold: cfBold()?.classList.contains("on") ? 1 : 0 };
+          };
+          const cfOrder = (() => {
+            const face = cfFaceBox()?.getBoundingClientRect();
+            const size = cfSizeBox()?.getBoundingClientRect();
+            const btn = cfBtn()?.getBoundingClientRect();
+            const bold = cfBold()?.getBoundingClientRect();
+            if (!face || !size || !btn || !bold) return null;
+            return { faceLtSize: face.left < size.left ? 1 : 0, sizeLtClear: size.left < btn.left ? 1 : 0, clearLtBold: btn.left < bold.left ? 1 : 0 };
+          })();
+          const cfBefore = { a: cfLook("整组都说"), b: cfLook("只有槽"), c: cfLook("什么都没说"), echo: cfEcho("整组都说"), htmlB: (cfPara("只有槽")?.innerHTML ?? "").length, btn: cfBtn() ? 1 : 0 };
+          const cfClicks = [];
+          // 甲组起手是整组都说（粗/斜/线/删/红/22pt/黄底/上标/加宽）：只在这一句还看得出与丙组不同时才按一次。
+          if (cfBefore.a.w !== cfBefore.c.w || cfBefore.a.color !== cfBefore.c.color) {
+            cfPut("整组都说");
+            cfBtn()?.click();
+            await wait(240);
+            cfClicks.push("甲");
+          }
+          const cfAfter = { a: cfLook("整组都说"), b: cfLook("只有槽"), c: cfLook("什么都没说"), echo: cfEcho("整组都说"), htmlB: (cfPara("只有槽")?.innerHTML ?? "").length };
+          // 第二趟起手盘上已经是清完的样子；再按一次应当一个字也不再变。
+          if (cfAfter.a.w === cfAfter.c.w) {
+            cfPut("整组都说");
+            cfBtn()?.click();
+            await wait(240);
+            cfClicks.push("甲2");
+          }
+          const cfAgain = { a: cfLook("整组都说"), echo: cfEcho("整组都说") };
+          // 量完把手按回原样交给后面的腿（与 #214/#219 同一条）。
+          if (cfTrack0) {
+            cfTrackBtn()?.click();
+            await wait(320);
+          }
+          fire("solo:save");
+          await wait(1400);
+          clearLeg = {
+            order: cfOrder,
+            btn: cfBefore.btn,
+            before: cfBefore,
+            after: cfAfter,
+            again: cfAgain,
+            clicks: cfClicks.join(","),
+            trackBefore: cfTrack0,
+            trackOff: cfTrackOff,
+            trackBack: cfTrackOn(),
+            savedDirty: (document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0,
+          };
+        }
         // 上面那些落点把光标留在了格里；后面那三条断命令与图片要按这一趟原本的位置落在正文里，所以先放回纸的末尾。
         const pageNow = document.querySelector("#view .page");
         const lastBlock = pageNow?.children[pageNow.children.length - 1];
@@ -3383,7 +3520,7 @@ function smoke(): void {
         const recovered = { cells: document.querySelectorAll(".sheet-wrap td").length, title: document.getElementById("title")?.textContent };
         // The run ends on a modified document, so quitting goes through the unsaved prompt.
         // A PDF the export asked for shows up in saveAsWrites, next to the pptx/xlsx saves.
-        return { docPart, bandLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
+        return { docPart, bandLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, clearLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
       })()`;
       void last?.webContents
         .executeJavaScript(probe)

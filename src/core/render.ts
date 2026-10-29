@@ -141,9 +141,14 @@ export function renderInline(inline: Inline): string {
   const u = inline.underline && inline.underline !== "single" ? ` data-u="${esc(inline.underline)}"` : "";
   // `w:val` 自己上属性，`applyFitText` 要按文件说的宽去铺；`w:id` 是组的名字，空串即这枚 run 自成一组。
   const ft = fit ? ` data-fit="${esc(fit.id)}" data-fit-tw="${fit.twips}"` : "";
-  if (inline.vertAlign && inline.vertAlign !== "baseline")
-    css += `vertical-align:${inline.vertAlign === "superscript" ? "super" : "sub"};font-size:.75em;`;
-  let html = inline.text === "" ? "" : `<span${css ? ` style="${css}"` : ""}${ft}${hl}${u}>${esc(inline.text)}</span>`;
+  // 上下标的缩小是本页的排版层，不是 run 自己说的字号。同一枚 span 上再写一句 `font-size:.75em` 会把文件
+  // 说的那句盖掉：`w:sz 44` 的 22 磅画成 12px，字号框读回也空着（`.75em` 不以 pt 结尾，`styleOf` 认不出）。
+  // 缩一圈套在里面，外面那句 font-size 仍是文件那一句；`styleOf` 从里往外问，外面那份字号照样认领得到。
+  const sup = inline.vertAlign && inline.vertAlign !== "baseline"
+    ? `vertical-align:${inline.vertAlign === "superscript" ? "super" : "sub"};font-size:.75em;`
+    : "";
+  const inner = inline.text === "" ? "" : sup ? `<span style="${sup}">${esc(inline.text)}</span>` : esc(inline.text);
+  let html = inner === "" ? "" : `<span${css ? ` style="${css}"` : ""}${ft}${hl}${u}>${inner}</span>`;
   if (html === "" && !css) html = esc(inline.text);
   // A link to a place in this document keeps its window to itself: `target="_blank"` on a `#name` href hands
   // the app's own page address to the system browser, where nobody has the bookmark open. The attributes the

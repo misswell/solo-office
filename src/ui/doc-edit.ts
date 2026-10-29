@@ -1,7 +1,7 @@
 import type { Block, BorderSet, Carried, CarriedInline, CellStyle, FormatRevision, HeaderFooter, HfSegment, Inline, LineSpacingRule, MarginTwips, ParaStyle, PageGeometry, PageSetup, Paragraph, ParagraphFormatRevision, PropSlot, Revision, RevisionEntry, RowInfo, RowStyle, RunStyle, Section, Table, TableBorder, TableCell, TablePropsDialogPatch, TablePropsPatch, TableStyle, WordDocument } from "../core/docx.js";
 import type { CommentAnchor, DocComment } from "../core/comments.js";
 import { bodyShape, commentTexts } from "../core/comments.js";
-import { DEFAULT_SECTION, EAST_ASIAN_TEXT, MARGIN_SIDES, RUN_STYLE_KEYS, applyFacePick, applyRunPatch, borderDelta, carriedShape, cellShapeOf, countTexts, hasLine, lineGridPitchTwips, ownParaStyle, ownRunStyle, paraSpacingPitch, paragraphTextsOf, rowShapeOf, runStyleOf, samePropValue, sectionEndsOf, signCellPlaceRevision, signCellRevision, signRowRevision, signTableRevision, stampNow, syncCellBox, syncCellVAlign, syncParaSlots, syncRowAlign, syncRowHeader, syncRowHeight, syncTableBox, syncTableProps, tableShapeOf, twipsToPx } from "../core/docx.js";
+import { DEFAULT_SECTION, EAST_ASIAN_TEXT, MARGIN_SIDES, RUN_STYLE_KEYS, applyFacePick, applyRunPatch, borderDelta, carriedShape, cellShapeOf, clearRunStyle, countTexts, hasLine, lineGridPitchTwips, ownParaStyle, ownRunStyle, paraSpacingPitch, paragraphTextsOf, rowShapeOf, runStyleOf, samePropValue, sectionEndsOf, signCellPlaceRevision, signCellRevision, signRowRevision, signTableRevision, stampNow, syncCellBox, syncCellVAlign, syncParaSlots, syncRowAlign, syncRowHeader, syncRowHeight, syncTableBox, syncTableProps, tableShapeOf, twipsToPx } from "../core/docx.js";
 import type { CellWhere, TableEdit } from "../core/doc-table-ops.js";
 import { allCells, applyRowHeights, cellOuterSides, cellRangeFor, cellRect, columnCells, cellsInRect, cellsInSweep, deleteCellHere, deleteColumnHere, deleteRowHere, deleteTableBlock, distributeColumns, distributeRows, gridColumns, gridWidths, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, setColumnWidth, splitHere, splitTableAt, tableToText, type RowHeightMove, type TableTextSeparator } from "../core/doc-table-ops.js";
 import { IMAGE_EXT_BY_MIME } from "../core/media.js";
@@ -3285,6 +3285,39 @@ export class DocEditor {
     this.hooks.changed();
   }
 
+  /**
+   * 「清除格式」：选区里每一枚 run 的直接格式整组撤掉（`clearRunStyle` 说的那 11 项），段落格式与段落样式留着。
+   * 这一条说的是「已经写下的这一句」，不是「接下来要打的字」，所以光标折成一点时什么也不做——不攒待用格式。
+   * 选区与 `applyStyle` 同一条走法：ribbon 上按下去时焦点可能在那一格文本框里，先把页面里最后一次选区放回去。
+   */
+  clearFormat(): void {
+    if (!this.rangeEnds() && this.pageSelection) {
+      this.selectRange(this.pageSelection.start, this.pageSelection.end);
+    }
+    const sel = document.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.getRangeAt(0).collapsed) return;
+    const ends = this.rangeEnds();
+    if (!ends) return;
+    this.snapshot(ends.start);
+    const sign = this.trackRevisions ? (before: Inline) => this.signFormatRevision(before) : undefined;
+    if (ends.start.path.join() === ends.end.path.join()) {
+      const paragraph = this.paragraphAt(ends.start.path);
+      if (paragraph) paragraph.inlines = clearRuns(paragraph.inlines, ends.start.offset, ends.end.offset, sign);
+    } else {
+      const start = this.paragraphAt(ends.start.path);
+      if (start) start.inlines = clearRuns(start.inlines, ends.start.offset, Infinity, sign);
+      const end = this.paragraphAt(ends.end.path);
+      if (end) end.inlines = clearRuns(end.inlines, 0, ends.end.offset, sign);
+      for (let i = ends.start.path[0] + 1; i < ends.end.path[0]; i += 1) {
+        const block = this.doc.blocks[i];
+        if (block?.kind === "paragraph") block.inlines = clearRuns(block.inlines, 0, Infinity, sign);
+      }
+    }
+    this.render();
+    this.selectRange(ends.start, ends.end);
+    this.hooks.changed();
+  }
+
   private patchParagraph(paragraph: Paragraph | undefined, from: number, to: number, patch: StylePatch, sign?: (before: Inline) => FormatRevision | undefined): void {
     if (!paragraph) return;
     paragraph.inlines = restyle(paragraph.inlines, from, to, patch, sign);
@@ -5486,6 +5519,19 @@ function restyle(inlines: Inline[], from: number, to: number, patch: StylePatch,
     const next = applyRunPatch(i, patch);
     // Nothing actually changed, so nothing gets signed: a toolbar toggle that lands on the formatting
     // the run already has must not leave a revision nobody asked for.
+    if (!sign || sameRunProps(i, next)) return next;
+    const record = sign(i);
+    return record ? { ...next, revFormat: record } : next;
+  });
+  return merge([...head, ...changed, ...tail]);
+}
+
+/** 选区里被点到的那几枚 run 逐枚清成「什么都没说」，改完才判要不要留痕（`sameRunProps`）。 */
+function clearRuns(inlines: Inline[], from: number, to: number, sign?: (before: Inline) => FormatRevision | undefined): Inline[] {
+  const [head, rest] = splitAt(inlines, from);
+  const [middle, tail] = splitAt(rest, to === Infinity ? Infinity : to - from);
+  const changed = middle.map((i) => {
+    const next = clearRunStyle(i);
     if (!sign || sameRunProps(i, next)) return next;
     const record = sign(i);
     return record ? { ...next, revFormat: record } : next;

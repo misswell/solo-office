@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { Inline, Paragraph } from "../src/core/docx.js";
-import { parseSizePt, WordDocument } from "../src/core/docx.js";
+import { clearRunStyle, parseSizePt, WordDocument } from "../src/core/docx.js";
 import { writeDocx } from "../src/core/write-docx.js";
 import { childSpans, elementContent, OpcPackage, text } from "../src/core/opc.js";
-import { makeHighlightDocx, makeOnOffDocx, makeRunPropsDocx, makeTextFillDocx, makeUnderlineDocx } from "./helpers/make-run.js";
+import { makeClearFormatDocx, makeHighlightDocx, makeOnOffDocx, makeRunPropsDocx, makeTextFillDocx, makeUnderlineDocx } from "./helpers/make-run.js";
 import { renderInline } from "../src/core/render.js";
 
 const part = (bytes: Uint8Array): string => text(OpcPackage.from(bytes).bytes("word/document.xml")!);
@@ -153,6 +153,30 @@ describe("docx run property fidelity", () => {
     const typed = parseSizePt("13.7")!;
     const out = rPrOf(retyped(doc, "字号成对", { ...runAt(doc, "字号成对"), sizePt: typed }), "字号成对");
     expect(out).toContain('<w:sz w:val="27"/><w:szCs w:val="27"/>');
+  });
+
+  it("clears the eleven modeled run fields and keeps the slots the model has no field for", () => {
+    const doc = open(makeClearFormatDocx());
+    const cleared = clearRunStyle(runAt(doc, "整组都说的一枚"));
+    const rpr = rPrOf(retyped(doc, "整组都说的一枚", cleared), "整组都说的一枚");
+    for (const tag of ["b", "i", "u", "strike", "color", "sz", "szCs", "highlight", "vertAlign", "spacing"]) {
+      expect(rpr).not.toContain(`<w:${tag}`);
+    }
+    // 模型没有字段的两样按原件带回：`w:cs` 那一槽的脸留在同一枚 `w:rFonts` 上，`w:lang` 原样。
+    expect(rpr).toContain('<w:rFonts w:cs="Arial"/>');
+    expect(rpr).toContain('<w:lang w:val="en-US"/>');
+
+    // 两张字面脸都撤掉、元素里只剩它自己的名字时，这枚 `w:rFonts` 整个退场（不落一枚空的）。
+    const facesOnly = open(makeClearFormatDocx());
+    const run = runAt(facesOnly, "整组都说的一枚");
+    run.rPrSlots = (run.rPrSlots ?? []).map((s) => (s.tag === "rFonts" ? { tag: s.tag, xml: '<w:rFonts w:ascii="Arial" w:eastAsia="宋体"/>' } : s));
+    expect(rPrOf(retyped(facesOnly, "整组都说的一枚", clearRunStyle(run)), "整组都说的一枚")).not.toContain("w:rFonts");
+
+    // 只有槽的一枚与什么都没说的一枚：模型没有字段可清，盘上的字节就该一字不动。
+    const fresh = part(makeClearFormatDocx());
+    const same = open(makeClearFormatDocx());
+    const xml = retyped(same, "只有槽的一枚", clearRunStyle(runAt(same, "只有槽的一枚")));
+    expect(rPrOf(xml, "只有槽的一枚")).toBe(rPrOf(fresh, "只有槽的一枚"));
   });
 
   it("keeps a run whose every child is machinery the model has no case for", () => {
@@ -362,6 +386,15 @@ describe("docx on/off family read as a statement", () => {
     );
     // Spelled, not deleted: dropping the element would answer the file's sentence with a silence no file wrote.
     expect(out).toBe('<w:rPr><w:rStyle w:val="LendStrike"/><w:strike w:val="0"/></w:rPr>');
+  });
+
+  it("keeps a superscript run's stated size outside the scale, so the box can still read it", () => {
+    const html = renderInline(runAt(open(makeClearFormatDocx()), "整组都说"));
+    // 22 磅（`w:sz 44`）写在**外面**那一枚上，缩一圈（`.75em`）套在里面。同一枚上后写的那句 `.75em` 会把
+    // 文件说的磅数盖掉：纸上画成 12px，字号框读回空串（`.75em` 不以 pt 结尾，`styleOf` 认不出）。
+    expect(html).toContain("font-size:22pt;");
+    expect(html).toContain('<span style="vertical-align:super;font-size:.75em;">整组都说的一枚</span>');
+    expect(html.indexOf("font-size:22pt")).toBeLessThan(html.indexOf("font-size:.75em"));
   });
 
   it("draws two lines on one run instead of letting the later declaration replace the earlier", () => {

@@ -322,6 +322,25 @@ export function makeCharSpacingDocx(): Uint8Array {
  * 三种起始态都是授权口径里真出现过的形状：`w:sz` 的 134 枚落在 9/15/22/26/42 磅上都不在旧清单里，
  * 而 `w:sz` 与 `w:szCs` 成对写的形状是这批件的主流。
  */
+/**
+ * 「清除格式」那一枚（#223）：一枚 run 把模型有字段的 11 项全说了、还带着两枚模型没有字段的槽
+ * （`w:cs` 那一槽的脸、`w:lang`），一枚 run 只说了模型没有字段的两样，一枚 run 一个字也没说。
+ * 授权 46 件正文与带子里 7,300 枚 run、6,972 枚带模型字段、只有 34 枚全落在槽上（`.scratch/clear-format-audience.py`），
+ * 所以这三种形状就是这一枚要分开的三档。
+ */
+export function makeClearFormatDocx(): Uint8Array {
+  const document =
+    `<w:p><w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:b/><w:i/><w:u w:val="thick"/><w:strike/>` +
+    `<w:color w:val="FF0000"/><w:sz w:val="44"/><w:szCs w:val="44"/><w:highlight w:val="yellow"/>` +
+    `<w:vertAlign w:val="superscript"/><w:spacing w:val="40"/><w:lang w:val="en-US"/></w:rPr><w:t>整组都说的一枚</w:t></w:r></w:p>` +
+    `<w:p><w:r><w:rPr><w:rStyle w:val="OnlySlots"/><w:lang w:val="en-US"/></w:rPr><w:t>只有槽的一枚</w:t></w:r></w:p>` +
+    `<w:p><w:r><w:t>什么都没说的一枚</w:t></w:r></w:p>`;
+  const styles =
+    `<w:styles xmlns:w="${NS_W}"><w:style w:type="character" w:styleId="OnlySlots"><w:name w:val="OnlySlots"/>` +
+    `<w:rPr><w:caps/></w:rPr></w:style></w:styles>`;
+  return pack(document, styles);
+}
+
 export function makeSizeBoxDocx(): Uint8Array {
   const document = `<w:p><w:r><w:rPr><w:sz w:val="29"/><w:szCs w:val="29"/></w:rPr><w:t>号1 自己写了十四点五磅的</w:t></w:r></w:p>
 <w:p><w:r><w:t>号2 什么都没说的</w:t></w:r></w:p>

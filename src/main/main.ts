@@ -2637,6 +2637,27 @@ function smoke(): void {
               .filter((v) => v !== "normal" && v !== "");
             return { painted: painted.length, values: [...new Set(painted)].join(",") };
           })(),
+          // #217：w:fitText（调整宽度）那一组在装机件里也摊到文件说的宽度上。按「段 + data-fit」拼组，报的是
+          // 每组几枚、文件说的缇数、量出来的宽度（一个十进制）与 run 自己那句 --fit-char-ls（没有就是空）。
+          // 摊出来的 --fit-ls 不报：它是量出来的，不进模型；同组各枚本应同值，组上的宽度已经把它量进了。
+          fitText: (() => {
+            const paras = [...document.querySelectorAll("#view .page .para")];
+            const groups = new Map();
+            let lone = 0;
+            for (const el of document.querySelectorAll("#view .page [data-fit]")) {
+              const at = paras.indexOf(el.closest(".para"));
+              const name = el.getAttribute("data-fit");
+              // 没有号的 run 自成一摊（与 applyFitText 同一条判据）：同段里两枚空号不许挤成一组。
+              const key = at + "/" + (name === "" ? "#" + lone++ : name);
+              const g = groups.get(key) || { n: 0, tw: el.getAttribute("data-fit-tw"), w: 0, own: "" };
+              g.n += 1;
+              g.w += el.getBoundingClientRect().width;
+              const own = el.style.getPropertyValue("--fit-char-ls").trim();
+              if (own) g.own = own;
+              groups.set(key, g);
+            }
+            return [...groups.values()].map((g) => g.n + "x" + g.tw + "=" + g.w.toFixed(1) + (g.own ? "/" + g.own : ""));
+          })(),
         };
 
         // 导航窗格: the page leaves one [data-outline] mark per paragraph whose outline level resolves, and the

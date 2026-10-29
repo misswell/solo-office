@@ -71,6 +71,22 @@ export function fontStack(run: Pick<Inline, "font" | "fontEastAsia">): string {
  *  `w:type="page"`. `doc-edit` reads the attribute straight back into `Inline.brXml`. */
 export const breakHtml = (xml?: string): string => (xml ? `<br data-brk="${esc(xml)}">` : "<br>");
 
+/**
+ * `w:rPr/w:fitText`（调整宽度，§17.3.2.14）：`w:val` 是**一组** run 合起来要占的宽度（缇），`w:id` 把同一段里
+ * 说同一个号的 run 认成一组——不是每枚 run 各自铺满 `w:val`。授权 46 件里这枚孩子 43 枚 / 2 件（`business plan.dotm`
+ * 的 zh_CN 与 zh_HK），每段 3~4 枚同 `id`、`w:val` 全 `7791`，摊开的是封面表单那条填空线。
+ *
+ * 模型只把它按字节带着（`rPrSlots`），这里从槽里读：槽在，就是这枚 run 自己说过；读不出正数就是没说——
+ * 收成 0 宽会把字压没，那不是文件的意思。`w:id` 缺省时这枚 run 自成一组（§17.3.2.14 对缺省的说法）。
+ */
+function fitTextOf(inline: Inline): { id: string; twips: number } | undefined {
+  const xml = inline.rPrSlots?.find((s) => s.tag === "fitText")?.xml;
+  if (!xml) return undefined;
+  const twips = Number(/(?:[\w.-]+:)?val="(-?\d+)"/.exec(xml)?.[1]);
+  if (!Number.isFinite(twips) || twips <= 0) return undefined;
+  return { id: /(?:[\w.-]+:)?id="(-?\d+)"/.exec(xml)?.[1] ?? "", twips };
+}
+
 export function renderInline(inline: Inline): string {
   if (inline.image) {
     return `<img src="${inline.image.src}" width="${Math.round(inline.image.width)}" height="${Math.round(inline.image.height)}" alt="${esc(inline.image.name)}">`;
@@ -94,11 +110,20 @@ export function renderInline(inline: Inline): string {
   // 单线的 2~3 倍。`text-decoration` 是 shorthand，会把没提到的长项重置，所以这一句跟在它后面。
   if (inline.underline === "thick") css += "text-decoration-thickness:0.1875em;";
   if (inline.sizePt) css += `font-size:${inline.sizePt}pt;`;
+  const fit = fitTextOf(inline);
   // `w:rPr/w:spacing` speaks twentieths of a point per character, and CSS `letter-spacing` is the same measure in
   // points: one declaration per character, negative allowed, and it is the character advance that changes, so a
   // line breaks where the file's spacing says. Painting the run at its unstated advance is what left WPS's own
   // 加宽 4.1 磅 titles (14 runs saying `w:val="82"` among 授权 46 件) sitting at normal width here.
-  if (inline.charSpacingTwips !== undefined) css += `letter-spacing:${inline.charSpacingTwips / 20}pt;`;
+  //
+  // A run that also says `w:fitText` cannot keep it in that declaration: the fit group's spread is not a sentence
+  // of the file but a measurement (`doc-layout.ts` 的 `applyFitText`), and `doc-edit` reads inline `letter-spacing`
+  // straight back as the run's own `w:spacing` — a keystroke would then save a fabricated 字距. So the run's own
+  // value travels as custom property the page's `[data-fit]` rule adds the spread to, and only that value is read
+  // back (`styleOf`).
+  if (inline.charSpacingTwips !== undefined) {
+    css += fit ? `--fit-char-ls:${inline.charSpacingTwips / 20}pt;` : `letter-spacing:${inline.charSpacingTwips / 20}pt;`;
+  }
   if (inline.color) css += `color:${inline.color};`;
   const family = fontStack(inline);
   if (family) css += `font-family:${esc(family)};`;
@@ -114,9 +139,11 @@ export function renderInline(inline: Inline): string {
   // 不要」，纸上只能读出「没画」，那与「没提过」是同一个样——#85 量到的正是这一眼降级；`thick` 的粗度 CSS 交不回
   // 名字。名字一丢，重写 rPr 时那句 `w:u` 就被当成「这枚 run 从没说过」，文件的话被换成沉默或换成细线。
   const u = inline.underline && inline.underline !== "single" ? ` data-u="${esc(inline.underline)}"` : "";
+  // `w:val` 自己上属性，`applyFitText` 要按文件说的宽去铺；`w:id` 是组的名字，空串即这枚 run 自成一组。
+  const ft = fit ? ` data-fit="${esc(fit.id)}" data-fit-tw="${fit.twips}"` : "";
   if (inline.vertAlign && inline.vertAlign !== "baseline")
     css += `vertical-align:${inline.vertAlign === "superscript" ? "super" : "sub"};font-size:.75em;`;
-  let html = inline.text === "" ? "" : `<span${css ? ` style="${css}"` : ""}${hl}${u}>${esc(inline.text)}</span>`;
+  let html = inline.text === "" ? "" : `<span${css ? ` style="${css}"` : ""}${ft}${hl}${u}>${esc(inline.text)}</span>`;
   if (html === "" && !css) html = esc(inline.text);
   // A link to a place in this document keeps its window to itself: `target="_blank"` on a `#name` href hands
   // the app's own page address to the system browser, where nobody has the bookmark open. The attributes the

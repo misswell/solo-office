@@ -428,6 +428,10 @@
          The 8px this sheet used to add was the App's own: it made a 20.8px grid cell advance 28.8px and cut a page
          from 44 lines to 31 (`.scratch/para-gap-dom.ts`). */
       .page .para { margin: 0; min-height: 1lh; white-space: pre-wrap; }
+      /* `w:fitText`（调整宽度）那一组要摊到文件说的宽度上：`--fit-char-ls` 是 run 自己那句 `w:spacing`，
+         `--fit-ls` 是排版量出来摊给每个字的差（`doc-layout.ts` 的 `applyFitText`）。两句都不写进内联
+         `letter-spacing`，因为编辑器把那一句读回 run 的 `w:spacing`——摊出来的字距不是文件说的话。 */
+      .page [data-fit] { letter-spacing: calc(var(--fit-char-ls, 0px) + var(--fit-ls, 0px)); }
       .page[contenteditable="true"] { outline: none; }
       .page[contenteditable="true"] .bullet { user-select: none; }
       /* A heading is a paragraph the *file* put a level on, not a paragraph the App restyles. Where the file's

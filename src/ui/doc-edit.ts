@@ -8,7 +8,7 @@ import { IMAGE_EXT_BY_MIME } from "../core/media.js";
 import { BAND_SOURCE_CLASS, CARRY_CLASS, CARRY_STYLE, BAND_MASTER_CLASS, PAGE_BORDER_CLASS, RUN_CARRY_CLASS, type RevisionView, fontStack, highlightColor, renderWord } from "../core/render.js";
 import { flatOf, inlineLength, isMark, keepRunIdentity } from "../core/run-identity.js";
 import { CommentPanel } from "./doc-comments.js";
-import { applyBandYield, applySheetGaps, applyTabStops, BAND_CLONE_CLASS, caretCharTop, caretStatusOf, lineCaretAnchor, lineNumberAt, measurePageLayout, pageAtCaret, pageCaretAnchor, pagePositionAt, REPEAT_HEADER_ROW_CLASS, rowColumnAt, sectionCaretAnchor, SHEET_GAP_ROW_CLASS, SHEET_STRIP_CLASS, type CaretLine, type CaretStatus, type PageAnchor, type PageMeasure, type PagePlacement, type SheetStrip } from "./doc-layout.js";
+import { applyBandYield, applyFitText, applySheetGaps, applyTabStops, BAND_CLONE_CLASS, caretCharTop, caretStatusOf, lineCaretAnchor, lineNumberAt, measurePageLayout, pageAtCaret, pageCaretAnchor, pagePositionAt, REPEAT_HEADER_ROW_CLASS, rowColumnAt, sectionCaretAnchor, SHEET_GAP_ROW_CLASS, SHEET_STRIP_CLASS, type CaretLine, type CaretStatus, type PageAnchor, type PageMeasure, type PagePlacement, type SheetStrip } from "./doc-layout.js";
 import { ReviewPanel } from "./doc-review.js";
 import { OutlinePanel } from "./doc-outline.js";
 import { openPageSetup as showPageSetupDialog } from "./doc-page-setup.js";
@@ -144,6 +144,12 @@ function styleOf(el: Element): RunStyle {
   const spacing = inline.letterSpacing;
   if (spacing && spacing !== "normal") {
     const twips = cssToTwips(spacing);
+    if (twips !== undefined) s.charSpacingTwips = twips;
+  } else if (el.hasAttribute("data-fit")) {
+    // `w:fitText` 那一组不把字距写进内联 `letter-spacing`（摊出来的差是量出来的，不是文件说的话），run 自己那句
+    // `w:spacing` 住在 `--fit-char-ls` 里——读回来问的就是这一句，摊出来的 `--fit-ls` 一个字都不进模型。
+    const own = inline.getPropertyValue("--fit-char-ls").trim();
+    const twips = own ? cssToTwips(own) : undefined;
     if (twips !== undefined) s.charSpacingTwips = twips;
   }
   if (inline.color) s.color = hexOf(inline.color);
@@ -790,6 +796,9 @@ export class DocEditor {
     const page = this.page;
     if (!page) return;
     for (const el of [...page.querySelectorAll<HTMLElement>(`.${SHEET_STRIP_CLASS}, .${BAND_CLONE_CLASS}`)]) el.remove();
+    // 调整宽度（`w:fitText`）改的是字距，也就是每一行推进多少——它得排在下面每一处「量」之前：带子让位、制表位
+    // 落位与切纸读的都是画出来的行盒，晚一步就是按没摊开的宽度量出来的页界。
+    applyFitText(page);
     // 带子先量、再排：真机上带子贴在纸内，越过边距线的那一截从正文里占走（#157）。量出来的数写在纸盒上，
     // 铺排、页沿推距与状态栏那几格读的都是这一处——所以这一趟必须排在 `applySheetGaps` 之前，晚一步就是
     // 按「不让位」量出来的页界。

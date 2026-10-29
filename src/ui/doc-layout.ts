@@ -51,6 +51,10 @@
  *   （授权口径 46 份里 8 件多节，而这 8 件**各节纸张组合全都相同**——`w:pgSz` 的字面一枚都没换过，
  *   `.scratch/corpus-recheck.mjs` #9：宽与高一起换的那一类件在授权语料里没有观众，差多少仍**未取证**）；
  *   画页缝（`applySheetGaps`）时这一处**仍未改**：每张纸按各自节的高让位，宽还是第一节那张的宽。
+ * - **调整宽度（`w:rPr/w:fitText`）在铺排之前就摊开**：它改的是**字距**，也就是行盒的推进量与折行位置，所以
+ *   必须在量任何东西之前落 DOM——`applyFitText` 排在 `applySheets` 的第一位（在带子让位、制表位、切纸之前）。
+ *   目标宽是文件说的（授权 46 件 43 枚 / 2 件，`w:val` 全 `7791` 缇），摊多少是量出来的：一组同 `id` 的 run
+ *   合起来的自然宽与目标之差，按这一组的字数平分给每个字。
  * - **光标落在第几页**（状态栏「第 X 页」，WPS 叫 `KxWpsStatusPageNumberInfoCommand`）走 `pageAtCaret()`：
  *   取光标处（折叠 Range）自己画出来的那枚矩形，用它的**中线**在量好的单位里找落点，再用与 `packPages`
  *   同一趟装箱得出那一枚在第几页。中线而不是上沿：光标矩形的上沿是**字体盒**的上沿，与单位那条**行盒跨度**
@@ -1593,8 +1597,58 @@ const TAB_MIN_PX = 0.5;
  * 排、没写位的走 `w:defaultTabStop` 整步、借位与 `clear`、无 settings 时的兜底那一步、zoom 与重跑不改答案）；
  * 反向对照（摘掉下面那一调用）13 条红。
  */
+/**
+ * `w:rPr/w:fitText`（调整宽度）：同一段里 `data-fit` 相同的 span 是一组，文件说这一组合起来占 `data-fit-tw` 缇
+ * （§17.3.2.14；授权 46 件 43 枚 / 2 件，每段 3~4 枚同 `id`、`w:val` 全 `7791`，摊开的是封面表单那条填空线）。
+ * 摊法是量出来的：这一组自然宽（连同每枚 run 自己那句 `w:spacing`）与目标之差，按这一组的字数平分给每个字，
+ * 写进 `--fit-ls` 让页面那条 `[data-fit]` 规则把它加在自己的 `w:spacing` 上。差值是迭代量回的——行尾空白在
+ * 浏览器里占不占宽，用第一遍的算式猜不如用第二遍的读数答。
+ *
+ * 量不了的不猜：一组跨了几行的（`getClientRects()` 不止一枚矩形，「这一行的推进」无从谈起）、没有字的、
+ * `w:val` 不是正数的，都原样放着——摊错比不摊更远。
+ *
+ * 必须在量铺排之前跑：它改的是字距，也就是行盒推进量与折行位置。返回画出来的组数。
+ */
+export function applyFitText(page: HTMLElement): number {
+  const zoom = zoomOf(page);
+  const groups = new Map<string, HTMLElement[]>();
+  const paras = new Map<Element, number>();
+  let lone = 0;
+  for (const el of page.querySelectorAll<HTMLElement>("[data-fit]")) {
+    const para = el.closest(".para") ?? page;
+    let at = paras.get(para);
+    if (at === undefined) paras.set(para, (at = paras.size));
+    // 没有 `w:id` 的 run 自成一组（§17.3.2.14：缺省 `id` 就不与别的字合并），给它一枚只属于这一枚的键。
+    const id = el.dataset.fit ?? "";
+    const key = id === "" ? `${at}\u0000#${lone++}` : `${at}\u0000${id}`;
+    const list = groups.get(key);
+    if (list) list.push(el);
+    else groups.set(key, [el]);
+  }
+  let drawn = 0;
+  for (const els of groups.values()) {
+    const twips = Number(els[0]!.dataset.fitTw);
+    if (!Number.isFinite(twips) || twips <= 0) continue;
+    if (els.some((el) => el.getClientRects().length > 1)) continue;
+    const chars = els.reduce((n, el) => n + [...(el.textContent ?? "")].length, 0);
+    if (chars === 0) continue;
+    const target = twipsToPx(twips);
+    const widthOf = (el: HTMLElement): number => el.getBoundingClientRect().width / zoom;
+    let delta = 0;
+    for (let pass = 0; pass < 4; pass += 1) {
+      const natural = els.reduce((sum, el) => sum + widthOf(el), 0);
+      const diff = target - natural;
+      if (Math.abs(diff) < 0.5) break;
+      delta += diff / chars;
+      for (const el of els) el.style.setProperty("--fit-ls", `${delta.toFixed(3)}px`);
+    }
+    drawn += 1;
+  }
+  return drawn;
+}
+
 export function applyTabStops(page: HTMLElement, doc: WordDocument): void {
-  // 凡是画了制表符的正文段都要走这一趟，**没有** `data-tab-stops` 的那一类也算：授权 46 份里带制表符的正文段
+  // 凡是画了制表符的正文段都要走这一趟，**没有** `data-tab-stops` 的那一类也算：授权 46 份里带制表符的正文段，**没有** `data-tab-stops` 的那一类也算：授权 46 份里带制表符的正文段
   // 14 段共 30 枚，其中 10 段 / 26 枚的样式链上一枚位都没写（`.scratch/tabs-default-audience.ts`），
   // 它们该按 `w:defaultTabStop` 的步长走，而不是留在 CSS 那枚发明的 32px 上。
   const hosts = [...page.querySelectorAll<HTMLElement>(".para")].filter(

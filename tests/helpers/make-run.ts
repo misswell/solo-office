@@ -281,6 +281,26 @@ export function makeHanFaceDocx(): Uint8Array {
  * `-6`，但**这批件里借得到的一枚也没量过**（样式与 run 同处一件不等于有 run 点名它，#174 未复测），
  * 所以 `WideTitle` 是照那 18 枚的形状造的梯级。
  */
+/**
+ * `w:rPr/w:fitText`（调整宽度）：授权 46 件里 43 枚 / 2 件（`business plan.dotm` 的 zh_CN 与 zh_HK）。这一段照真件
+ * 的形状摆：三段（`项目名称` / 一串空格 / 一枚空格）同住 `id="0"`、同说 `7791` 缇，最后一枚还带 `w:spacing 82`；
+ * 另有三段钉住「不成组」的三种写法：`val=0`、没有 `id`、另一个段里的同名 `id`。
+ */
+export function makeFitTextDocx(): Uint8Array {
+  const document =
+    `<w:p><w:r><w:rPr><w:b/><w:w w:val="93"/><w:sz w:val="36"/><w:fitText w:val="7791" w:id="0"/></w:rPr><w:t>项目名称</w:t></w:r>` +
+    `<w:r><w:rPr><w:b/><w:w w:val="93"/><w:sz w:val="36"/><w:u w:val="single"/><w:fitText w:val="7791" w:id="0"/></w:rPr><w:t xml:space="preserve">        </w:t></w:r>` +
+    `<w:r><w:rPr><w:b/><w:spacing w:val="82"/><w:w w:val="93"/><w:sz w:val="36"/><w:u w:val="single"/><w:fitText w:val="7791" w:id="0"/></w:rPr><w:t xml:space="preserve"> </w:t></w:r></w:p>` +
+    `<w:p><w:r><w:rPr><w:fitText w:val="0" w:id="1"/></w:rPr><w:t>零宽的不成组</w:t></w:r></w:p>` +
+    `<w:p><w:r><w:rPr><w:fitText w:val="3000"/></w:rPr><w:t>没有号</w:t></w:r>` +
+    // 两枚都没有 `w:id`：各成一摊。第二枚故意换个粗体——写出器会把相邻、属性逐字相同的两枚拼回一枚（那是不丢
+    // 东西的合法合并），拼回去就只剩一句 `w:fitText`，这一格量的东西就变了。
+    `<w:r><w:rPr><w:b/><w:fitText w:val="3000"/></w:rPr><w:t>也自成组</w:t></w:r></w:p>` +
+    `<w:p><w:r><w:rPr><w:fitText w:val="2000" w:id="7"/></w:rPr><w:t>另一段</w:t></w:r></w:p>` +
+    `<w:p><w:r><w:rPr><w:fitText w:val="200" w:id="9"/></w:rPr><w:t>WWWWWWWW</w:t></w:r></w:p>`;
+  return pack(document);
+}
+
 export function makeCharSpacingDocx(): Uint8Array {
   const SPACING_STYLES =
     `<w:styles xmlns:w="${NS_W}"><w:style w:type="character" w:styleId="Hyperlink"><w:name w:val="Hyperlink"/></w:style>` +

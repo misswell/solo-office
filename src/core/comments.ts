@@ -70,7 +70,7 @@ export const commentBody = (c: DocComment): string => commentTexts(c).join("\n")
 export function bodyShape(paragraphs: Inline[][]): string {
   const styleOf = (r: Inline): string =>
     JSON.stringify([
-      r.bold === true, r.italic === true, r.underline === true, r.strike === true,
+      r.bold === true, r.italic === true, r.underline ?? "", r.strike === true,
       r.sizePt ?? 0, r.color ?? "", r.highlight ?? "", r.font ?? "", r.vertAlign ?? "", r.hyperlink ?? "",
     ]);
   const runs = (list: Inline[]): unknown[] => {

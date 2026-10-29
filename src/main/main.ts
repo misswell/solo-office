@@ -352,6 +352,19 @@ function smoke(): void {
         const after = document.querySelector("#view .page");
         const docPart = { title: document.getElementById("title")?.textContent, editable: after?.getAttribute("contenteditable"), blocksBefore: blocks, blocksAfter: after?.children.length, typed: after?.textContent?.includes("SMOKE"), bulletsBefore: bullets, bulletsWearingOwnFont: bulletWorn, bulletsOwnSize: bulletSized, bulletsOwnColor: bulletInked, bulletsAfter: after?.querySelectorAll(".bullet").length, ribbonGroups: document.querySelectorAll("#ribbon .grp").length, fontBoxSpans, fontBoxEcho, ribbonPair };
 
+        // #210：w:u 那一族在装机那只盒子里画成什么样——这一腿一枚也不按，所以别的装机件字节账一字不动。
+        // （探针整段是一枚模板字符串，这一段里既不写反引号也不写反斜杠。）
+        // 件由 .scratch/make-underline-smoke.ts 现拼（照 tests/helpers/make-run.ts 的同一份形状）。问四件事：
+        // 说了不要的画不画、借来的线画不画（且不许被 run 自己认领）、单线与粗线各多粗、什么都没说的那枚别发明线。
+        const uNeedle = (t) => [...document.querySelectorAll("#view .page span")].find((s) => (s.textContent ?? "").includes(t));
+        const uRead = (t) => {
+          const el = uNeedle(t);
+          if (!el) return null;
+          const s = getComputedStyle(el);
+          return { line: s.textDecorationLine, thick: s.textDecorationThickness, size: s.fontSize, stamp: el.getAttribute("data-u") ?? "" };
+        };
+        const underLeg = { none: uRead("说明没有"), covers: uRead("这句话盖掉借来的线"), lent: uRead("链上借来的线"), single: uRead("自己点了线"), thick: uRead("粗线原样回去"), silent: uRead("什么都没说") };
+
         // #144：段落那一圈 w:pBdr 与那一层 w:shd 在**真实壳**里画不画、占不占流里的地方。DOM 门禁跑的是
         // src/ui/index.html 生成的一份副本，这一腿要证明装机那只盒子也一样。量的都是「画了几段」「高差几个 px」
         // 「页缝数」，不报文档里的颜色名与字体名。件由 .scratch/make-pbdr-smoke.ts 现拼，两件只差样式 SoloLever
@@ -2525,7 +2538,7 @@ function smoke(): void {
         const recovered = { cells: document.querySelectorAll(".sheet-wrap td").length, title: document.getElementById("title")?.textContent };
         // The run ends on a modified document, so quitting goes through the unsaved prompt.
         // A PDF the export asked for shows up in saveAsWrites, next to the pptx/xlsx saves.
-        return { docPart, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
+        return { docPart, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
       })()`;
       void last?.webContents
         .executeJavaScript(probe)

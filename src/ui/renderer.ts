@@ -759,7 +759,7 @@ function buildDocRibbon(): void {
   const font = group("home");
   button(font, "bold", "粗", "加粗 ⌘B", () => style({ bold: !editor?.markState().bold }));
   button(font, "italic", "斜", "斜体 ⌘I", () => style({ italic: !editor?.markState().italic }));
-  button(font, "under", "线", "下划线 ⌘U", () => style({ underline: !editor?.markState().underline }));
+  button(font, "under", "线", "下划线 ⌘U", () => style({ underline: editor?.markState().underline ? "none" : "single" }));
   button(font, "strike", "删", "删除线", () => style({ strike: !editor?.markState().strike }));
   // 字体框与字号框在 WPS 里是一对：`CT_Home.kuip:110-111` 把 `FontNameInHomeTab` 与 `FontSize` 同挂在 `RB_Font` 的
   // `font_info_pair` 里，字体在前、`minimumWidth="130"`。表格工具页那一组（`CT_TableTools.kuip:133`）是同一对里的
@@ -995,7 +995,7 @@ function buildDocRibbon(): void {
   chooser(tableFont, "tblSize", "字号", DOC_SIZES.map((s): [string, string] => [String(s), String(s)]), (v) => style({ sizePt: Number(v) }));
   button(tableFont, "tblBold", "粗", "加粗 ⌘B", () => style({ bold: !editor?.markState().bold }));
   button(tableFont, "tblItalic", "斜", "斜体 ⌘I", () => style({ italic: !editor?.markState().italic }));
-  button(tableFont, "tblUnder", "线", "下划线 ⌘U", () => style({ underline: !editor?.markState().underline }));
+  button(tableFont, "tblUnder", "线", "下划线 ⌘U", () => style({ underline: editor?.markState().underline ? "none" : "single" }));
   swatch(tableFont, "tblColor", "字体颜色", "#c00000", (v) => style({ color: v }));
   chooser(tableFont, "tblHl", "突出显示", DOC_HIGHLIGHTS, (v) => {
     editor?.applyStyle({ highlight: v });
@@ -2441,7 +2441,7 @@ window.addEventListener("keydown", (e) => {
       const toggle = editor?.markState();
       if (key === "b") editor?.applyStyle({ bold: !toggle?.bold });
       if (key === "i") editor?.applyStyle({ italic: !toggle?.italic });
-      if (key === "u") editor?.applyStyle({ underline: !toggle?.underline });
+      if (key === "u") editor?.applyStyle({ underline: toggle?.underline ? "none" : "single" });
       syncDocRibbon();
       return;
     }

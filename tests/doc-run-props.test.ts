@@ -66,7 +66,7 @@ describe("docx run property fidelity", () => {
     expect(run.font).toBe("Times New Roman");
     expect(run.fontEastAsia).toBe("宋体");
     expect(run.asRead).toEqual({
-      bold: true, italic: false, underline: true, strike: true, sizePt: 12, color: "#808080",
+      bold: true, italic: false, underline: "single", strike: true, sizePt: 12, color: "#808080",
       highlight: "yellow", font: "Times New Roman", fontEastAsia: "宋体",
       // `w:vertAlign w:val="baseline"` is in this run's set, and the run saying it sits on the line is a thing it
       // stated: the field holds the name, which is what stops the writer from answering the file with a silence.
@@ -181,21 +181,21 @@ describe("docx run property fidelity", () => {
 
   it("writes an underline only when the field moved, not because a link reads as underlined", () => {
     const doc = open(makeRunPropsDocx());
-    expect(runAt(doc, "链接里的字").underline).toBe(true);
+    expect(runAt(doc, "链接里的字").underline).toBe("single");
     // The `w:Hyperlink` style draws it and the file never wrote a `w:u`, so an untouched link comes back as it sat.
     expect(rPrOf(elsewhere(makeRunPropsDocx()), "链接里的字")).toBe('<w:rPr><w:rStyle w:val="Hyperlink"/><w:kern w:val="28"/></w:rPr>');
 
     // Moved, it is spelled into the carried set at the rank `CT_RPr` gives it: after `w:szCs`, before `w:shd`.
     const on = open(makeRunPropsDocx());
-    expect(rPrOf(retyped(on, "字号成对", { ...runAt(on, "字号成对"), underline: true }), "字号成对")).toBe(
+    expect(rPrOf(retyped(on, "字号成对", { ...runAt(on, "字号成对"), underline: "single" }), "字号成对")).toBe(
       '<w:rPr><w:rFonts w:eastAsia="仿宋" w:cs="仿宋"/><w:sz w:val="21"/><w:szCs w:val="24"/><w:u w:val="single"/></w:rPr>',
     );
     // Off, the cancellation is a value the run writes rather than an element it deletes, exactly as `w:b` above
-    // becomes `<w:b w:val="0"/>`. That is the shape WPS itself uses: `<w:u w:val="none"/>` appears 952 times in
-    // these bodies and 254 of them sit on runs this reader resolves into fields
-    // (`.scratch/underline-counted.ts`, `.scratch/underline-audience.ts`).
+    // becomes `<w:b w:val="0"/>`. That is the shape WPS itself uses: 授权 46 份的 `word/document.xml` 里
+    // `<w:u w:val="none"/>` 有 30 枚（同一趟逐枚：`single` 1,565、`thick` 20、裸写 0），段落标记那一侧另有 3 枚
+    // （`.scratch/underline-audience.py`）。
     const off = open(makeRunPropsDocx());
-    expect(rPrOf(retyped(off, "整段自述", { ...runAt(off, "整段自述"), underline: false }), "整段自述")).toContain(
+    expect(rPrOf(retyped(off, "整段自述", { ...runAt(off, "整段自述"), underline: "none" }), "整段自述")).toContain(
       '<w:u w:val="none"/>',
     );
   });
@@ -217,23 +217,23 @@ describe("docx run property fidelity", () => {
 });
 
 /**
- * `w:u` counted over the same 86 WPS documents, twice and reconciled (`.scratch/underline-counted.ts` walks the
- * bytes by tag stack, `.scratch/underline-audience.ts` asks the production model). The bodies write 1586 `w:u`:
- * 1256 on runs and 330 on paragraph marks. Of the runs, 488 reach this reader as fields (254 `none`, 194 `single`,
- * 40 `thick`, and not one leaves `w:val` off) while the other 768 travel as bytes inside table cells.
- * `word/styles.xml` is not silent: it states `w:u` 35 times, 31 of them on character styles with `single`, and
- * those styles do lend a line to 8 runs that say nothing of their own — but all 254 cancelling runs sit on chains
- * that say nothing about `w:u`, so no run today has a line to beat. `w:rPrDefault` states none, and the bodies
- * contain 0 `w:hyperlink` elements, so `linkLook`'s forced line has no audience in hand either.
- * The rung that lends a line (`LendU` below) is therefore the shape the corpus points at but does not itself
- * carry: built to the 31 character styles' pattern so the 254 sentences have something they must beat. Nothing
- * here claims a pixel the corpus has not shown — what the change buys is that a stated cancellation survives.
+ * `w:u` counted on the authorized cohort (46 份 = `.scratch/wps-corpus` + WPS 自带模板，只数 `.docx/.dotx/.dotm/.docm`；
+ * `.scratch/underline-audience.py` 逐枚数 `w:rPr/w:u`，另开一趟只数它的属性名）。1,615 枚说过线的 run 住在 22 件里：
+ * `single` 1,565 / `none` 30 / `thick` 20，枚枚写了 `w:val`，枚枚只写 `w:val`（没有一枚带 `w:color` 或 `themeColor`）。
+ * 段落标记那一侧 316 / 3 / 16，`word/styles.xml` 22 枚全在字符样式自己的 `w:rPr` 里、枚枚 `single`。
+ * 旧口径那组（1586 枚 / 488 成字段 / 254 `none` / 768 成字节 / 35 枚样式）随 86 份语料一起作废，这里的数是重量的。
+ *
+ * 这一族因此按形状名建模，不再收成「有没有线」：`thick` 那 20 枚坐在 2 份件里，收成 `single` 就是把文件说的粗线
+ * 画成细线、拼回再写成细线。`LendU` 那一格照 §17.7.2 的借线形状摆（授权口径里 `none` 坐在借得到线的链上有几枚
+ * 尚未再数，所以它是形状的夹具而不是量到的一枚）。至于 WPS 那 8 档线形下拉——`CT_TableTools.kuip:115-122` 只报
+ * `icon="line_style_{1,7,25,2,4,5,6,18}_display_kd"`，图标资源不在这个包里，档名与线形的对应仍是未取证，本轮不摆
+ * 那一圈；`UnderLineColor`（同文件 :124-127）在授权口径里 0 受众（1,615 枚 `w:u` 无一枚说色），同样不摆。
  */
 describe("docx underline read as a statement", () => {
   it("reads a stated no-underline as a value the run gave, not a missing element", () => {
     const run = runAt(open(makeUnderlineDocx()), "说明没有");
-    expect(run.underline).toBe(false);
-    expect(run.asRead?.underline).toBe(false);
+    expect(run.underline).toBe("none");
+    expect(run.asRead?.underline).toBe("none");
   });
 
   it("stops the ladder per property at the rung that stated one", () => {
@@ -241,10 +241,10 @@ describe("docx underline read as a statement", () => {
     // §17.7.2 ranks the run's own `w:rPr` above the character style it names, so this run's `none` beats the
     // line the style lends. The other three are the controls: a style that is not contradicted lends a line,
     // and a run that names no style still says which way it goes for itself.
-    expect(runAt(doc, "这句话盖掉借来的线").underline).toBe(false);
-    expect(runAt(doc, "链上借来的线").underline).toBe(true);
-    expect(runAt(doc, "自己点了线").underline).toBe(true);
-    expect(runAt(doc, "粗线原样回去").underline).toBe(true);
+    expect(runAt(doc, "这句话盖掉借来的线").underline).toBe("none");
+    expect(runAt(doc, "链上借来的线").underline).toBe("single");
+    expect(runAt(doc, "自己点了线").underline).toBe("single");
+    expect(runAt(doc, "粗线原样回去").underline).toBe("thick");
   });
 
   it("hands back a stated none and a stated thick exactly as they sat", () => {
@@ -252,14 +252,14 @@ describe("docx underline read as a statement", () => {
     const after = save(open(makeUnderlineDocx()));
     expect(rPrOf(after, "说明没有")).toBe(rPrOf(before, "说明没有"));
     expect(rPrOf(after, "说明没有")).toBe('<w:rPr><w:u w:val="none"/></w:rPr>');
-    // The model holds whether a line is on, not what shape it has, so a shape it cannot name travels as bytes.
+    // 形状名现在就在模型里：粗线不再靠「这枚 run 说不出来所以随行成字节」保住，而是说出来也拼回去。
     expect(rPrOf(after, "粗线原样回去")).toBe('<w:rPr><w:u w:val="thick"/></w:rPr>');
   });
 
   it("writes the cancellation when the page turns off a line the style lent", () => {
     const doc = open(makeUnderlineDocx());
     const out = rPrOf(
-      retyped(doc, "链上借来的线", { ...runAt(doc, "链上借来的线"), underline: false }),
+      retyped(doc, "链上借来的线", { ...runAt(doc, "链上借来的线"), underline: "none" }),
       "链上借来的线",
     );
     expect(out).toBe('<w:rPr><w:rStyle w:val="LendU"/><w:u w:val="none"/></w:rPr>');
@@ -267,8 +267,26 @@ describe("docx underline read as a statement", () => {
 
   it("writes a line back when the page turns a cancelled run on", () => {
     const doc = open(makeUnderlineDocx());
-    const out = rPrOf(retyped(doc, "说明没有", { ...runAt(doc, "说明没有"), underline: true }), "说明没有");
+    const out = rPrOf(retyped(doc, "说明没有", { ...runAt(doc, "说明没有"), underline: "single" }), "说明没有");
     expect(out).toBe('<w:rPr><w:u w:val="single"/></w:rPr>');
+  });
+
+  /**
+   * The page is where a name can be lost twice over: once by drawing `thick` at a single line's thickness, once by
+   * giving the editor nothing to read back. So the two faces are pinned separately — the CSS says how it draws,
+   * `data-u` says what the file named, and a name CSS already carries (`single`) is not stamped again.
+   */
+  it("draws the thickness the name says and stamps only what CSS cannot carry back", () => {
+    const doc = open(makeUnderlineDocx());
+    expect(renderInline(runAt(doc, "粗线原样回去"))).toBe(
+      '<span style="text-decoration:underline;text-decoration-thickness:0.1875em;" data-u="thick">粗线原样回去</span>',
+    );
+    // `single` draws exactly as it did while the model held a boolean: no extra bytes for the 1,565 runs that say it.
+    expect(renderInline(runAt(doc, "自己点了线"))).toBe('<span style="text-decoration:underline;">自己点了线</span>');
+    expect(renderInline(runAt(doc, "链上借来的线"))).toBe('<span style="text-decoration:underline;">链上借来的线</span>');
+    // A stated `none` draws no line — which is the same picture as a run that never spoke — so the stamp is the only
+    // thing that tells the two sentences apart on the way back.
+    expect(renderInline(runAt(doc, "说明没有"))).toBe('<span data-u="none">说明没有</span>');
   });
 });
 

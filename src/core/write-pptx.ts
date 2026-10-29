@@ -3,6 +3,7 @@ import { bytesOfDataUrl, IMAGE_MIME_BY_EXT } from "./media.js";
 import { buildXml, parseOrderedXml, rawAttrs, rawChildren, rawFind, rawFindAll, relsPathOf, tagLocalOf } from "./opc.js";
 import type { Presentation, Shape, Slide, SlideCell, SlideParagraph } from "./pptx.js";
 import type { Inline } from "./docx.js";
+import { hasLine } from "./docx.js";
 
 /**
  * Serializes an edited deck. Slides the user did not touch are copied through
@@ -271,7 +272,7 @@ function runNode(run: Inline, text: string): any {
   const attrs: Record<string, string> = {};
   if (run.bold) attrs["@_b"] = "1";
   if (run.italic) attrs["@_i"] = "1";
-  if (run.underline) attrs["@_u"] = "sng";
+  if (hasLine(run.underline)) attrs["@_u"] = "sng";
   if (run.sizePt) attrs["@_sz"] = String(Math.round(run.sizePt * 100));
   const children: any[] = [];
   if (run.color) children.push({ "a:solidFill": [{ "a:srgbClr": [], ":@": { "@_val": run.color.replace(/^#/, "").toUpperCase() } }] });

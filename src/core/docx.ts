@@ -29,7 +29,15 @@ const REL_COMMENTS_IDS = "http://schemas.microsoft.com/office/2016/09/relationsh
 export interface RunStyle {
   bold?: boolean;
   italic?: boolean;
-  underline?: boolean;
+  /**
+   * `w:u@w:val`（§17.3.2.25 的 `ST_Underline`）按文件自己写的名字带着：**缺席 = 「没提过」，`"none"` = 「说了不要」，
+   * 其余名字 = 「说了要，线是这一档」**——和 `highlight` 同一套三态，只是「要」的那一档从前塌成 `true`，形状就此丢了；
+   * 现在留名，画的时候才谈得上画粗线、点线。授权 46 份 1,615 枚 `w:u` 只出现三个名字（`single` 1,565 / `none` 30 /
+   * `thick` 20，0 枚裸写；`.scratch/underline-audience.py` 逐枚），`thick` 那 20 枚坐在 2 份件里、另有 16 枚在段落标记上。
+   * 认得的档按 `DocumentFormat.OpenXml.Wordprocessing.UnderlineValues` 序列化出来的那串名字；比那串更长的名字这一批件
+   * 没喂过，照原样带、照原样写回，画不出来的按单线画（不替文件改口，也不假画）。
+   */
+  underline?: string;
   strike?: boolean;
   sizePt?: number;
   color?: string;
@@ -4366,6 +4374,13 @@ const entryType = (rev: Revision): "insert" | "delete" | "move-from" | "move-to"
   rev.move === "from" ? "move-from" : rev.move === "to" ? "move-to" : rev.kind === "ins" ? "insert" : "delete";
 
 /** Every run property this model carries, so a rejected formatting change can clear the ones the record dropped. */
+/**
+ * 「这条线上有没有线」——`underline` 换成形状名之后，问在不在的 callers 一律走这里，不留 `if (r.underline)`
+ * 那种把 `"none"` 也当成「有」的写法。`undefined`（没提过）与 `"none"`（说了不要）在纸上都是无，在字节上是两句话：
+ * 前者不拼元素，后者拼 `<w:u w:val="none"/>`（#85 定的那条，写端自己守着）。
+ */
+export const hasLine = (underline?: string): boolean => underline !== undefined && underline !== "none";
+
 export const RUN_STYLE_KEYS: (keyof RunStyle)[] = ["bold", "italic", "underline", "strike", "sizePt", "color", "highlight", "font", "fontEastAsia", "vertAlign", "charSpacingTwips"];
 
 /**
@@ -6194,7 +6209,9 @@ function runStyle(rPr: any, theme?: ThemeFonts): RunStyle {
   // `w:u` 全部是**字符样式**写的 `single`，只有 run 自己点名（`w:rStyle`）才借得到，而这 30 枚里没有一枚带
   // `w:rStyle`（28 枚两个样式指针都没写，2 枚只写 `w:pStyle`），段落样式层 0 枚写 `w:u`。所以这一条同样是
   // representation fix，不是 pixel fix——它买到的是「一句文件写过的话，不该被一次不相干的编辑改掉」。
-  if (rPr.u !== undefined) s.underline = rPr.u["@_val"] !== "none";
+  // 形状名从这一轮起留在模型里（`thick` 那 20 枚 + 段落标记上 16 枚是这一档的受众）：从前 `true` 把「有线」和
+  // 「什么线」压成一个答案，纸上只能画细线，而 `w:u` 没被碰过的那一路靠原字节带回，画与存说的是两句话。
+  if (rPr.u !== undefined) s.underline = rPr.u["@_val"] || "single";
   // The last two members of the same on/off family. `w:strike` is §17.3.2.19's `ST_OnOff`, so `0` and `false`
   // cancel it just as they cancel `w:b` — reading the element as "struck, whatever it says" put a line through the
   // 2 runs stating `<w:strike w:val="0"/>` among the 56 `w:strike` of the quarantined 86's body parts (36 of those
@@ -6314,8 +6331,8 @@ export function applyRunPatch(inline: Inline, patch: Partial<RunStyle>): Inline 
  */
 function linkLook(inline: Inline): void {
   if (inline.color) return;
-  inline.underline = true;
-  if (inline.asRead) inline.asRead = { ...inline.asRead, underline: true };
+  inline.underline = "single";
+  if (inline.asRead) inline.asRead = { ...inline.asRead, underline: "single" };
 }
 
 /**

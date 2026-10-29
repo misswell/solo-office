@@ -1,4 +1,5 @@
 import type { Inline } from "../core/docx.js";
+import { hasLine } from "../core/docx.js";
 import type { Presentation, Shape, Slide } from "../core/pptx.js";
 import { renderSlideHtml } from "../core/render.js";
 
@@ -419,7 +420,7 @@ export class DeckEditor {
     return {
       bold: Number(cs.fontWeight) >= 600 || inherited.bold,
       italic: cs.fontStyle === "italic" || inherited.italic,
-      underline: cs.textDecorationLine.includes("underline") || inherited.underline,
+      underline: cs.textDecorationLine.includes("underline") ? "single" : inherited.underline,
       sizePt,
       color: rgbToHex(cs.color),
       font: cs.fontFamily.split(",")[0]?.replace(/["']/g, "") || inherited.font,
@@ -650,9 +651,14 @@ export class DeckEditor {
     const shape = this.selected === null ? undefined : this.slide?.shapes[this.selected];
     const runs = (shape?.paragraphs ?? []).flatMap((p) => p.runs);
     if (!shape || !runs.length) return;
-    const on = runs.every((r) => r[kind]);
+    const on = runs.every((r) => (kind === "underline" ? hasLine(r.underline) : !!r[kind]));
     this.pushUndo();
-    for (const run of runs) run[kind] = !on;
+    for (const run of runs) {
+      // 按钮在两档之间跳，形状名不在这一跳里：关到 `none`，开到 `single`。
+      if (kind === "underline") run.underline = on ? "none" : "single";
+      else if (kind === "bold") run.bold = !on;
+      else run.italic = !on;
+    }
     shape.textDirty = true;
     this.pres.markDirty(this.slide!);
     this.hooks.changed();
@@ -667,7 +673,7 @@ export class DeckEditor {
     const shape = this.selected === null ? undefined : this.slide?.shapes[this.selected];
     const runs = (shape?.paragraphs ?? []).flatMap((p) => p.runs);
     if (!runs.length) return undefined;
-    return { bold: runs.every((r) => r.bold), italic: runs.every((r) => r.italic), underline: runs.every((r) => r.underline) };
+    return { bold: runs.every((r) => r.bold), italic: runs.every((r) => r.italic), underline: runs.every((r) => hasLine(r.underline)) };
   }
 
   /** Ribbon feedback: what the shape controls should show, when there is a target. */

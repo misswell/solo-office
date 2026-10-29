@@ -1,7 +1,7 @@
 import type { Block, BorderSet, Carried, CarriedInline, CellStyle, FormatRevision, HeaderFooter, HfSegment, Inline, LineSpacingRule, MarginTwips, ParaStyle, PageGeometry, PageSetup, Paragraph, ParagraphFormatRevision, PropSlot, Revision, RevisionEntry, RowInfo, RowStyle, RunStyle, Section, Table, TableBorder, TableCell, TablePropsPatch, TableStyle, WordDocument } from "../core/docx.js";
 import type { CommentAnchor, DocComment } from "../core/comments.js";
 import { bodyShape, commentTexts } from "../core/comments.js";
-import { DEFAULT_SECTION, EAST_ASIAN_TEXT, MARGIN_SIDES, RUN_STYLE_KEYS, applyFacePick, applyRunPatch, borderDelta, carriedShape, cellShapeOf, countTexts, lineGridPitchTwips, ownParaStyle, ownRunStyle, paraSpacingPitch, paraStyleOf, paragraphTextsOf, rowShapeOf, runStyleOf, samePropValue, sectionEndsOf, signCellPlaceRevision, signCellRevision, signRowRevision, signTableRevision, stampNow, syncCellBox, syncCellVAlign, syncParaSlots, syncRowHeader, syncRowHeight, syncTableBox, syncTableProps, tableShapeOf, twipsToPx } from "../core/docx.js";
+import { DEFAULT_SECTION, EAST_ASIAN_TEXT, MARGIN_SIDES, RUN_STYLE_KEYS, applyFacePick, applyRunPatch, borderDelta, carriedShape, cellShapeOf, countTexts, hasLine, lineGridPitchTwips, ownParaStyle, ownRunStyle, paraSpacingPitch, paraStyleOf, paragraphTextsOf, rowShapeOf, runStyleOf, samePropValue, sectionEndsOf, signCellPlaceRevision, signCellRevision, signRowRevision, signTableRevision, stampNow, syncCellBox, syncCellVAlign, syncParaSlots, syncRowHeader, syncRowHeight, syncTableBox, syncTableProps, tableShapeOf, twipsToPx } from "../core/docx.js";
 import type { CellWhere, TableEdit } from "../core/doc-table-ops.js";
 import { allCells, applyRowHeights, cellOuterSides, cellRangeFor, cellRect, columnCells, cellsInRect, cellsInSweep, deleteCellHere, deleteColumnHere, deleteRowHere, deleteTableBlock, distributeColumns, distributeRows, gridColumns, gridWidths, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, setColumnWidth, splitHere, splitTableAt, tableToText, type RowHeightMove, type TableTextSeparator } from "../core/doc-table-ops.js";
 import { IMAGE_EXT_BY_MIME } from "../core/media.js";
@@ -120,7 +120,7 @@ function styleOf(el: Element): RunStyle {
   const s: RunStyle = {};
   if (tag === "b" || tag === "strong") s.bold = true;
   if (tag === "i" || tag === "em") s.italic = true;
-  if (tag === "u") s.underline = true;
+  if (tag === "u") s.underline = "single";
   if (tag === "s" || tag === "strike" || tag === "del") s.strike = true;
   if (tag === "sup") s.vertAlign = "superscript";
   if (tag === "sub") s.vertAlign = "subscript";
@@ -128,7 +128,14 @@ function styleOf(el: Element): RunStyle {
   if (byWeight !== undefined) s.bold = byWeight;
   if (inline.fontStyle === "italic" || inline.fontStyle === "oblique") s.italic = true;
   const deco = `${inline.textDecoration} ${inline.textDecorationLine}`;
-  if (deco.includes("underline")) s.underline = true;
+  // 线名读回来按高亮那一课的顺序（下面 `data-hl` 那段注释）：这一格这次写下的样式比它复制过去的属性新鲜。样式
+  // 说了有线，形状名才谈得上——`data-u` 里是粗线名就带名字，否则这页画的单线就是 `single`；说了 `none` 就带 `none`，
+  // 不能让一枚留在拆分 span 上的旧钉把刚关掉的线画回来；两种都没说，才是「这一格的样式不表态」，读钉着的那一句
+  // （`none` 在纸上与「没画」同一个样，#85 量的正是这一眼）。
+  const uStamp = el.getAttribute("data-u");
+  if (deco.includes("underline")) s.underline = uStamp && hasLine(uStamp) ? uStamp : "single";
+  else if (/\bnone\b/.test(deco)) s.underline = "none";
+  else if (uStamp) s.underline = uStamp;
   if (deco.includes("line-through")) s.strike = true;
   if (inline.fontSize.endsWith("pt")) s.sizePt = Number.parseFloat(inline.fontSize);
   // 字距跟着字号读回：打字会把一枚 run 切成几段，切开的每一段都从自己那格 span 的 style 重新认领属性。渲染器
@@ -3163,6 +3170,10 @@ export class DocEditor {
    * could have written: `undefined` is 「没提过」, `"none"` is a run that *says* it has no background, and a
    * colour name is a background. A control that shows 「没提过」 the same way as 「说了没有」 answers the reader
    * with a silence where the document spoke.
+   *
+   * `underline` answers the button's question only — WPS 那一枚 `Underline` 在开关之间跳，而形状名（`thick` 那一档，
+   * 授权 46 份 20 枚）不在它的两档里。名字住在模型字段上，这里只报「这一段有没有穿线」，两页的灯与 `? "none" : "single"`
+   * 那一句都问这一个答案；粗线因此在按钮眼里与单线同格，跳下去仍是把线说到「不要」。
    */
   markState(): { bold: boolean; italic: boolean; underline: boolean; strike: boolean; sizePt?: number; color?: string; highlight?: string; font?: string; align?: string; list?: "bullet" | "number"; line?: number; lineRule?: LineSpacingRule } {
     const sel = document.getSelection();
@@ -3177,7 +3188,7 @@ export class DocEditor {
       const tag = scan.tagName.toLowerCase();
       if (tag === "b" || tag === "strong") carried.bold = true;
       if (tag === "i" || tag === "em") carried.italic = true;
-      if (tag === "u") carried.underline = true;
+      if (tag === "u") carried.underline = "single";
       if (scan.classList.contains("para")) break;
     }
     const path = this.caretPath()?.path;
@@ -3188,7 +3199,7 @@ export class DocEditor {
     return {
       bold: carried.bold ?? false,
       italic: carried.italic ?? false,
-      underline: carried.underline ?? false,
+      underline: hasLine(carried.underline),
       strike: carried.strike ?? false,
       sizePt: carried.sizePt,
       // 「字体颜色」那一格答的是光标这段字**穿着**的颜色，不是「件里那句 `w:color` 说没说」：run 自己说过、
@@ -3236,7 +3247,10 @@ export class DocEditor {
       if (key === "highlight" || key === "sizePt" || key === "font") this.armPending(patch);
       else {
         document.execCommand("styleWithCSS", false, "true");
-        document.execCommand(command[key]!, false, typeof value === "string" ? value : undefined);
+        // 线名递不进这条命令：它只认「true/false/别的（=toggle）」这一眼，`"single"` 递进去读的是什么没人量过。
+        // 按钮本来就在两档之间跳，所以待用只交给它那一跳，名字由打进字后的读回（`styleOf`）认。
+        const arg = typeof value === "string" && key !== "underline" ? value : undefined;
+        document.execCommand(command[key]!, false, arg);
       }
       this.hooks.changed();
       return;

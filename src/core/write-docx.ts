@@ -376,8 +376,9 @@ const RUN_PROPS: {
     // 默认值。作废语料上那句「952 枚、254 枚坐在链上什么都不说的 run 上」属旧读数（待重证），换成上面这组。
     // A save that drops the element invents a silence the file never wrote — exactly the mistake
     // `<w:b w:val="0"/>` above refuses to make.
-    spell: (r, prefix) =>
-      r.underline === undefined ? "" : r.underline ? `<${prefix}:u w:val="single"/>` : `<${prefix}:u w:val="none"/>`,
+    // 线形跟着说话：那 20 枚 `thick` 坐在 2 份件里，模型存的就是形状名，所以拼回去的还是这个名字，而不是把它
+    // 收成 `single` 再交出去。一名的降级会把「粗线」在下一位读者眼里变成细线。
+    spell: (r, prefix) => (r.underline === undefined ? "" : `<${prefix}:u w:val="${XML_ESC(r.underline)}"/>`),
   },
   { key: "vertAlign", tags: ["vertAlign"], spell: (r, prefix) => (r.vertAlign ? `<${prefix}:vertAlign w:val="${r.vertAlign}"/>` : "") },
   {

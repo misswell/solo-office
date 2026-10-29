@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Inline, Paragraph, PropSlot } from "../src/core/docx.js";
-import { WordDocument, applyFacePick, applyRunPatch } from "../src/core/docx.js";
+import { WordDocument, applyFacePick, applyRunPatch, hasLine } from "../src/core/docx.js";
 import { SEEN_BY_VIEW, inlineLength, keepRunIdentity } from "../src/core/run-identity.js";
 import { writeDocx } from "../src/core/write-docx.js";
 import { OpcPackage, text } from "../src/core/opc.js";
@@ -47,29 +47,33 @@ const retyped = (inlines: Inline[], needle: string, add: string): Inline[] => {
 };
 
 /**
- * The list the page hands back as it really is. `styleOf` only ever switches `italic`, `underline` and `strike`
- * to true — an `<i>`, a `<u>`, a `text-decoration` — and `vertAlign` to `superscript` or `subscript` through a
- * `sup`/`sub` tag or `vertical-align:super/sub`, so a property the file turned off has nothing on screen to show
- * it and comes back as nothing at all. `bold` is the one that can report its off side, through `font-weight`.
- * `viewOf` above lets a run keep a `false` it was handed, which is what the page cannot do.
+ * The list the page hands back as it really is. `styleOf` only ever switches `italic` and `strike` to true — an
+ * `<i>`, a `text-decoration` — and `vertAlign` to `superscript` or `subscript` through a `sup`/`sub` tag or
+ * `vertical-align:super/sub`, so a property the file turned off has nothing on screen to show it and comes back as
+ * nothing at all. `bold` is the one that can report its off side, through `font-weight`. `viewOf` above lets a run
+ * keep a `false` it was handed, which is what the page cannot do.
  *
- * `highlight` is deliberately not in that delete list: since #88 the renderer stamps the name the document chose
- * as `data-hl`, and `styleOf` reads the attribute, so a run that said `w:val="none"` comes back saying `"none"`
- * rather than as a colour guessed from CSS — which is what the round measured as lost (`.scratch/hl-pending.ts`:
- * `background:none` hands Chromium's longhand back as `initial`, and only seven names survive a trip through CSS
- * as something a reverse lookup can name). `unstampedView` below is the case the stamp does not cover.
+ * `highlight` and `underline` are deliberately not in that delete list: since #88 and #210 the renderer stamps the
+ * name the document chose (`data-hl`, `data-u`) and `styleOf` reads the attribute, so a run that said
+ * `w:val="none"` comes back saying `"none"`, and a `thick` line keeps being thick rather than a colour or a line
+ * guessed from CSS — which is what those rounds measured as lost (`.scratch/hl-pending.ts`: `background:none`
+ * hands Chromium's longhand back as `initial`, and only seven names survive a trip through CSS as something a
+ * reverse lookup can name). `unstampedView` below is the case the two stamps do not cover.
  */
 function pageView(run: Inline, text = run.text): Inline {
   const out = viewOf(run, text);
-  for (const key of ["italic", "underline", "strike"] as const) if (run[key] === false) delete out[key];
+  for (const key of ["italic", "strike"] as const) if (run[key] === false) delete out[key];
   if (run.vertAlign === "baseline") delete out.vertAlign;
   return out;
 }
 
-/** The page when the markup carries none of our stamps: markup Blink made for a pending format, or pasted in. */
+/** The page when the markup carries none of our stamps: markup Blink made for a pending format, or pasted in.
+ *  高亮与线名都只能按 CSS 答——有线就是 `single`，说了不要就一句都不说。 */
 const unstampedView = (run: Inline, text = run.text): Inline => {
   const out = pageView(run, text);
   delete out.highlight;
+  if (hasLine(out.underline)) out.underline = "single";
+  else delete out.underline;
   return out;
 };
 
@@ -86,7 +90,7 @@ const FULL: Inline = {
   text: "正文",
   bold: true,
   italic: true,
-  underline: true,
+  underline: "single",
   strike: true,
   sizePt: 12,
   color: "#C00000",
@@ -121,9 +125,9 @@ describe("a run rebuilt from the page keeps what the page cannot show", () => {
     const prev: Inline[] = [
       {
         text: "这句话",
-        underline: false,
+        underline: "none",
         italic: false,
-        asRead: { underline: false, italic: false },
+        asRead: { underline: "none", italic: false },
         rPrSlots: [
           { tag: "i", xml: '<w:i w:val="0"/>' } as PropSlot,
           { tag: "u", xml: '<w:u w:val="none"/>' } as PropSlot,
@@ -134,8 +138,14 @@ describe("a run rebuilt from the page keeps what the page cannot show", () => {
     keepRunIdentity(next, prev);
     // A run that says nothing about the line is not the run taking its `none` back — only an off switch the page
     // can show is a contradiction. Left standing, the silence makes the writer delete what the file stated.
-    expect(next[0]!.underline).toBe(false);
+    // 线名这一格现在由 `data-u` 带回来（#210），页面有得说；把这枚钉拿走（Blink 自造的、或粘进来的标记）才是这里
+    // 那条「页面什么都不说」的路，同一句 `none` 得由 `keepRunIdentity` 从上一枚 run 认领回来。
+    expect(next[0]!.underline).toBe("none");
     expect(next[0]!.italic).toBe(false);
+
+    const unstamped = [unstampedView(prev[0]!, "这句话打的字")];
+    keepRunIdentity(unstamped, prev);
+    expect(unstamped[0]!.underline).toBe("none");
 
     // The one property the page does switch off on its own stays the page's answer.
     const contradicted = [pageView({ ...prev[0]!, bold: false }, "这句话打的字")];
@@ -148,7 +158,7 @@ describe("a run rebuilt from the page keeps what the page cannot show", () => {
     const before = rPrs(save(doc));
     const p = paraAt(doc, "说明没有");
     p.inlines = retypedByPage(p.inlines, "说明没有", "打字");
-    expect(p.inlines[0]!.underline).toBe(false);
+    expect(p.inlines[0]!.underline).toBe("none");
     expect(rPrs(save(doc))).toEqual(before);
   });
 

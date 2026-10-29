@@ -1,5 +1,5 @@
 import type { Block, Carried, CarriedInline, HeaderFooter, Inline, NumberLevel, PageBorder, Paragraph, PropSlot, RowInfo, Section, Table, TableBorder, TableCell, WordDocument } from "./docx.js";
-import { DEFAULT_SECTION, LINE_ONE, MARGIN_SIDES, PAGE_BORDER_SIDES, PBDR_ORDER, headingLevel, lineGridPitchTwips, twipsToPx } from "./docx.js";
+import { DEFAULT_SECTION, hasLine, LINE_ONE, MARGIN_SIDES, PAGE_BORDER_SIDES, PBDR_ORDER, headingLevel, lineGridPitchTwips, twipsToPx } from "./docx.js";
 import type { CommentAnchor } from "./comments.js";
 import type { Presentation, Shape, SlideParagraph } from "./pptx.js";
 
@@ -84,8 +84,15 @@ export function renderInline(inline: Inline): string {
   // declaration replace the earlier one — measured in the browser the page runs in, `line-through` then
   // `underline` computes to `underline` alone and a run that is both struck and underlined loses its strike
   // (`.scratch/onoff-dom.ts`). Stated once, both lines draw and `styleOf` reads both back off one value.
-  const decorations = [inline.strike ? "line-through" : "", inline.underline ? "underline" : ""].filter((d) => d !== "");
+  const decorations = [inline.strike ? "line-through" : "", hasLine(inline.underline) ? "underline" : ""].filter((d) => d !== "");
   if (decorations.length) css += `text-decoration:${decorations.join(" ")};`;
+  // 线的粗度由名字说：授权 46 份里 `w:u` 说过 1,615 枚，其中 `thick` 20 枚坐在 2 份件里（另有 16 枚在段落标记上，
+  // `.scratch/underline-audience.py` 逐枚）。把这 20 枚画成单线，就是把文件说的粗线收成细线。
+  // 粗到什么程度是本页的口径（WPS 真机画多粗仍未取证），但写法必须是**相对**长度：`auto`（单线那一档）跟着字号
+  // 长粗，`.scratch/underline-ink.mjs` 逐行数截屏的墨量到 11 磅/12 磅/24 磅/36 磅分别是 1/1/3/4 px，而写死的
+  // `2px` 在后两档反而比单线还细——那 `thick` 就成了「比正常更细」。`0.1875em` 量出来是 3/3/6/9 px，四档都稳在
+  // 单线的 2~3 倍。`text-decoration` 是 shorthand，会把没提到的长项重置，所以这一句跟在它后面。
+  if (inline.underline === "thick") css += "text-decoration-thickness:0.1875em;";
   if (inline.sizePt) css += `font-size:${inline.sizePt}pt;`;
   // `w:rPr/w:spacing` speaks twentieths of a point per character, and CSS `letter-spacing` is the same measure in
   // points: one declaration per character, negative allowed, and it is the character advance that changes, so a
@@ -103,9 +110,13 @@ export function renderInline(inline: Inline): string {
   // page saying nothing, and the writer dropped the sentence with it.
   const hl = inline.highlight ? ` data-hl="${esc(inline.highlight)}"` : "";
   if (inline.highlight) css += `background:${highlightColor(inline.highlight)};`;
+  // 线名里只有 CSS 带不回来的那几句钉在属性上。`single` 是这页画线时的默认样子，读回来不必再问；`none` 是「说了
+  // 不要」，纸上只能读出「没画」，那与「没提过」是同一个样——#85 量到的正是这一眼降级；`thick` 的粗度 CSS 交不回
+  // 名字。名字一丢，重写 rPr 时那句 `w:u` 就被当成「这枚 run 从没说过」，文件的话被换成沉默或换成细线。
+  const u = inline.underline && inline.underline !== "single" ? ` data-u="${esc(inline.underline)}"` : "";
   if (inline.vertAlign && inline.vertAlign !== "baseline")
     css += `vertical-align:${inline.vertAlign === "superscript" ? "super" : "sub"};font-size:.75em;`;
-  let html = inline.text === "" ? "" : `<span${css ? ` style="${css}"` : ""}${hl}>${esc(inline.text)}</span>`;
+  let html = inline.text === "" ? "" : `<span${css ? ` style="${css}"` : ""}${hl}${u}>${esc(inline.text)}</span>`;
   if (html === "" && !css) html = esc(inline.text);
   // A link to a place in this document keeps its window to itself: `target="_blank"` on a `#name` href hands
   // the app's own page address to the system browser, where nobody has the bookmark open. The attributes the

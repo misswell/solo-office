@@ -396,7 +396,9 @@ function inlineOf(r: any): Inline {
     text: textOf(find(r, "t")),
     bold: attr(rPr, "b") === "1",
     italic: attr(rPr, "i") === "1",
-    underline: !!attr(rPr, "u") && attr(rPr, "u") !== "none",
+    // `Inline.underline` 存的是形状名（docx 那侧按 §17.17.109 带），这一侧的 `a:u` 档名（`sng`/`dbl`/`heavy`/…）
+    // 在这份语料里还没有数过的受众，所以仍收成「有线 = single」——与这一行改之前同一眼。
+    underline: attr(rPr, "u") && attr(rPr, "u") !== "none" ? "single" : undefined,
     sizePt: attr(rPr, "sz") ? Number(attr(rPr, "sz")) / 100 : undefined,
     color: solidHex(find(rPr, "solidFill")),
     font: attr(find(rPr, "latin"), "typeface"),

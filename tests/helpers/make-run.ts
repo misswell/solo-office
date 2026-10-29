@@ -78,26 +78,24 @@ export function makeRunPropsDocx(): Uint8Array {
 /**
  * The `w:u` shapes, split by who states them.
  *
- * What the files write. Over the 86 WPS documents' body parts, 1586 `w:u` elements sit there: 1256 on a run's own
- * `w:rPr` (670 `none` and 200 `thick` inside table cells, 386 `single` in body paragraphs) and 330 on a paragraph
- * mark (282 `none` in cells, 48 `single` in body). Of the 1256 run-level ones this reader turns 488 into runs with
- * fields — **254 `<w:u w:val="none"/>`**, 194 `single`, 40 `thick`, none leaving `w:val` off — while the other 768
- * are runs it keeps as the bytes they came in with (fields and content controls), and those never pass through a
- * field at all (`.scratch/underline-counted.ts` walks both ways and reconciles them).
+ * What the files write. 授权口径 46 份（`.scratch/wps-corpus` + WPS 自带模板，只数 `.docx/.dotx/.dotm/.docm`）的
+ * `w:rPr/w:u` 共 **1,615 枚**，说过线的 22 件：`single` 1,565 / `none` 30 / `thick` 20，0 枚不写 `w:val`，也没有一枚
+ * 带 `w:color` 或 `w:themeColor`（`.scratch/underline-audience.py` 逐枚数，另开一趟只数属性名核对同一口径）。段落
+ * 标记那一侧另有 `single` 316 / `none` 3 / `thick` 16，`word/styles.xml` 写过线 22 枚、全在字符样式自己的 `w:rPr` 里。
+ * 作废语料上那组「1586 枚 / 488 枚成字段 / 254 枚 `none` / 768 枚随行成字节」属旧读数（待重证），这里换的是上面这组。
  *
- * Who could lend a line: `word/styles.xml` does state `w:u`, 35 times, every one of them inside a `w:style`'s own
- * `w:rPr` — 31 character styles `single`, 4 `none` — while `w:rPrDefault` states it 0 times and the body parts hold
- * 0 `w:hyperlink` elements. Cross the two and the audience of a cancellation is 0 today: all 254 `none` runs sit on
- * a chain whose every rung says nothing about `w:u`, and the 8 runs that do borrow a line say nothing themselves
- * (`.scratch/underline-audience.ts`). So this fixture's `LendU` is a shape **no file in hand has**: §17.7.2's rung
- * that lends a line, built only so the run's sentence above has something it has to beat.
+ * Who could lend a line: 样式层确实说过线（22 枚，枚枚是 `single`），而**授权口径里这 30 枚 `none` 有几枚坐在借得到
+ * 线的链上尚未再数**（旧口径那句「254 枚枚枚坐在一根什么都不说的链上」随语料一起作废）。所以 `LendU` 仍是 §17.7.2
+ * 「会借线的字符样式」那一格的形状，不是语料里量到的一枚：造它只为让 run 自己那句有可盖的东西，好把阶梯停在说了的
+ * 那一格钉住。
  */
 export function makeUnderlineDocx(): Uint8Array {
   const document = `<w:p><w:r><w:rPr><w:u w:val="none"/></w:rPr><w:t>说明没有</w:t></w:r></w:p>
 <w:p><w:r><w:rPr><w:rStyle w:val="LendU"/><w:u w:val="none"/></w:rPr><w:t>这句话盖掉借来的线</w:t></w:r></w:p>
 <w:p><w:r><w:rPr><w:rStyle w:val="LendU"/></w:rPr><w:t>链上借来的线</w:t></w:r></w:p>
 <w:p><w:r><w:rPr><w:u w:val="single"/></w:rPr><w:t>自己点了线</w:t></w:r></w:p>
-<w:p><w:r><w:rPr><w:u w:val="thick"/></w:rPr><w:t>粗线原样回去</w:t></w:r></w:p>`;
+<w:p><w:r><w:rPr><w:u w:val="thick"/></w:rPr><w:t>粗线原样回去</w:t></w:r></w:p>
+<w:p><w:r><w:t>什么都没说</w:t></w:r></w:p>`;
   return pack(
     document,
     `<w:styles xmlns:w="${NS_W}"><w:style w:type="character" w:styleId="LendU"><w:name w:val="点了下划线的字符样式"/><w:rPr><w:u w:val="single"/></w:rPr></w:style></w:styles>`,

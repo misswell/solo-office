@@ -53,6 +53,19 @@ export const PLACE_TABLES =
 /** 对照：把六张表的 `w:jc` 与 `w:tblInd` 全剥掉——这一族只上横向，铺排（纸数与正文起点）该一字不差。 */
 export const BARE_TABLES = PLACE_TABLES.replace(/<w:jc[^/]*\/>/g, "").replace(/<w:tblInd[^/]*\/>/g, "");
 
+/**
+ * #214 那三张「等着被改」的表——名字一律避开 甲/末：装机探针里 #146/#190 那几腿按 `甲` 认表，
+ * 会被它们牵动的字节账不属于这一族。三张各占一种起始态，落笔之后盘上该是三种不同形状：
+ * - 摆1 两句都没说 → 点「居中」+ 左缩进 0.5 厘米（= 283 缇）：盘上凭空多出两枚，纸上走 `calc` 那一支；
+ * - 摆2 只说居中 → 原样确定：一个字节也不该动（纸上仍是 `calc(50% - 166.66666666666666px)`，没有带号的那一截）；
+ * - 摆3 说居中 + 288 → 只把左缩进填成 `0`：盘上那句是**明写的 0**（`w:w="0"`），不是删掉——
+ *   「说了 0」与「没说」在纸上画到同一处，在盘上是两句话（授权 46 份里 `w:tblInd` 说 0 的有 30 枚，见 §154）。
+ */
+export const EDIT_TABLES = tableXml("摆1", 5000, "") + tableXml("摆2", 5000, CENTER) + tableXml("摆3", 5000, CENTER + indent(288));
+
+/** 六张摆位表 + 三张待改表：#214 的装机件用这一份，前六张的形状与 #213 逐字相同。 */
+export const PLACE_AND_EDIT = PLACE_TABLES + EDIT_TABLES;
+
 export function makeTablePlaceDocx(tables: string = PLACE_TABLES): Uint8Array {
   return zipSync(
     {

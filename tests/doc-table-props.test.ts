@@ -5,6 +5,7 @@ import { writeDocx } from "../src/core/write-docx.js";
 import { renderWord } from "../src/core/render.js";
 import { OpcPackage, text } from "../src/core/opc.js";
 import { pack } from "./helpers/make-containers.js";
+import { EDIT_TABLES, makeTablePlaceDocx } from "./helpers/make-table-place.js";
 
 const part = (bytes: Uint8Array): string => text(OpcPackage.from(bytes).bytes("word/document.xml")!);
 const open = (bytes: Uint8Array): WordDocument => WordDocument.openBytes(bytes);
@@ -12,6 +13,8 @@ const save = (doc: WordDocument): string => part(writeDocx(doc));
 /**
  * 第 n 枚 `w:tblPr` 连同它自己的嵌套孩子——一枚待裁决的 `w:tblPrChange` 里**又有一枚** `w:tblPr`，
  * 所以不能拿「遇到第一个 `</w:tblPr>`」当这枚孩子的结尾（那样记录会被截断，正好把要钉的那一段切掉）。
+ * 往里走的那一趟只能在 `depth` 归零的那一刻停：多走一次 `exec` 就把**下一枚** `<w:tblPr>` 吞了，
+ * 于是 n>=1 时读到的是隔一张的表（三张表里 n=1 会读到第三张）。
  */
 const prOf = (xml: string, nth = 0): string => {
   const re = /<w:tblPr\b[^>]*?(\/?)>|<\/w:tblPr>/g;
@@ -24,18 +27,25 @@ const prOf = (xml: string, nth = 0): string => {
     }
     const start = m.index;
     let depth = 1;
-    for (let n = re.exec(xml); n && depth > 0; n = re.exec(xml)) {
+    while (depth > 0) {
+      const n = re.exec(xml);
+      if (!n) break;
       if (n[0].startsWith("</")) depth -= 1;
       else if (!n[0].endsWith("/>")) depth += 1;
-      if (depth === 0 && seen++ === nth) return xml.slice(start, re.lastIndex);
     }
+    if (depth !== 0) break;
+    if (seen === nth) return xml.slice(start, re.lastIndex);
+    seen += 1;
   }
   return "";
 };
 const childOf = (set: string, tag: string): string =>
   new RegExp(`<w:${tag}\\b[^>]*/>|<w:${tag}\\b[^>]*>[\\s\\S]*?</w:${tag}>`).exec(set)?.[0] ?? "";
 const tableOf = (doc: WordDocument): Table => doc.blocks.filter((b): b is Table => b.kind === "table")[0]!;
+const tablesAt = (doc: WordDocument): Table[] => doc.blocks.filter((b): b is Table => b.kind === "table");
 const tableCss = (doc: WordDocument): string => / style="([^"]*)"/.exec(renderWord(doc).match(/<table\b[^>]*>/)?.[0] ?? "")?.[1] ?? "";
+/** 逐张的行内样式，按文档序——装机腿里「两张画到同一处」那一判据的文件层对照。 */
+const cssAt = (doc: WordDocument, n: number): string => (renderWord(doc).match(/<table\b[^>]*>/g) ?? []).map((t) => / style="([^"]*)"/.exec(t)?.[1] ?? "")[n] ?? "";
 const cellCss = (doc: WordDocument): string => / style="([^"]*)"/.exec(renderWord(doc).match(/<td\b[^>]*>/)?.[0] ?? "")?.[1] ?? "";
 
 /**
@@ -216,5 +226,54 @@ describe("docx 表格属性：w:tblPr 里那四句的落笔处", () => {
     expect(rec).toContain('<w:tblCellMar><w:left w:w="54" w:type="dxa"/></w:tblCellMar>');
     expect(rec).not.toContain("<w:jc");
     expect(pr.indexOf("<w:tblCellMar")).toBeLessThan(pr.indexOf("<w:tblPrChange"));
+  });
+
+  /**
+   * #214 那三张待改表在**文件层**分得开、在**纸上**分不开的那一本账。
+   *
+   * 装机腿（`.scratch/table-props-write-install-check.sh`）能证明「点确定之后纸挪了、盘上也落了」，但它量不到
+   * 一件东西：「填 0」和「原样不填」画出来是同一处（css 一字不差），只有 `w:tblPr` 里那一枚在不在分得开——
+   * 而这一枚是授权口径里真实存在的一句话（46 份里 `w:tblInd` 说 0 的有 30 枚，见 `.scratch/tbl-place-audience.py`）。
+   * 所以这一条留在模块测里钉，形状与装机件同取 `EDIT_TABLES`，不另拼一份。
+   */
+  it("「说了 0」与「没说」画到同一处、盘上是两句话：0 落明写的 `w:w=\"0\"`，没点名的那一枚不许被发明", () => {
+    const doc = open(makeTablePlaceDocx(EDIT_TABLES));
+    const [s1, s2, s3] = tablesAt(doc);
+    expect([s1.align, s1.indentTwips, s2.align, s2.indentTwips, s3.align, s3.indentTwips]).toEqual([
+      undefined,
+      undefined,
+      "center",
+      undefined,
+      "center",
+      288,
+    ]);
+    const s2Before = s2.tblPrXml!;
+
+    syncTableProps(s1, { align: "center", indentTwips: 283 }); // 「居中」+ 左缩进 0.5 厘米 = 283 缇
+    syncTableProps(s2, { align: "center" }); // 原样确定
+    syncTableProps(s3, { indentTwips: 0 }); // 左缩进填 0
+    const xml = save(doc);
+
+    // 摆1：凭空多出两枚，且各按 `CT_TblPr` 的孩子序坐在 `tblW` 与 `tblLayout` 之间。
+    const pr1 = prOf(xml, 0);
+    expect(childOf(pr1, "jc")).toBe('<w:jc w:val="center"/>');
+    expect(childOf(pr1, "tblInd")).toBe('<w:tblInd w:w="283" w:type="dxa"/>');
+    expect(pr1.indexOf("<w:tblW")).toBeLessThan(pr1.indexOf("<w:jc"));
+    expect(pr1.indexOf("<w:jc")).toBeLessThan(pr1.indexOf("<w:tblInd"));
+    expect(pr1.indexOf("<w:tblInd")).toBeLessThan(pr1.indexOf("<w:tblLayout"));
+    // 纸上走带号的那一支：居中那一截 + 那枚缇（283 ÷ 15）。
+    expect(cssAt(doc, 0)).toContain("margin-left:calc(50% - 166.66666666666666px + 18.866666666666667px);margin-right:auto;");
+
+    // 摆2：没点名的缩进不许被发明成 0——整枚 `w:tblPr` 逐字节留在原地。
+    expect(prOf(xml, 1)).toBe(s2Before);
+    expect(childOf(prOf(xml, 1), "tblInd")).toBe("");
+
+    // 摆3：落的是**明写的 0**，不是删掉；删掉就与摆2 在文件里同一长相了。
+    expect(childOf(prOf(xml, 2), "tblInd")).toBe('<w:tblInd w:w="0" w:type="dxa"/>');
+    expect(prOf(xml, 2)).not.toBe(prOf(xml, 1));
+    // 而纸上两张画到同一处：这一本账只有文件层分得开。
+    expect(cssAt(doc, 2)).toBe(cssAt(doc, 1));
+    expect(cssAt(doc, 1)).toContain("margin-left:calc(50% - 166.66666666666666px);margin-right:auto;");
+    expect(cssAt(doc, 1)).not.toContain(" + ");
   });
 });

@@ -1966,6 +1966,172 @@ function smoke(): void {
             ttDirty: (document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0,
           };
         }
+        // #214：「表格属性」这一族在**装机这只壳**里第一次落笔并写回盘上。#197 那一趟（上面 tpBefore/tpAfter 那几条）
+        // 落的是左对齐 + 缩进、量完整条撤销——它证的是「按得动、纸跟着动、撤得回」，不是「落得到盘上」；而 #213 把
+        // 居中那一支换成 calc 之后，「居中 + 缇」这条**从没被点过**：授权 58 张表里 14 枚说居中、8 枚两句同说，
+        // 落笔面只走过 #213 之前那条分得开的档。这一腿按件名「写盘」认领自己那三张，别家的字节账一律不牵动。
+        // 三张各占一种起始态，问三种形状：
+        // 摆1 两句都没说 → 点居中 + 0.5 厘米（盘上凭空多出两枚，纸上走 calc 那一支）；
+        // 摆2 只说居中 → 原样确定（一个字节也不许多写，脏字也不许多亮）；
+        // 摆3 说居中 + 288 → 只把左缩进填成 0（盘上必须是**明写的 0**，不是删掉——「说了 0」与「没说」画到同一处，
+        // 文件里却是两句话：授权 46 份里 w:tblInd 说 0 的有 30 枚，见 §154）。
+        // 落完按壳自己的 solo:save 写回；第二趟直接开上一趟写回的那份——起手摆出来的就该是上一趟落下的那两枚，
+        // 且再点一次同样的值不再动字节。这一段整篇在模板字符串里：不写类型、不写反引号、正则不带转义。
+        const tpwDoc = (document.getElementById("title")?.textContent ?? "").includes("写盘");
+        let tablePropsWriteLeg = null;
+        if (tpwDoc) {
+          // 起手先把「修订」按回关着：上面 #149/#178 那一族把跟踪点开着交过来，开着落这一击会顺带写一枚
+          // w:tblPrChange（实测第 1 趟盘上那五枚孩子就是 tblW/jc/tblInd/tblLayout/tblPrChange）。那是**修订**那一族
+          // 的形状，不是摆位这一族要问的；两条账混在一张表上，反读就说不清哪一句是谁写的。关掉由产品自己那枚开关来
+          // （与 #190 那一腿同一条路），量完按回原样交给后面的腿。开着落笔那一支由 #149 的单测与 #197 那一腿管。
+          const tpwTrackBtn = () => [...document.querySelectorAll("#ribbon button.rb")].find((b) => b.textContent === "修订");
+          const tpwTrackOn = () => (tpwTrackBtn()?.classList.contains("on") ? 1 : 0);
+          const track0 = tpwTrackOn();
+          if (track0) {
+            tpwTrackBtn()?.click();
+            await wait(320);
+          }
+          const trackOff = tpwTrackOn();
+          // 内容盒按**这张表自己那张纸**算，不按第一张：前面那些腿会往正文里插表插字，这三张可能被推到第二张纸上，
+          // 拿第一张的盒沿去量第二张上的矩形，读回来的是两张纸的差，不是摆位。
+          const tpwBox = (el) => {
+            const p = el ? el.closest(".page") : null;
+            if (!p) return null;
+            const z = zPaper(p);
+            const cs = getComputedStyle(p);
+            const r = p.getBoundingClientRect();
+            return { z: z, left: r.left / z + parseFloat(cs.paddingLeft || "0"), right: r.right / z - parseFloat(cs.paddingRight || "0") };
+          };
+          const tpwTable = (needle) => [...document.querySelectorAll("#view .page table.doc-table")].find((t) => (t.textContent ?? "").includes(needle));
+          const tpwRead = (needle) => {
+            const t = tpwTable(needle);
+            const b = tpwBox(t);
+            if (!t || !b) return null;
+            const r = t.getBoundingClientRect();
+            return { css: t.getAttribute("style") ?? "", gL: round1(r.left / b.z - b.left), gR: round1(b.right - r.right / b.z), w: round1(r.width / b.z), boxW: round1(b.right - b.left) };
+          };
+          // 光标放回那张表的第一格：命令按选区派发，光标不在表里时「属性」那枚是灰的——那不该由这一腿绕过。
+          // 照 #190 那一腿的做法（selectNodeContents + collapse），不抓格子里那个 span 的第一个孩子：
+          // 格子里那一串是壳自己画的，画成什么形状不该由这一腿来假设。
+          const tpwPut = (needle) => {
+            const cell = tpwTable(needle)?.querySelector("td");
+            if (!cell) return 0;
+            const rg = document.createRange();
+            rg.selectNodeContents(cell);
+            rg.collapse(true);
+            const s = document.getSelection();
+            s?.removeAllRanges();
+            if (s) s.addRange(rg);
+            cell.focus?.();
+            document.dispatchEvent(new Event("selectionchange"));
+            return 1;
+          };
+          const tpwBtn = () => [...document.querySelectorAll("#ribbon .rbar[data-tab='table'] button")].find((b) => b.textContent === "属性");
+          const tpwDlg = () => document.querySelector(".solo-tp-dialog");
+          const tpwField = (n) => tpwDlg()?.querySelector("[name='" + n + "']") ?? null;
+          // 单位从对话框自己那行标签里读（「左缩进（厘米）」）：壳的测量单位不落在文件里，写死的期望会随档位漂。
+          const tpwUnit = () => {
+            const lab = tpwField("tp-indent")?.parentElement;
+            const t = lab ? String(lab.textContent) : "";
+            const a = t.indexOf("（");
+            const e = t.indexOf("）");
+            return a >= 0 && e > a ? t.slice(a + 1, e) : "";
+          };
+          const tpwSet = (el, v, kind) => {
+            if (!el) return 0;
+            el.value = v;
+            el.dispatchEvent(new Event(kind, { bubbles: true }));
+            return 1;
+          };
+          const tpwOpen = async (needle) => {
+            const put = tpwPut(needle);
+            await wait(220);
+            const bar = document.querySelector("#ribbon .rbar[data-tab='table']");
+            const shown = bar?.hidden === false ? 1 : 0;
+            if (bar?.hidden === true) [...document.querySelectorAll(".rtabs button")].find((b) => b.textContent === "表格工具")?.click();
+            await wait(200);
+            const btn = tpwBtn();
+            const disabled = btn?.disabled === true ? 1 : 0;
+            const hit = btn ? (btn.click(), 1) : 0;
+            await wait(300);
+            return { put: put, shown: shown, btnPresent: btn ? 1 : 0, disabled: disabled, hit: hit, open: tpwDlg()?.open === true ? 1 : 0, title: tpwDlg()?.querySelector("h2")?.textContent ?? "" };
+          };
+          const tpwEcho = () => ({
+            align: tpwField("tp-align")?.value ?? "?",
+            indent: tpwField("tp-indent")?.value ?? "?",
+            fixed: tpwField("tp-fixed")?.checked === true ? 1 : 0,
+            margin: ["top", "left", "bottom", "right"].map((s) => tpwField("tp-m-" + s)?.value ?? "?").join(","),
+            unit: tpwUnit(),
+          });
+          const tpwApply = () => {
+            const b = tpwDlg()?.querySelector(".solo-tp-apply");
+            return b ? (b.click(), 1) : 0;
+          };
+          const dirtyNow = () => ((document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0);
+          const tpwSteps = [];
+          // 摆1：什么都没说 → 居中 + 0.5 厘米。
+          {
+            const o = await tpwOpen("摆1");
+            const before = tpwRead("摆1");
+            const echo = tpwEcho();
+            const dirtyBefore = dirtyNow();
+            const setAlign = tpwSet(tpwField("tp-align"), "center", "change");
+            const setIndent = tpwSet(tpwField("tp-indent"), "0.5", "input");
+            await wait(140);
+            const err = tpwDlg()?.querySelector(".solo-tp-error")?.textContent ?? "";
+            const applied = tpwApply();
+            await wait(420);
+            tpwSteps.push({ name: "摆1", ...o, echo: echo, dirtyBefore: dirtyBefore, setAlign: setAlign, setIndent: setIndent, err: err, applied: applied, gone: tpwDlg() ? 0 : 1, before: before, after: tpwRead("摆1"), dirtyAfter: dirtyNow() });
+          }
+          // 摆2：只说居中 → 一格不碰，直接按「确定」。
+          {
+            const o = await tpwOpen("摆2");
+            const before = tpwRead("摆2");
+            const echo = tpwEcho();
+            const dirtyBefore = dirtyNow();
+            const applied = tpwApply();
+            await wait(420);
+            tpwSteps.push({ name: "摆2", ...o, echo: echo, dirtyBefore: dirtyBefore, err: "", applied: applied, gone: tpwDlg() ? 0 : 1, before: before, after: tpwRead("摆2"), dirtyAfter: dirtyNow() });
+          }
+          // 摆3：居中 + 288 → 只把左缩进改成 0。
+          {
+            const o = await tpwOpen("摆3");
+            const before = tpwRead("摆3");
+            const echo = tpwEcho();
+            const dirtyBefore = dirtyNow();
+            const setIndent = tpwSet(tpwField("tp-indent"), "0", "input");
+            await wait(140);
+            const err = tpwDlg()?.querySelector(".solo-tp-error")?.textContent ?? "";
+            const applied = tpwApply();
+            await wait(420);
+            tpwSteps.push({ name: "摆3", ...o, echo: echo, dirtyBefore: dirtyBefore, setIndent: setIndent, err: err, applied: applied, gone: tpwDlg() ? 0 : 1, before: before, after: tpwRead("摆3"), dirtyAfter: dirtyNow() });
+          }
+          fire("solo:save");
+          await wait(1000);
+          // 交还原样：跟踪是上面那一族点开着交过来的，量完按回去，后面的腿才仍拿到它自己那一档。
+          if (track0) {
+            tpwTrackBtn()?.click();
+            await wait(320);
+          }
+          const trackBack = tpwTrackOn();
+          tablePropsWriteLeg = {
+            unit: tpwSteps[0]?.echo?.unit ?? "",
+            trackBefore: track0,
+            trackOff: trackOff,
+            trackBack: trackBack,
+            steps: tpwSteps,
+            savedDirty: dirtyNow(),
+            dialogsLeft: document.querySelectorAll(".solo-tp-dialog").length,
+            colW: round1((() => { const b = tpwBox(tpwTable("摆1")); return b ? b.right - b.left : 0; })()),
+            // 写回之后再看一眼那三张：后面那些腿（插字/插表）动的是别处，这一族的行内样式得到这一刻仍该是刚才落的那句。
+            // 第二趟的起手与这一串同一处，才是「壳把自己写回的那份读回来、照它摆」——比步骤里那次紧跟的读数更晚、更硬。
+            final: ["摆1", "摆2", "摆3"].map((n) => {
+              const r = tpwRead(n);
+              return { name: n, css: r?.css ?? "", gL: r?.gL ?? null, gR: r?.gR ?? null, w: r?.w ?? null, boxW: r?.boxW ?? null };
+            }),
+            pages: document.querySelectorAll("#view .page").length,
+          };
+        }
         // 上面那些落点把光标留在了格里；后面那三条断命令与图片要按这一趟原本的位置落在正文里，所以先放回纸的末尾。
         const pageNow = document.querySelector("#view .page");
         const lastBlock = pageNow?.children[pageNow.children.length - 1];
@@ -2608,7 +2774,7 @@ function smoke(): void {
         const recovered = { cells: document.querySelectorAll(".sheet-wrap td").length, title: document.getElementById("title")?.textContent };
         // The run ends on a modified document, so quitting goes through the unsaved prompt.
         // A PDF the export asked for shows up in saveAsWrites, next to the pptx/xlsx saves.
-        return { docPart, bandLeg, tablePlaceLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
+        return { docPart, bandLeg, tablePlaceLeg, tablePropsWriteLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
       })()`;
       void last?.webContents
         .executeJavaScript(probe)

@@ -2132,6 +2132,137 @@ function smoke(): void {
             pages: document.querySelectorAll("#view .page").length,
           };
         }
+        // #215：「允许西文在单词中间换行」那一勾在**装机这只壳**里走一趟并落回盘上。DOM 探针（.scratch/wrap-dom.ts）
+        // 证的是同一个 openParaSpacing/setParagraphSpacing 在浏览器页里的形状；只有装机壳能给的那一条是：
+        // 壳把自己写回盘上的那份再读回来、照它摆，且同一句话第二次说时不再多写一个字节。三摆问三种起始态：
+        // 摆1 没说这一枚 → 勾一下、确定：纸上从整词换行走成拦腰断（首行铺到内宽），盘上裸写一枚 <w:wordWrap/>；
+        // 摆2 自己说了允许 → 一格不碰直接确定：那一枚留在原位，别的字节也不许多写；
+        // 摆3 从样式链借来「允许」→ 摆出来是勾着的（对话框说的是页面上正在画的那一份），但段落不认领，
+        //      原样确定之后那一句 w:pPr 里仍不许多出这一枚——把借来的话抄成自己说的，就是替文件签了一句它没说过的。
+        // 勾选只在「此刻没勾」时落一次，所以第二趟开第一趟写回的那份时，三摆都走「原样确定」那条路。
+        // 跟踪改动先按回关着（与 #214 那一腿同一条路）：开着落这一击会顺带写一枚 w:pPrChange，那是修订那一族的
+        // 形状，摆位这一族的字节账问不清是谁写的；量完按回原样交给后面的腿。
+        const wrapDoc = (document.getElementById("title")?.textContent ?? "").includes("换行");
+        let wrapLeg = null;
+        if (wrapDoc) {
+          const wrapTrackBtn = () => [...document.querySelectorAll("#ribbon button.rb")].find((b) => b.textContent === "修订");
+          const wrapTrackOn = () => (wrapTrackBtn()?.classList.contains("on") ? 1 : 0);
+          const wrapTrack0 = wrapTrackOn();
+          if (wrapTrack0) {
+            wrapTrackBtn()?.click();
+            await wait(320);
+          }
+          const wrapTrackOff = wrapTrackOn();
+          const wrapPara = (needle) => [...document.querySelectorAll("#view .page .para")].find((x) => (x.textContent ?? "").includes(needle));
+          // 断法量在带那个长西文词的那一枚 span 上：逐行矩形由 Range.getClientRects() 报，行数=词被挪走后多出来的那一行，
+          // 首行宽=那一行铺到哪儿（整词换行时停在词前，拦腰断时铺到内宽）。页内宽按这张纸自己的盒沿算（同 #214 那条）。
+          const wrapLineRead = (needle) => {
+            const el = wrapPara(needle);
+            if (!el) return null;
+            const node = [...el.querySelectorAll("span")].map((x) => x.firstChild).find((n) => n && (n.textContent ?? "").includes("International"));
+            let lines = 0;
+            let first = 0;
+            if (node) {
+              const rg = document.createRange();
+              rg.selectNodeContents(node);
+              const rects = [...rg.getClientRects()];
+              lines = rects.length;
+              first = rects.length ? round1(rects[0].width) : 0;
+            }
+            const page = el.closest(".page");
+            const z = page ? zPaper(page) : 1;
+            const cs = page ? getComputedStyle(page) : null;
+            const pr = page ? page.getBoundingClientRect() : null;
+            const inner = pr && cs ? round1((pr.width - parseFloat(cs.paddingLeft || "0") - parseFloat(cs.paddingRight || "0")) / z) : 0;
+            return { wb: getComputedStyle(el).wordBreak, lines: lines, first: first, inner: inner, box: round1(el.getBoundingClientRect().width / z) };
+          };
+          const wrapLong = (needle) => [...(wrapPara(needle)?.querySelectorAll("span") ?? [])].map((x) => x.firstChild).find((n) => n && (n.textContent ?? "").includes("International"));
+          const wrapPut = (needle) => {
+            const node = wrapLong(needle);
+            if (!node) return 0;
+            const rg = document.createRange();
+            rg.setStart(node, 0);
+            rg.collapse(true);
+            const s = document.getSelection();
+            s?.removeAllRanges();
+            if (s) s.addRange(rg);
+            wrapPara(needle)?.closest(".page")?.focus?.();
+            document.dispatchEvent(new Event("selectionchange"));
+            return 1;
+          };
+          const wrapSelect = () => [...document.querySelectorAll("#ribbon select")].find((x) => x.title === "行距");
+          const wrapDlg = () => document.querySelector(".solo-pg-dialog");
+          const wrapField = (n) => wrapDlg()?.querySelector('[name="' + n + '"]') ?? null;
+          const wrapOpen = async (needle) => {
+            const put = wrapPut(needle);
+            await wait(280);
+            const sel = wrapSelect();
+            if (sel) {
+              sel.value = "more";
+              sel.dispatchEvent(new Event("change", { bubbles: true }));
+            }
+            await wait(340);
+            const d = wrapDlg();
+            const box = wrapField("pg-wrap");
+            const spans = d ? [...d.querySelectorAll(".solo-pg-snap > span")] : [];
+            return {
+              put: put,
+              sel: sel ? 1 : 0,
+              open: d?.open === true ? 1 : 0,
+              // 第二枚勾的措辞（第一枚是 #134 的「如果定义了文档网格，则对齐到网格」）：WPS 那一页的中文在 .qm 那堵墙
+              // 后面读不出，这句是本产品的通用说法、未取证——这一腿只钉它摆的是哪一格、不钉措辞来自谁。
+              label: spans[1] ? String(spans[1].textContent).trim() : "",
+              checked: box ? (box.checked ? 1 : 0) : -1,
+              hint: d?.querySelector('[data-hint="pg-wrap"]')?.textContent ?? "",
+              before: wrapField("pg-before")?.value ?? "?",
+              after: wrapField("pg-after")?.value ?? "?",
+              rule: wrapField("pg-rule")?.value ?? "?",
+              value: wrapField("pg-value")?.value ?? "?",
+              snap: wrapField("pg-snap") ? (wrapField("pg-snap").checked ? 1 : 0) : -1,
+            };
+          };
+          const wrapApply = async () => {
+            const b = wrapDlg()?.querySelector(".solo-pg-apply");
+            const hit = b ? (b.click(), 1) : 0;
+            await wait(420);
+            return { applied: hit, gone: wrapDlg() ? 0 : 1 };
+          };
+          const wrapDirty = () => ((document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0);
+          const wrapSteps = [];
+          for (const name of ["摆1", "摆2", "摆3"]) {
+            const o = await wrapOpen(name);
+            const before = wrapLineRead(name);
+            const dirtyBefore = wrapDirty();
+            // 只在「此刻没勾」时落一次勾选：说了允许的那两段（摆2 自己说的、摆3 借来的）第二趟起手就是勾着的，
+            // 于是这一腿在第二趟一次也不按——那才是「同一句话再说一遍不改字节」的落笔形状。
+            const box = wrapField("pg-wrap");
+            const clicked = o.checked === 0 && box ? (box.click(), 1) : 0;
+            if (clicked) await wait(240);
+            const hintAfter = wrapDlg()?.querySelector('[data-hint="pg-wrap"]')?.textContent ?? "";
+            const ap = await wrapApply();
+            // 纸上那两读数另起名：o 里 before/after 已经占了对话框那两格（段前/段后），
+            // 沿用同名会把「件里那句话读回来还是那句」这条证据原地盖掉。
+            wrapSteps.push({ name: name, ...o, clicked: clicked, hintAfter: hintAfter, ...ap, dirtyBefore: dirtyBefore, paperBefore: before, paperAfter: wrapLineRead(name), dirtyAfter: wrapDirty() });
+          }
+          fire("solo:save");
+          await wait(1200);
+          if (wrapTrack0) {
+            wrapTrackBtn()?.click();
+            await wait(320);
+          }
+          wrapLeg = {
+            trackBefore: wrapTrack0,
+            trackOff: wrapTrackOff,
+            trackBack: wrapTrackOn(),
+            steps: wrapSteps,
+            savedDirty: wrapDirty(),
+            dialogsLeft: document.querySelectorAll(".solo-pg-dialog").length,
+            // 写回之后再看一眼那三段：后面那些腿动的是别处，而第二趟的起手就该摆成这一串——两处同一处才算
+            // 「壳把自己写回盘上的那一句读回来并照它摆」，比步骤里那次紧跟的读数更晚、更硬。
+            final: ["摆1", "摆2", "摆3"].map((n) => ({ name: n, ...wrapLineRead(n) })),
+            pages: document.querySelectorAll("#view .page").length,
+          };
+        }
         // 上面那些落点把光标留在了格里；后面那三条断命令与图片要按这一趟原本的位置落在正文里，所以先放回纸的末尾。
         const pageNow = document.querySelector("#view .page");
         const lastBlock = pageNow?.children[pageNow.children.length - 1];
@@ -2774,7 +2905,7 @@ function smoke(): void {
         const recovered = { cells: document.querySelectorAll(".sheet-wrap td").length, title: document.getElementById("title")?.textContent };
         // The run ends on a modified document, so quitting goes through the unsaved prompt.
         // A PDF the export asked for shows up in saveAsWrites, next to the pptx/xlsx saves.
-        return { docPart, bandLeg, tablePlaceLeg, tablePropsWriteLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
+        return { docPart, bandLeg, tablePlaceLeg, tablePropsWriteLeg, wrapLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
       })()`;
       void last?.webContents
         .executeJavaScript(probe)

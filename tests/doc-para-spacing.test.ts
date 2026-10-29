@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { Paragraph } from "../src/core/docx.js";
-import { LINE_ONE, lineGridPitchTwips, linePitchTwips, paraSpacingPitch, syncParaSlots, WordDocument } from "../src/core/docx.js";
+import { LINE_ONE, carriedShape, lineGridPitchTwips, linePitchTwips, paraSpacingPitch, paraStyleOf, syncParaSlots, WordDocument } from "../src/core/docx.js";
 import { writeDocx } from "../src/core/write-docx.js";
 import { childSpans, elementContent, OpcPackage, text } from "../src/core/opc.js";
-import { makeChainDocx, makeGridRevisionDocx, makeSpacingDocx } from "./helpers/make-paragraph.js";
+import { makeChainDocx, makeGridRevisionDocx, makeSpacingDocx, makeWrapRevisionDocx } from "./helpers/make-paragraph.js";
+import { renderWord } from "../src/core/render.js";
 
 const part = (bytes: Uint8Array): string => text(OpcPackage.from(bytes).bytes("word/document.xml")!);
 const open = (bytes: Uint8Array): WordDocument => WordDocument.openBytes(bytes);
@@ -311,5 +312,181 @@ describe("docx 「与文档网格对齐」的写出", () => {
     // 「不吸」是 Head 说的话，Body 没说，所以新段不该认领它——写出来就是替文件在一段没说过的话上签了名。
     expect(findPara(lent, "借来的").snapToGrid).toBe(false);
     expect(borrowed.snapToGrid).toBeUndefined();
+  });
+});
+
+/** 那一段自己写下的 `w:wordWrap`——按 `w:pPr` 的直接孩子找，段落标记 `w:rPr` 里那枚同名的不算。 */
+const wrapOf = (xml: string, needle: string): string => childSpans(pPrOf(xml, needle)).find((k) => k.tag === "wordWrap")?.xml ?? "";
+
+/**
+ * 「允许西文在单词中间换行」的**读、画、写**（§17.4.77 `w:wordWrap`，WPS 段落对话框「中文版式」那一页的第一枚）。
+ *
+ * 受众是量的，不是照 `w:snapToGrid` 类推的（`.scratch/cjk-typo-audience.py`，授权口径 46 件）：正文 7,357 枚
+ * `w:pPr` 里 200 枚说了这一格、**枚枚裸写**（9 份模板名），**说关 0 枚**，`word/styles.xml` 与 `w:docDefaults`
+ * 各 0 枚。件里从没写过 `w:val="0"`，那一笔是本机对话框取消勾选时按 §17.4.77 的 on/off 写法补的，测试把两种拼法
+ * 都钉住：读侧「说了允许」与「没说」在页面上画同一张纸（缺省是不许），但盘上是两句话。
+ * 位置按 `PPR_ORDER`：`w:wordWrap` 在 `w:kinsoku` 之后、`w:snapToGrid` 之前，所以新写的一枚落在网格那一枚与
+ * `w:spacing` 之前。
+ */
+describe("docx 「允许西文在单词中间换行」", () => {
+  const WRAP = makeSpacingDocx(
+    [
+      { wordWrap: "", spacing: 'w:line="240" w:lineRule="auto"', text: "裸写说允许的" },
+      { wordWrap: 'w:val="0"', text: "明着说不许的" },
+      { wordWrap: "", snapToGrid: 'w:val="0"', text: "两枚都说过的" },
+      { spacing: 'w:before="120"', text: "没提换行的" },
+      { markRPr: '<w:rPr><w:wordWrap/></w:rPr>', text: "标记里有一枚的" },
+      { pStyle: "Lent", text: "允许靠样式的" },
+      { text: "整段没 pPr 的" },
+    ],
+    "<w:wordWrap/>",
+  );
+
+  it("裸写算「说了允许」，`w:val=\"0\"` 算说了不许，没提才是没说", () => {
+    const doc = open(WRAP);
+    expect(findPara(doc, "裸写说允许的").wordWrap).toBe(true);
+    expect(findPara(doc, "明着说不许的").wordWrap).toBe(false);
+    expect(findPara(doc, "没提换行的").wordWrap).toBeUndefined();
+    // 段落标记 `w:rPr` 里那枚同名的开关不是段落属性：那一句说的是断行符自己，不替这一段答话。
+    expect(findPara(doc, "标记里有一枚的").wordWrap).toBeUndefined();
+  });
+
+  it("只有说了允许的那一段改断词；`w:val=\"0\"` 与没提画同一张纸", () => {
+    const doc = open(makeSpacingDocx([{ wordWrap: "", text: "说了的" }, { wordWrap: 'w:val="0"', text: "说了不许的" }, { text: "没说的" }]));
+    const html = renderWord(doc);
+    expect([...html.matchAll(/word-break:break-all/g)]).toHaveLength(1);
+  });
+
+  it("件里那两种拼法一件没动时原样带回，标记里那枚一个字节不动", () => {
+    const round = save(open(WRAP));
+    expect(wrapOf(round, "裸写说允许的")).toBe("<w:wordWrap/>");
+    expect(wrapOf(round, "明着说不许的")).toBe('<w:wordWrap w:val="0"/>');
+    expect(pPrOf(round, "两枚都说过的")).toBe('<w:wordWrap/><w:snapToGrid w:val="0"/>');
+    expect(wrapOf(round, "没提换行的")).toBe("");
+    expect(wrapOf(round, "标记里有一枚的")).toBe("");
+    expect(/<w:rPr>[\s\S]*?<\/w:rPr>/.exec(pPrOf(round, "标记里有一枚的"))?.[0]).toBe("<w:rPr><w:wordWrap/></w:rPr>");
+  });
+
+  it("把读到的值原样交回去不是用户的话：一个字节都不写", () => {
+    const doc = open(WRAP);
+    const p = findPara(doc, "裸写说允许的");
+    expect(p.wordWrap).toBe(true);
+    p.wordWrap = true;
+    syncParaSlots(p);
+    expect(pPrOf(save(doc), "裸写说允许的")).toBe(pPrOf(part(WRAP), "裸写说允许的"));
+  });
+
+  it("段落没说过而用户勾上时，新写的一枚裸写并排在 `w:spacing` 之前", () => {
+    const doc = open(WRAP);
+    const p = findPara(doc, "没提换行的");
+    expect(p.wordWrap).toBeUndefined();
+    p.wordWrap = true;
+    syncParaSlots(p);
+    expect(pPrOf(save(doc), "没提换行的")).toBe("<w:wordWrap/><w:spacing w:before=\"120\"/>");
+  });
+
+  it("勾掉时写 `w:val=\"0\"`，不写 `w:val=\"1\"`；同一句里别的属性留在原位", () => {
+    const doc = open(WRAP);
+    const p = findPara(doc, "裸写说允许的");
+    p.wordWrap = false;
+    syncParaSlots(p);
+    expect(pPrOf(save(doc), "裸写说允许的")).toBe('<w:wordWrap w:val="0"/><w:spacing w:line="240" w:lineRule="auto"/>');
+    // 新那一枚排在网格那一枚之前，两枚各说各的，互不认领。
+    const q = findPara(doc, "两枚都说过的");
+    q.wordWrap = false;
+    syncParaSlots(q);
+    expect(pPrOf(save(doc), "两枚都说过的")).toBe('<w:wordWrap w:val="0"/><w:snapToGrid w:val="0"/>');
+    expect(/<w:rPr>[\s\S]*?<\/w:rPr>/.exec(pPrOf(save(doc), "标记里有一枚的"))?.[0]).toBe("<w:rPr><w:wordWrap/></w:rPr>");
+  });
+
+  it("样式链借来的那一枚不抄进段落；用户改口说不许时段落自己认领", () => {
+    const doc = open(WRAP);
+    const p = findPara(doc, "允许靠样式的");
+    expect(p.wordWrap).toBe(true);
+    expect(p.asRead?.wordWrap).toBe(true);
+    expect(p.pPrSlots?.map((s) => s.tag)).toEqual(["pStyle"]);
+    expect(pPrOf(save(doc), "允许靠样式的")).toBe('<w:pStyle w:val="Lent"/>');
+    const other = open(WRAP);
+    const q = findPara(other, "允许靠样式的");
+    q.wordWrap = false;
+    syncParaSlots(q);
+    expect(pPrOf(save(other), "允许靠样式的")).toBe('<w:pStyle w:val="Lent"/><w:wordWrap w:val="0"/>');
+  });
+
+  it("整段没有 `w:pPr` 时由字段拼这一句，存下去再读回来不再改字节", () => {
+    const doc = open(WRAP);
+    const p = findPara(doc, "整段没 pPr 的");
+    expect(p.pPrSlots).toBeUndefined();
+    p.wordWrap = true;
+    const once = writeDocx(doc);
+    expect(pPrOf(part(once), "整段没 pPr 的")).toBe("<w:wordWrap/>");
+    const again = open(once);
+    expect(findPara(again, "整段没 pPr 的").wordWrap).toBe(true);
+    expect(pPrOf(part(writeDocx(again)), "整段没 pPr 的")).toBe("<w:wordWrap/>");
+  });
+
+  it("拒绝那条改动：记录没说的那一枚被清回去，说过的那一枚按记录的字节还回来", () => {
+    const doc = open(makeWrapRevisionDocx());
+    const added = findPara(doc, "换行是刚加上的");
+    expect(added.wordWrap).toBe(true);
+    expect(doc.resolveRevisions("reject", 31)).toBe(1);
+    // 记录那一句没有 `w:wordWrap`，样式链也没借，所以这一段回到「自己没说」（缺省是不许，与「说了不许」两件事）。
+    expect(added.wordWrap).toBeUndefined();
+    expect(wrapOf(save(doc), "换行是刚加上的")).toBe("");
+    expect(wrapOf(save(open(writeDocx(doc))), "换行是刚加上的")).toBe("");
+
+    const removed = findPara(doc, "换行是刚被删掉的");
+    expect(removed.wordWrap).toBeUndefined();
+    expect(doc.resolveRevisions("reject", 32)).toBe(1);
+    expect(removed.wordWrap).toBe(false);
+    expect(pPrOf(save(doc), "换行是刚被删掉的")).toBe('<w:wordWrap w:val="0"/><w:spacing w:line="300" w:lineRule="auto"/>');
+  });
+
+  /**
+   * 格式改动记录带的那本账必须是**全账**，也就是 `carriedShape` 而不是 `paraStyleOf`。这一条钉记账的物件本身，
+   * 不钉某一条命令：那本账少列一项，签记录时「改之前那一句」就缺那一项，拒绝之后字段与被还回来的字节不同步——
+   * 纸上还画着被否决的那一句。#134 的 `w:snapToGrid` 与 #215 的 `w:wordWrap` 走的正是这条路，
+   * `.scratch/wrap-dom.ts` 量到的失败形状是：拒绝后 `wordWrap` 留 `undefined`、纸回 `normal`，而盘上写 `<w:wordWrap/>`。
+   *
+   * `paraStyleOf` 那半本不是遗留，是写出侧判「哪一句归段落自己写」的依据（`moved()`/`ownParaStyle`）：把槽位族
+   * 八项补进去，`syncParaSlots` 就会把样式链借来的话替段落重写一遍。两本账各有各的主人，所以两个都钉住。
+   */
+  it("记录带的是全账：槽位族那八项在 `carriedShape` 里，写出侧那半本按设计不含", () => {
+    const doc = open(
+      makeChainDocx([{ id: "Body" }], [
+        {
+          pPr:
+            '<w:keepNext/><w:keepLines/><w:widowControl w:val="0"/><w:wordWrap/><w:snapToGrid w:val="0"/>' +
+            '<w:tabs><w:tab w:val="left" w:pos="420"/></w:tabs>' +
+            '<w:pBdr><w:bottom w:val="single" w:sz="4" w:space="1" w:color="auto"/></w:pBdr>' +
+            '<w:shd w:val="clear" w:color="auto" w:fill="EEEEEE"/>',
+          text: "八项都说过的",
+        },
+        { text: "什么都没说的" },
+      ]),
+    );
+    const eight = carriedShape(findPara(doc, "八项都说过的")) as Record<string, unknown>;
+    for (const key of ["keepNext", "keepLines", "widowControl", "snapToGrid", "wordWrap", "borders", "shading", "tabStops"])
+      expect(eight[key] === undefined ? `少了 ${key}` : key).toBe(key);
+    const own = paraStyleOf(findPara(doc, "八项都说过的")) as Record<string, unknown>;
+    for (const key of ["keepNext", "keepLines", "widowControl", "snapToGrid", "wordWrap", "borders", "shading", "tabStops"])
+      expect(own[key], `那半本不该有 ${key}`).toBeUndefined();
+    // 账里摆的是这一段说过的话：没说过的不进账，否则签记录会把模型上的空位当成「改之前的话」说一遍。
+    const silent = carriedShape(findPara(doc, "什么都没说的")) as Record<string, unknown>;
+    for (const key of ["keepNext", "keepLines", "widowControl", "snapToGrid", "wordWrap", "borders", "shading", "tabStops"])
+      expect(silent[key], `空位 ${key} 不该进账`).toBeUndefined();
+  });
+
+  it("回车拆段：上一段自己那句「允许」跟着走，从样式借来的那句留在样式那里", () => {
+    const own = open(makeChainDocx([{ id: "Head", next: "Body" }, { id: "Body" }], [{ pStyle: "Head", pPr: "<w:wordWrap/>", text: "自己说的" }]));
+    const split = own.nextSplit(findPara(own, "自己说的")!)!;
+    expect(split.styleId).toBe("Body");
+    expect(split.wordWrap).toBe(true);
+
+    const lent = open(makeChainDocx([{ id: "Head", next: "Body", pPr: "<w:wordWrap/>" }, { id: "Body" }], [{ pStyle: "Head", text: "借来的" }]));
+    const borrowed = lent.nextSplit(findPara(lent, "借来的")!)!;
+    // 「允许」是 Head 说的话，Body 没说，所以新段不该认领它。
+    expect(findPara(lent, "借来的").wordWrap).toBe(true);
+    expect(borrowed.wordWrap).toBeUndefined();
   });
 });

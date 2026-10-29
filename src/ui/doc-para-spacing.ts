@@ -50,6 +50,14 @@ import type { Unit } from "./doc-units.js";
  * 行网格，首节 `w:linePitch` 取 312 缇 41 份 / 360 三份 / 285 两份。拼法只有两种：说开**裸写** 180 枚、说关
  * `w:val="0"` 226 枚，没有一枚写 `"1"` 或 `"false"`；`w:pPr` 里它的前兄弟固定是 `adjustRightInd`（334/410 枚），
  * 后兄弟最多是 `spacing`（284 枚）与 `textAlignment`（74 枚），与 `PPR_ORDER` 同一条。
+ *
+ * 第四颗勾是「允许西文在单词中间换行」（`w:wordWrap`，§17.4.77），WPS 段落对话框「中文版式」那一页的第一枚。
+ * 受众（`.scratch/cjk-typo-audience.py`，同一套授权口径）：正文 7,357 枚 `w:pPr` 里 **200 枚说了这一格，枚枚裸写**
+ * （分布在 9 份模板名上），**说关 0 枚**，`word/styles.xml` 与 `w:docDefaults` 也各 0 枚——件里从没有段落明着说
+ * 「不许」，所以这一枚的三态里只有「说了允许」与「没说」在纸上真的分得开（缺省是不许，两种都画整词换行）。
+ * 同批段落还总带着 `w:kinsoku`/`w:overflowPunct`/`w:topLinePunct`/`w:autoSpaceDE`/`w:autoSpaceDN` 那五枚
+ * （各 200 枚，组合 200/200 一致），本文件不画它们：Chromium 130（Electron 33.4.11）不实现 `hanging-punctuation`，
+ * 那五枚没有可画的腿，而 WPS 真机那一侧到底怎么摆仍未取证——只带这一枚有 CSS 腿的（`word-break:break-all`）。
  */
 const STYLE_ID = "solo-para-spacing-styles";
 
@@ -104,6 +112,8 @@ export type ParaSpacingPatch = {
   lineRule?: LineSpacingRule;
   /** `w:snapToGrid`：勾着 = 吸本节行网格，没勾 = 这一段明写着不吸。键不存在 = 这一笔不改。 */
   snapToGrid?: boolean;
+  /** `w:wordWrap`：勾着 = 允许西文在单词中间换行，没勾 = 明着不许。缺省是不许，所以键不存在与没勾画同一张纸。 */
+  wordWrap?: boolean;
 };
 
 /** 打开时对话框上摆的那份数，来自段落**解析后**的状态（样式链借来的也算，那正是页面上画的）。 */
@@ -120,6 +130,11 @@ export type ParaSpacingState = ParaSpacingPatch & {
    * 于是由那行小字说明；用户一旦改过勾选，值就按同一份写给所有所选段。
    */
   snapMixed?: boolean;
+  /**
+   * 所选跨段且那几段对「允许西文在单词中间换行」说法不一致。与 `snapMixed` 同一件事的另一面：这一格摆不出三态
+   * （缺省就是「不许」，所以没说的也摆成没勾），于是由那行小字说明，用户改过勾选才把同一个答案写给全部。
+   */
+  wrapMixed?: boolean;
 };
 
 /** 一个 `w:line` 折算成「几倍行距」，只在 `auto` 那一族里有意义（`LINE_ONE` = 单倍，§17.3.1.27）。 */
@@ -177,6 +192,7 @@ export function showParaSpacingDialog(state: ParaSpacingState, apply: (patch: Pa
     <label><span data-value-label>设置值</span><span class="solo-pg-num"><input name="pg-value" inputmode="decimal" autocomplete="off" value=""><span data-value-unit></span></span></label>
     </div>
     <label class="solo-pg-snap"><span><input type="checkbox" name="pg-snap">如果定义了文档网格，则对齐到网格</span><small class="solo-pg-hint" data-hint="pg-snap"></small></label>
+    <label class="solo-pg-snap"><span><input type="checkbox" name="pg-wrap">允许西文在单词中间换行</span><small class="solo-pg-hint" data-hint="pg-wrap"></small></label>
     <p class="solo-pg-error" role="status"></p>
     <footer><button type="button" class="solo-pg-cancel">取消</button><button type="submit" class="solo-pg-apply">确定</button></footer></form>`;
 
@@ -185,6 +201,7 @@ export function showParaSpacingDialog(state: ParaSpacingState, apply: (patch: Pa
   const after = field("pg-after");
   const value = field("pg-value");
   const snap = field("pg-snap");
+  const wrap = field("pg-wrap");
   const rule = dialog.querySelector<HTMLSelectElement>('select[name="pg-rule"]')!;
   const valueUnit = dialog.querySelector<HTMLElement>("[data-value-unit]")!;
   const valueLabel = dialog.querySelector<HTMLElement>("[data-value-label]")!;
@@ -196,6 +213,9 @@ export function showParaSpacingDialog(state: ParaSpacingState, apply: (patch: Pa
   // 「对齐到网格」同一条纪律，另一只 `snapTouched`：这一枚开关的缺省是**吸**（§17.3.1.87 说 `w:snapToGrid`
   // 没写就算 on），所以没说的段落也摆成勾着——但勾着不等于用户说了，不交这一笔，件里那句借来的话照旧归样式。
   let snapTouched = false;
+  // 「允许西文在单词中间换行」（`w:wordWrap`，§17.4.77）第三只 `wrapTouched`，纪律同上一条，只是缺省相反：这一枚
+  // 没写就算**不许**，所以没说的段落摆成没勾——摆成没勾同样不等于用户说了，不交这一笔。
+  let wrapTouched = false;
   const pick = (): string => {
     const { line, lineRule } = state;
     if (line === undefined) return "auto:1";
@@ -206,6 +226,8 @@ export function showParaSpacingDialog(state: ParaSpacingState, apply: (patch: Pa
   };
   rule.value = pick();
   snap.checked = state.snapToGrid !== false;
+  // 这一枚的缺省是「不许」，所以 `undefined`（这一段没说）与 `false`（明着不许）都摆成没勾：页面画的本来就是不许。
+  wrap.checked = state.wordWrap === true;
   /** 「设置值」那一格装的是倍数还是长度，跟着行距那一档走；单倍/1.5/2 自己说完了数，格子禁用。 */
   const needsValue = (): boolean => NEEDS_VALUE.has(rule.value);
   const isMultiple = (): boolean => rule.value === "auto";
@@ -231,7 +253,7 @@ export function showParaSpacingDialog(state: ParaSpacingState, apply: (patch: Pa
     const lends = kind === "mult" ? state.lineRule === "auto" : state.lineRule === rule.value;
     value.value = lends && state.line !== undefined ? (kind === "mult" ? String(multipleOf(state.line)) : twipText(state.line)) : "";
   };
-  /** 段前段后与「对齐到网格」那三行小字：件自己两笔一起说时，把用户填的数换算成「几行」。说不出一档就没有这一行。 */
+  /** 段前段后与那两颗勾的四行小字：件自己两笔一起说时，把用户填的数换算成「几行」。说不出一档就没有这一行。 */
   const syncHints = (): void => {
     const pitch = state.linePitchTwips;
     for (const [name, input] of [["pg-before", before], ["pg-after", after]] as const) {
@@ -250,6 +272,16 @@ export function showParaSpacingDialog(state: ParaSpacingState, apply: (patch: Pa
         : snap.checked
           ? `行高按本节的网格取整格：${pitchTxt}。`
           : `这一段不吸网格：行高只按它自己说的算（${pitchTxt} 不用）。`;
+    // 「允许西文在单词中间换行」那一行要说清它管什么、不管什么：管的是行尾那个西文词能不能拦腰断，
+    // 不管中文那一侧的禁则——同一族里那五枚（`w:kinsoku`/`w:overflowPunct`/`w:topLinePunct`/`w:autoSpaceDE`/
+    // `w:autoSpaceDN`）在这份实现里没有可画的腿（Chromium 130 不实现 `hanging-punctuation`），而 WPS 真机
+    // 那一边怎么摆仍未取证，所以这句话只描述本件画得出的那一条。
+    const wrapHint = dialog.querySelector<HTMLElement>('[data-hint="pg-wrap"]')!;
+    wrapHint.textContent = state.wrapMixed && !wrapTouched
+      ? "所选几段说法不一致：有的允许西文词在中间断，有的不允许。改一次勾选会把同一个答案写给全部。"
+      : wrap.checked
+        ? "行尾放不下整个西文词时，把它拦腰折断（中文那一侧的禁则本件不改变）。"
+        : "西文词整词换行：这一行放不下就把整个词挪到下一行。";
   };
   const build = (): ParaSpacingPatch | undefined => {
     const b = readGap(before, u);
@@ -263,6 +295,7 @@ export function showParaSpacingDialog(state: ParaSpacingState, apply: (patch: Pa
     if (b.value !== undefined) patch.beforeTwips = b.value;
     if (a.value !== undefined) patch.afterTwips = a.value;
     if (snapTouched) patch.snapToGrid = snap.checked;
+    if (wrapTouched) patch.wordWrap = wrap.checked;
     if (touched) {
       if (needsValue()) {
         const v = Number(value.value.trim());
@@ -298,6 +331,7 @@ export function showParaSpacingDialog(state: ParaSpacingState, apply: (patch: Pa
     const name = (e.target as HTMLElement).getAttribute("name");
     if (name === "pg-rule") touched = true;
     if (name === "pg-snap") snapTouched = true;
+    if (name === "pg-wrap") wrapTouched = true;
     syncValueBox();
     syncHints();
     build();

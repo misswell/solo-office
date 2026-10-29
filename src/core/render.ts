@@ -510,6 +510,19 @@ function renderParagraph(p: Paragraph, doc: WordDocument, counters: Map<string, 
   const lh = lineHeight(p, gridPx);
   if (lh) style.push(`line-height:${lh}`);
   if (p.pageBreakBefore) style.push("page-break-before:always");
+  // `w:wordWrap`（WPS 段落对话框「中文版式」里那格「允许西文在单词中间换行」，§17.4.77）唯一的可画腿。那一族说了「允许」的
+  // 是 200 枚枚枚裸写（授权 46 件正文 7,357 枚 `w:pPr`，`.scratch/cjk-typo-audience.py`），缺省是不许，所以 `undefined` 与
+  // `false` 这一支都不写 CSS——写了才改。
+  // 选 `word-break:break-all`、不选 `overflow-wrap` 是量出来的（`.scratch/wrap-leg.html`，无头 Chrome 读逐字符分行矩形）：
+  // 把 6 个 M 接在 8 个汉字后面（一行装得下整个词、装不下「词加前面那段」），`break-all` 把首行铺到 195px＝在行尾拦腰断；
+  // `overflow-wrap:anywhere` 与 `break-word` 跟基准一样停在 160px＝整词挪去下一行，只有词本身宽过一整行时才断（那一档
+  // 三种拼法都是 192px）。Word 那一句说的是前一种。
+  // 原先担心 `break-all` 会顺手松掉中文禁则，同一次量的数字把它否掉了：「，」「。」「「」各自摆到天然断点那一格时，六种
+  // 拼法（含什么都不写）的逐字符分行签名**完全相同**（种类 = 1），这台 Chromium 在 `break-all` 下仍把句读点留在原位，
+  // 所以这一腿不动纯中文段的断点。受众也要说清：那 200 段里没有一段带 6 个字符以上的西文词
+  // （`.scratch/wordwrap-effect-audience.mjs`），这一画在授权口径里改不了任何一行——它服务的是写了这一枚、又真带西文词的件。
+  // WPS 真机那一边到底怎么摆仍未取证。
+  if (p.wordWrap === true) style.push("word-break:break-all");
   // The heading a paragraph is drawn as. `data-outline` is the outline level the model resolves — its own or
   // the one its style chain states (§17.3.2.26) — and the 大纲 pane counts those marks in the order the page
   // writes them, which is why the attribute carries the resolved number rather than a guessed one. On the authorized

@@ -1,7 +1,7 @@
 import type { Block, BorderSet, Carried, CarriedInline, CellStyle, FormatRevision, HeaderFooter, HfSegment, Inline, LineSpacingRule, MarginTwips, ParaStyle, PageGeometry, PageSetup, Paragraph, ParagraphFormatRevision, PropSlot, Revision, RevisionEntry, RowInfo, RowStyle, RunStyle, Section, Table, TableBorder, TableCell, TablePropsPatch, TableStyle, WordDocument } from "../core/docx.js";
 import type { CommentAnchor, DocComment } from "../core/comments.js";
 import { bodyShape, commentTexts } from "../core/comments.js";
-import { DEFAULT_SECTION, EAST_ASIAN_TEXT, MARGIN_SIDES, RUN_STYLE_KEYS, applyFacePick, applyRunPatch, borderDelta, carriedShape, cellShapeOf, countTexts, hasLine, lineGridPitchTwips, ownParaStyle, ownRunStyle, paraSpacingPitch, paraStyleOf, paragraphTextsOf, rowShapeOf, runStyleOf, samePropValue, sectionEndsOf, signCellPlaceRevision, signCellRevision, signRowRevision, signTableRevision, stampNow, syncCellBox, syncCellVAlign, syncParaSlots, syncRowHeader, syncRowHeight, syncTableBox, syncTableProps, tableShapeOf, twipsToPx } from "../core/docx.js";
+import { DEFAULT_SECTION, EAST_ASIAN_TEXT, MARGIN_SIDES, RUN_STYLE_KEYS, applyFacePick, applyRunPatch, borderDelta, carriedShape, cellShapeOf, countTexts, hasLine, lineGridPitchTwips, ownParaStyle, ownRunStyle, paraSpacingPitch, paragraphTextsOf, rowShapeOf, runStyleOf, samePropValue, sectionEndsOf, signCellPlaceRevision, signCellRevision, signRowRevision, signTableRevision, stampNow, syncCellBox, syncCellVAlign, syncParaSlots, syncRowHeader, syncRowHeight, syncTableBox, syncTableProps, tableShapeOf, twipsToPx } from "../core/docx.js";
 import type { CellWhere, TableEdit } from "../core/doc-table-ops.js";
 import { allCells, applyRowHeights, cellOuterSides, cellRangeFor, cellRect, columnCells, cellsInRect, cellsInSweep, deleteCellHere, deleteColumnHere, deleteRowHere, deleteTableBlock, distributeColumns, distributeRows, gridColumns, gridWidths, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, setColumnWidth, splitHere, splitTableAt, tableToText, type RowHeightMove, type TableTextSeparator } from "../core/doc-table-ops.js";
 import { IMAGE_EXT_BY_MIME } from "../core/media.js";
@@ -3302,7 +3302,7 @@ export class DocEditor {
     // 一次点击只讨一个 numId：选中五段按「项目符号」是**一个**列表接着排，不是五段各自起一个新的列表。
     const numId = patch.list && patch.list !== "none" ? this.doc.ensureListNumbering(patch.list) : undefined;
     for (const paragraph of targets) {
-      const was = paraStyleOf(paragraph);
+      const was = carriedShape(paragraph);
       // `syncParaSlots` replaces the array, so this reference keeps the set as the paragraph came in with it.
       const wasSlots = paragraph.pPrSlots;
       if (patch.align !== undefined) paragraph.align = patch.align || undefined;
@@ -3323,7 +3323,7 @@ export class DocEditor {
       syncParaSlots(paragraph);
       // An alignment click on a paragraph that already sits there changes nothing, and a change that is
       // nothing should not be put in front of a reviewer.
-      if (this.trackRevisions && JSON.stringify(was) !== JSON.stringify(paraStyleOf(paragraph))) {
+      if (this.trackRevisions && JSON.stringify(was) !== JSON.stringify(carriedShape(paragraph))) {
         paragraph.revFormat = this.signParagraphRevision(paragraph, was, wasSlots);
       }
     }
@@ -3346,11 +3346,11 @@ export class DocEditor {
     const to = numPr.ilvl + dir;
     if (to < 0 || this.doc.levelOf(numPr.numId, to) === undefined) return false;
     this.snapshot(this.caretPath());
-    const was = paraStyleOf(paragraph);
+    const was = carriedShape(paragraph);
     const wasSlots = paragraph.pPrSlots;
     paragraph.numPr = { numId: numPr.numId, ilvl: to };
     syncParaSlots(paragraph);
-    if (this.trackRevisions && JSON.stringify(was) !== JSON.stringify(paraStyleOf(paragraph))) {
+    if (this.trackRevisions && JSON.stringify(was) !== JSON.stringify(carriedShape(paragraph))) {
       paragraph.revFormat = this.signParagraphRevision(paragraph, was, wasSlots);
     }
     const caret = this.caretPath();
@@ -3375,12 +3375,12 @@ export class DocEditor {
     for (const paragraph of targets) {
       const next = this.doc.nextIndent(paragraph, dir);
       if (!next) continue;
-      const was = paraStyleOf(paragraph);
+      const was = carriedShape(paragraph);
       const wasSlots = paragraph.pPrSlots;
       paragraph.indentLeft = next.indentLeft;
       if (next.indentLeftChars !== undefined) paragraph.indentLeftChars = next.indentLeftChars;
       syncParaSlots(paragraph);
-      if (this.trackRevisions && JSON.stringify(was) !== JSON.stringify(paraStyleOf(paragraph))) {
+      if (this.trackRevisions && JSON.stringify(was) !== JSON.stringify(carriedShape(paragraph))) {
         paragraph.revFormat = this.signParagraphRevision(paragraph, was, wasSlots);
       }
     }
@@ -3392,20 +3392,21 @@ export class DocEditor {
   }
 
   /**
-   * 「段落」那三个数的**读数**：段前、段后、行距，加一颗「对齐到网格」的勾，按页面上正在画的那一份交（模型字段
+   * 「段落」那三个数与两颗勾的**读数**：段前、段后、行距，加一颗「对齐到网格」与一颗「允许西文在单词中间换行」，按页面上正在画的那一份交（模型字段
    * 本来就是解析过样式链的，从样式借来的也算——那正是这一格该说的）。多选跨段时逐段比对：几段说得不一样就整键交
    * `undefined`，那一格空着，而不是拿第一段的答案替全部说话。`linePitchTwips` 只给「件自己两笔一起写」那行小字用，
    * 取第一个说得出档的段。
    *
    * `snapToGrid` 的 `undefined` 有两种来路，对话框分不开（缺省就是「吸」，所以两种都摆成勾着），所以跨段不一致时
    * 另交一个 `snapMixed` 让那行小字说出来——WPS 在这种混合态上摆什么（勾／空框／灰掉）**未取证**，这里不猜。
+   * `wordWrap` 是同一件事的另一半：缺省是「不许」，所以没说的与明着写 `w:val="0"` 的都摆成没勾，跨段不一致另交 `wrapMixed`。
    * `docGridTwips` 取第一段所在那一节的行网格（一格多高，缇；没有网格就 `undefined`），口径与渲染同一处：
    * `lineGridPitchTwips`。节号按状态栏 节 那一格的同一条算法（块 `b` 属于第 `#{e < b}` 节）。
    */
   paraSpacingState(): ParaSpacingState | undefined {
     const targets = this.selectionParagraphs();
     if (!targets.length) return undefined;
-    const agree = <K extends "spacingBefore" | "spacingAfter" | "lineSpacing" | "lineSpacingRule" | "snapToGrid">(key: K): Paragraph[K] | undefined => {
+    const agree = <K extends "spacingBefore" | "spacingAfter" | "lineSpacing" | "lineSpacingRule" | "snapToGrid" | "wordWrap">(key: K): Paragraph[K] | undefined => {
       const first = targets[0]![key];
       return targets.every((p) => p[key] === first) ? first : undefined;
     };
@@ -3415,9 +3416,11 @@ export class DocEditor {
       line: agree("lineSpacing"),
       lineRule: agree("lineSpacingRule"),
       snapToGrid: agree("snapToGrid"),
+      wordWrap: agree("wordWrap"),
     };
     state.linePitchTwips = targets.map((p) => paraSpacingPitch(p)).find((x) => x !== undefined);
     state.snapMixed = targets.length > 1 && state.snapToGrid === undefined;
+    state.wrapMixed = targets.length > 1 && state.wordWrap === undefined;
     const at = this.doc.blocks.indexOf(targets[0]);
     const block = at < 0 ? this.caretPath()?.path[0] ?? 0 : at;
     const sections = this.doc.sections.length ? this.doc.sections : [DEFAULT_SECTION];
@@ -3426,7 +3429,7 @@ export class DocEditor {
     return state;
   }
 
-  /** Ribbon command: 「段落」——段前／段后／行距与「对齐到网格」，从光标或选区那几段读，改完写回 `w:spacing` 与 `w:snapToGrid`。 */
+  /** Ribbon command: 「段落」——段前／段后／行距与「对齐到网格」「允许西文在单词中间换行」，从光标或选区那几段读，改完写回 `w:spacing`、`w:snapToGrid` 与 `w:wordWrap`。 */
   openParaSpacing(): void {
     const state = this.paraSpacingState();
     if (!state) return;
@@ -3434,7 +3437,7 @@ export class DocEditor {
   }
 
   /**
-   * ribbon 行距下拉与「段落」对话框共用的落笔处。**只写用户动过的那一句**：四个键都不在补丁里就整击作废，
+   * ribbon 行距下拉与「段落」对话框共用的落笔处。**只写用户动过的那一句**：五个键都不在补丁里就整击作废，
    * 连撤销栈都不进——与 `shiftParagraphIndent` 已经在边上时同一个判定。`w:line` 与 `w:lineRule` 必须同进同出
    * （授权口径那 3,948 枚——`word/document.xml` 3,924 + `word/footnotes.xml` 12 + `word/endnotes.xml` 12，
    * `.scratch/spacing-part-scope.py`——里 0 枚只写一边），所以补丁交了 `line` 就一定带着规则；只交一半会被读成上一份的规则，
@@ -3443,12 +3446,11 @@ export class DocEditor {
   setParagraphSpacing(patch: ParaSpacingPatch): boolean {
     const targets = this.selectionParagraphs();
     if (!targets.length) return false;
-    if (patch.beforeTwips === undefined && patch.afterTwips === undefined && patch.line === undefined && patch.snapToGrid === undefined) return false;
+    if (patch.beforeTwips === undefined && patch.afterTwips === undefined && patch.line === undefined && patch.snapToGrid === undefined && patch.wordWrap === undefined) return false;
     this.snapshot(this.caretPath());
     for (const paragraph of targets) {
-      const was = paraStyleOf(paragraph);
+      const was = carriedShape(paragraph);
       const wasSlots = paragraph.pPrSlots;
-      const wasSnap = paragraph.snapToGrid;
       if (patch.beforeTwips !== undefined) paragraph.spacingBefore = patch.beforeTwips;
       if (patch.afterTwips !== undefined) paragraph.spacingAfter = patch.afterTwips;
       if (patch.line !== undefined) {
@@ -3456,10 +3458,12 @@ export class DocEditor {
         paragraph.lineSpacingRule = patch.lineRule ?? "auto";
       }
       if (patch.snapToGrid !== undefined) paragraph.snapToGrid = patch.snapToGrid;
+      if (patch.wordWrap !== undefined) paragraph.wordWrap = patch.wordWrap;
       syncParaSlots(paragraph);
-      // 网格这一枚开关不在 `PARA_STYLE_KEYS` 里（它整枚走 `pPrSlots` 的字节），所以字段那本账看不出它动了。
-      // 修订开着时单动这一枚也得留痕：记录带 `prevSlots`，拒绝就是把改之前那一句字节放回去。
-      if (this.trackRevisions && (JSON.stringify(was) !== JSON.stringify(paraStyleOf(paragraph)) || wasSnap !== paragraph.snapToGrid)) {
+      // 这一本账是**全账**（`carriedShape`：`PARA_STYLE_KEYS` 写得出句子的，与只靠 `w:pPr` 槽位带回的那八项都算），
+      // 所以单动「对齐到网格」或「允许西文在单词中间换行」这一枚也看得出改了口；记录带的是改之前那一句的字段与
+      // 字节，拒绝就是把那一句整个放回段落上——字段与字节不同步时，纸上画的与被否决的那一句还剩着一半。
+      if (this.trackRevisions && JSON.stringify(was) !== JSON.stringify(carriedShape(paragraph))) {
         paragraph.revFormat = this.signParagraphRevision(paragraph, was, wasSlots);
       }
     }
@@ -3562,10 +3566,10 @@ export class DocEditor {
    * ribbon 那几条腿与「边框与底纹」对话框共用的落笔处。**逐边**落到段落的框上，只写这一击点名的那几边
    * （`applyBoxPatch` 换掉整个物件，样式链借来的那一份不被往里改），底纹跟着 `patch.shading` 走。
    * 一个字节都不动时（原样确定、或那一段本来就这么说）这一击不进撤销栈、也不把文档标脏——与
-   * `shiftParagraphIndent` 已经在边上时、`setParagraphSpacing` 四个键全空时同一条判定。
+   * `shiftParagraphIndent` 已经在边上时、`setParagraphSpacing` 五个键全空时同一条判定。
    *
-   * `borders`/`shading` 不在 `PARA_STYLE_KEYS` 里，`paraStyleOf` 那本账看不出它们动了，所以修订的判定必须
-   * 直接比这两项自己（与 `snapToGrid` 在 `setParagraphSpacing` 里的特例同一条理由）。
+   * 修订的判定比的是**全账**（`carriedShape` 把 `w:pBdr`/`w:shd` 这些只靠槽位带回的也算进去），所以不必再为
+   * 这两项单开一条比较——上一条那句「`paraStyleOf` 看不出」就是这次换掉它的原因：拒绝之后字段得跟得上记录。
    */
   setParagraphBox(patch: ParaBoxPatch): boolean {
     const targets = this.selectionParagraphs();
@@ -3580,14 +3584,12 @@ export class DocEditor {
     this.snapshot(this.caretPath());
     for (const [at, paragraph] of targets.entries()) {
       if (!moves[at]) continue;
-      const was = paraStyleOf(paragraph);
+      const was = carriedShape(paragraph);
       const wasSlots = paragraph.pPrSlots;
-      const wasBorders = paragraph.borders;
-      const wasShading = paragraph.shading;
       if (patch.sides) paragraph.borders = applyBoxPatch(paragraph.borders, patch);
       if (patch.shading !== undefined) paragraph.shading = patch.shading;
       syncParaSlots(paragraph);
-      if (this.trackRevisions && (!samePropValue(wasBorders, paragraph.borders) || wasShading !== paragraph.shading)) {
+      if (this.trackRevisions && JSON.stringify(was) !== JSON.stringify(carriedShape(paragraph))) {
         paragraph.revFormat = this.signParagraphRevision(paragraph, was, wasSlots);
       }
     }
@@ -3842,7 +3844,7 @@ export class DocEditor {
         const cell = segment.table.rows[where.row]?.[where.col];
         for (const block of cell?.paragraphs ?? []) {
           if (block.kind !== "paragraph" || block.align === want) continue;
-          edits.push({ paragraph: block, was: paraStyleOf(block), wasSlots: block.pPrSlots });
+          edits.push({ paragraph: block, was: carriedShape(block), wasSlots: block.pPrSlots });
         }
       }
     }
@@ -3851,7 +3853,7 @@ export class DocEditor {
     for (const edit of edits) {
       edit.paragraph.align = want;
       syncParaSlots(edit.paragraph);
-      if (this.trackRevisions && JSON.stringify(edit.was) !== JSON.stringify(paraStyleOf(edit.paragraph))) {
+      if (this.trackRevisions && JSON.stringify(edit.was) !== JSON.stringify(carriedShape(edit.paragraph))) {
         edit.paragraph.revFormat = this.signParagraphRevision(edit.paragraph, edit.was, edit.wasSlots);
       }
     }

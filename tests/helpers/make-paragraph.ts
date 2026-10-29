@@ -159,6 +159,8 @@ export function makeSpacingDocx(
     readonly spacing?: string;
     readonly pStyle?: string;
     readonly snapToGrid?: string;
+    /** `w:wordWrap`（「允许西文在单词中间换行」）同一条拼法：空串是裸写=说了允许，`w:val="0"` 是明着不许。 */
+    readonly wordWrap?: string;
     /** Extra children appended to this paragraph's `w:pPr`, for the shapes that are not paragraph properties. */
     readonly markRPr?: string;
     /** Extra children of this paragraph's one run's `w:rPr`. */
@@ -173,6 +175,9 @@ export function makeSpacingDocx(
       .map((e) => {
         const kids = [
           e.pStyle ? `<w:pStyle w:val="${e.pStyle}"/>` : "",
+          // `w:wordWrap` 排在 `w:snapToGrid` 之前，与 `PPR_ORDER` 同一条（`w:kinsoku` 之后、`w:overflowPunct` 之前）。
+          // 件里说了这一枚的 200 段枚枚裸写（授权口径 `.scratch/cjk-typo-audience.py`），`w:val="0"` 是本机自己造的形状。
+          e.wordWrap === undefined ? "" : `<w:wordWrap${e.wordWrap ? ` ${e.wordWrap}` : ""}/>`,
           // `w:snapToGrid` is written exactly as the file spells it: `w:val="0"` is the off, and an empty string
           // here is the bare `<w:snapToGrid/>`, which is the switch stated *on* (§17.3.1.87 defaults to on).
           e.snapToGrid === undefined ? "" : `<w:snapToGrid${e.snapToGrid ? ` ${e.snapToGrid}` : ""}/>`,
@@ -236,8 +241,25 @@ export function makeGridRevisionDocx(): Uint8Array {
   return pack(document, STYLES);
 }
 
-/** A style as `word/styles.xml` spells it, for the tests about how far up `w:basedOn` the read walks. */
-export interface ChainStyle {
+/**
+ * The same two shapes for 「允许西文在单词中间换行」（§17.4.77 `w:wordWrap`）: one states a bare
+ * `<w:wordWrap/>` now while its record says nothing, one says nothing now while its record states
+ * `w:val="0"`. Refusing either has to move the field *and* the bytes—the switch lives outside
+ * `PARA_STYLE_KEYS`, so it travels only in `w:pPr`'s slots.
+ */
+export function makeWrapRevisionDocx(): Uint8Array {
+  const document =
+    `<w:p><w:pPr><w:wordWrap/><w:spacing w:line="300" w:lineRule="auto"/>` +
+    `<w:pPrChange ${REV(31, "顾峰")}><w:pPr><w:spacing w:line="300" w:lineRule="auto"/></w:pPr></w:pPrChange></w:pPr>` +
+    `<w:r><w:t>换行是刚加上的</w:t></w:r></w:p>` +
+    `<w:p><w:pPr><w:spacing w:line="300" w:lineRule="auto"/>` +
+    `<w:pPrChange ${REV(32, "林晓")}><w:pPr><w:wordWrap w:val="0"/><w:spacing w:line="300" w:lineRule="auto"/></w:pPr></w:pPrChange></w:pPr>` +
+    `<w:r><w:t>换行是刚被删掉的</w:t></w:r></w:p>` +
+    `<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800"/></w:sectPr>`;
+  return pack(document, STYLES);
+}
+
+/** A style as `word/styles.xml` spells it, for the tests about how far up `w:basedOn` the read walks. */export interface ChainStyle {
   id: string;
   name?: string;
   basedOn?: string;

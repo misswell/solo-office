@@ -169,6 +169,13 @@ function paragraphProps(p: Paragraph): string {
   // 却可能一个 slot 也没有（编辑器自己拆出来的段、或那 159 段没写 `w:pPr` 的），那时候勾选框只剩字段可说。
   // 拼法照件：说开裸写、说关 `w:val="0"`。只说**这一击动过的**，与 `ownParaStyle` 对着读快照同一条口径——
   // 从样式链借来的那个开关是样式的话，抄到段落身上就是替文件编一句。`CT_PPr` 把它排在 `w:spacing` 前。
+  // 「允许西文在单词中间换行」（`w:wordWrap`）与上面那一支同一条来路：不在 `PARA_STYLE_KEYS` 里，带 `w:pPr` 的
+  // 段落由 `syncParaSlots` 按件的原字节带走，这里只服务没有 slot 的段。拼法照件——写了的 200 枚枚枚裸写（授权
+  // 口径 `.scratch/cjk-typo-audience.py`），说关那一句按 §17.4.77 的 on/off 写法补 `w:val="0"`。`CT_PPr` 把它排在
+  // `w:snapToGrid` 前（`w:kinsoku` 之后）。
+  if (p.wordWrap !== undefined && !samePropValue(p.asRead?.wordWrap, p.wordWrap)) {
+    parts.push(p.wordWrap ? "<w:wordWrap/>" : '<w:wordWrap w:val="0"/>');
+  }
   if (p.snapToGrid !== undefined && !samePropValue(p.asRead?.snapToGrid, p.snapToGrid)) {
     parts.push(p.snapToGrid ? "<w:snapToGrid/>" : '<w:snapToGrid w:val="0"/>');
   }

@@ -316,6 +316,21 @@ export interface ParaStyle {
    */
   snapToGrid?: boolean;
   /**
+   * `w:wordWrap` (§17.4.77): WPS 段落对话框「中文版式」里那一格「允许西文在单词中间换行」。三态读法与
+   * `w:snapToGrid` 同一条，**缺省相反**：这一枚的缺省是「不许」，所以只有写了才算说了话，裸写那句是「允许」。
+   *
+   * 受众是量的（`.scratch/cjk-typo-audience.py`，授权 46 件正文的 7,357 枚 `w:pPr`）：**200 枚说了
+   * `w:wordWrap`，枚枚裸写不带 `w:val`**（9 份模板名），说关的 **0 枚**，样式层与 `w:docDefaults` 也 **0 枚**——
+   * 链上没人借得出这一句，所以解析后的 `true` 只可能是段自己写的。同一段还常连着说 `w:kinsoku`／
+   * `w:overflowPunct`／`w:autoSpaceDE`／`w:autoSpaceDN`（各 200 枚，同样裸写）与 `w:topLinePunct w:val="0"`；
+   * 那五枚浏览器没有对应的腿（`hanging-punctuation` 在 Chromium 130 里不实现，中西文间距要 `text-autospace`
+   * 那一族，而 WPS 侧到底怎么摆更未取证），故本轮不建模，只带 `w:wordWrap` 这一枚有 CSS 腿的。
+   *
+   * 与 `w:snapToGrid` 同样不在 `PARA_STYLE_KEYS` 里：整枚走 `w:pPr` 的槽位字节，`w:pPrChange` 记录带着它自己的
+   * 那句回来；字段动了才由 `syncParaSlots` 按件的两种拼法改写（开=裸写，关=`w:val="0"`）。
+   */
+  wordWrap?: boolean;
+  /**
    * `w:pBdr` (§17.3.2.36): the box drawn around this paragraph, one entry per side the element named. A side
    * whose `w:val` is `none`/`hidden`/`nil` is a side the file **said no line for**, which is a different sentence
    * from not naming the side at all — the same lesson `w:u w:val="none"` taught in §85, and the shape the authorized
@@ -612,6 +627,12 @@ export interface Paragraph {
    * counts and `render.ts`'s `lineHeight` for what the page does with it.
    */
   snapToGrid?: boolean;
+  /**
+   * `w:wordWrap`：这一段允不允许西文在单词中间断开。三态与 `ParaStyle` 上那一条同口径（缺省「不许」，裸写那句
+   * 才是「允许」），解析后同样把样式链借来的算进来——授权口径里链上 0 枚，所以这里的 `true` 只可能是段自己写的。
+   * 画侧那条腿在 `render.ts`（`word-break:break-all`）。
+   */
+  wordWrap?: boolean;
   /**
    * `w:pBdr`, this paragraph's own sides merged over the ones its style chain names — the merge is per side,
    * because §17.7.2 resolves a property at a time and a paragraph that cancels only its bottom line is not
@@ -2228,6 +2249,7 @@ export class WordDocument {
       keepLines: onOff(pPr.keepLines) ?? lent?.keepLines,
       widowControl: onOff(pPr.widowControl) ?? lent?.widowControl,
       snapToGrid: onOff(pPr.snapToGrid) ?? lent?.snapToGrid,
+      wordWrap: onOff(pPr.wordWrap) ?? lent?.wordWrap,
       // The box, per side: the paragraph's own statement first, the chain's sides it does not name behind. A
       // paragraph that names no side at all takes the chain's object by reference (see `mergeParaBorders`), so
       // the write side still sees it as the style's.
@@ -2867,7 +2889,7 @@ export class WordDocument {
     const own = ownParaStyle(before, paraStyleOf(previous));
     delete own.styleId;
     const fields: ParaStyle = { ...lent, ...own };
-    // 这七项不在 `PARA_STYLE_KEYS` 里（写出靠 `w:pPr` 的槽位带回），`ownParaStyle` 认不到它们，所以「上一段自己
+    // 这八项不在 `PARA_STYLE_KEYS` 里（写出靠 `w:pPr` 的槽位带回），`ownParaStyle` 认不到它们，所以「上一段自己
     // 写的那一份」得按同一条判据再认一次：与旧链说的不一样，就是这一段自己写的，跟着走——回车不该把上一段自己写的
     // 保持规则或它自己那句「不吸网格」忘掉（授权口径里 226 枚 `w:snapToGrid w:val="0"` 是段落自己写的，
     // `.scratch/corpus-recheck2.mjs`）。`.scratch/next-dom.ts` 在真页面上量到的正是这一族丢掉的形状。
@@ -2880,7 +2902,7 @@ export class WordDocument {
     for (const key of MODEL_ONLY_PARA_KEYS) {
       const stated = previous[key];
       if (stated === undefined || stated === before?.[key]) continue;
-      // 一次写六个字段中的一个，键是联合的，TS 只认三者交集那一格（`undefined`），所以按名写进去。判据还是上面
+      // 一次写这些字段中的一个，键是联合的，TS 只认三者交集那一格（`undefined`），所以按名写进去。判据还是上面
       // 那一条引用比较，与 `fields[key] = stated` 同义。
       Object.assign(fields, { [key]: stated });
     }
@@ -3776,13 +3798,14 @@ export class WordDocument {
     // style lends, and one that wrote `w:val="9"` keeps that — 9 is body text (§17.3.2.26), so the paragraph has
     // taken back a level the chain was lending it.
     p.outlineLevel = p.outlineLevel ?? inherited?.outlineLevel;
-    // 那六项模型有字段、但 `ownParaStyle` 认不到的（三条保持规则、「对齐到网格」、框与底纹）走同一条：记录说了
+    // 那七项模型有字段、但 `ownParaStyle` 认不到的（三条保持规则、「对齐到网格」、「允许西文在单词中间换行」、框与底纹）走同一条：记录说了
     // 就按记录的，没说就把手里的清掉、把样式链借的那份还回来。留着不放的话，被否决的那一句还挂在字段上——画错，
     // 下一击 `syncParaSlots` 还会把它替段落写进件里。
     p.keepNext = p.keepNext ?? inherited?.keepNext;
     p.keepLines = p.keepLines ?? inherited?.keepLines;
     p.widowControl = p.widowControl ?? inherited?.widowControl;
     p.snapToGrid = p.snapToGrid ?? inherited?.snapToGrid;
+    p.wordWrap = p.wordWrap ?? inherited?.wordWrap;
     // 框是逐边的物件，链上那份按引用还回来，写侧才仍然认得出「这一段自己没说」；底纹那枚 token（`auto`）与颜色
     // 一样是说过的一句话，不是 `undefined`，所以 `??` 就够。
     p.borders = p.borders ?? inherited?.borders;
@@ -4723,6 +4746,8 @@ function paraStyle(pPr: any): ParaStyle {
   if (widow !== undefined) s.widowControl = widow;
   const snap = onOff(pPr.snapToGrid);
   if (snap !== undefined) s.snapToGrid = snap;
+  const wrap = onOff(pPr.wordWrap);
+  if (wrap !== undefined) s.wordWrap = wrap;
   const numPr = numPrOf(pPr.numPr);
   if (numPr) s.numPr = numPr;
   const outline = outlineOf(pPr.outlineLvl);
@@ -4808,7 +4833,7 @@ export const PARA_STYLE_KEYS: (keyof ParaStyle)[] = [
 const LENT_PARA_KEYS: (keyof ParaStyle)[] = [
   "align", "indentLeft", "indentLeftChars", "indentRight", "indentFirstLine", "indentFirstLineChars",
   "indentHanging", "spacingBefore", "spacingAfter", "lineSpacing", "lineSpacingRule", "numPr", "outlineLevel",
-  "keepNext", "keepLines", "widowControl", "snapToGrid", "borders", "shading",
+  "keepNext", "keepLines", "widowControl", "snapToGrid", "wordWrap", "borders", "shading",
 ];
 
 /** Every paragraph property the model holds for it, from its own `w:pPr` and from its styles. */
@@ -4819,19 +4844,19 @@ export function paraStyleOf(p: Paragraph): ParaStyle {
 }
 
 /**
- * 模型有字段、但不在 `PARA_STYLE_KEYS` 里的那七项。它们不参与 `ownParaStyle` 的「这一段自己说了哪些」那本账
+ * 模型有字段、但不在 `PARA_STYLE_KEYS` 里的那八项。它们不参与 `ownParaStyle` 的「这一段自己说了哪些」那本账
  * （整枚靠 `w:pPr` 的槽位字节带回），可**退回一条格式改动**时它们与别项是同一件事：记录没说的就是当时没说，
  * 字段里留着的那些得清掉、再让样式链重新借给它——不清的话拒绝完这一段还顶着用户刚被否决的那一句，画错了，
  * 下一次存盘还会把被否决的话替它写回件里。
  *
- * `w:pBdr` 与 `w:shd` 在这一条上与那四项没有区别：`w:pPrChange` 记的是直接格式，一条「把边框去掉」的改动被
+ * `w:pBdr` 与 `w:shd` 在这一条上与前面那几项（三条保持规则与两枚开关）没有区别：`w:pPrChange` 记的是直接格式，一条「把边框去掉」的改动被
  * 否决后，段落字段里留着的那一套框必须由样式链重新借给它，而不是继续画用户已经撤回（并被撤回）的那个盒子。
  */
-const MODEL_ONLY_PARA_KEYS = ["keepNext", "keepLines", "widowControl", "snapToGrid", "borders", "shading", "tabStops"] as const;
+const MODEL_ONLY_PARA_KEYS = ["keepNext", "keepLines", "widowControl", "snapToGrid", "wordWrap", "borders", "shading", "tabStops"] as const;
 
 /**
  * 拆段时新那一段从上一段带走的那一整套段落属性：字段那本账的**全部**，两件都算——`PARA_STYLE_KEYS` 写得出
- * 句子的，与只靠 `w:pPr` 槽位带回的那六项。
+ * 句子的，与只靠 `w:pPr` 槽位带回的那八项。
  *
  * 这一个清单由模型自己拼，不再由调用手数：手数的那一份（`doc-edit.ts` 的 `fresh`）漏掉过槽位族的四项，
  * 于是回车把上一段自己写的保持规则、那句「不吸网格」整个忘掉，而 `nextSplit` 只在样式写了 `w:next` 时才走，
@@ -4839,6 +4864,12 @@ const MODEL_ONLY_PARA_KEYS = ["keepNext", "keepLines", "widowControl", "snapToGr
  * 这一项加进来的是同一族：`w:pBdr` 与 `w:shd`。
  *
  * 值按引用带走（`numPr` 早就是这么办的），所以改这些字段是**换掉整个物件**，不是往共享的那个物件里改。
+ *
+ * 同一本账还有第二个用处：格式改动记录（`w:pPrChange`/`w:rPrChange`）「改之前那一句」带的也是这**全部**，
+ * 不是 `paraStyleOf` 那半本。`paraStyleOf` 只列得出句子的`PARA_STYLE_KEYS`，是写出侧判「哪一句归段落」的账，
+ * 拿它当记录那本账会漏掉槽位族那八项——单动「对齐到网格」或「允许西文在单词中间换行」时字段看不出改了口，
+ * 记录就不留；留下了但带的是半本的，`restoreParaStyle` 把字段与字节放回段落上时两者不同步，被否决的那一句
+ * 还剩一半在纸上画着。写侧那半本不动：补上槽位族会让 `syncParaSlots` 把样式借来的话替段落重写一遍。
  */
 export function carriedShape(p: Paragraph): ParaStyle {
   const out: Record<string, unknown> = {};
@@ -4877,6 +4908,7 @@ function paraReadSnapshot(p: Paragraph): ParaStyle {
     numPr: p.numPr,
     outlineLevel: p.outlineLevel,
     snapToGrid: p.snapToGrid,
+    wordWrap: p.wordWrap,
     // 框与底纹进这本账与 `snapToGrid` 同一个理由：写出侧只把**这一击动过的**说出去，而「动过」是对着入件时
     // 显示的那一份比的。样式链借来的那个盒子留在账上，段落自己没有 `w:pBdr` 的槽位时才不会替文件编一句。
     borders: p.borders,
@@ -5352,6 +5384,16 @@ export function syncParaSlots(p: Paragraph): void {
   // 没有一枚写 `"1"` 或 `"false"`；`.scratch/corpus-recheck2.mjs`）。字段是三态的：
   // `undefined` = 这一段没说（照样式链或缺省的「吸」），
   // 所以只有动过且说得出开/关才整枚换掉；没说过的原件一个字都不动。
+  // 「允许西文在单词中间换行」（`w:wordWrap`）用与下一支同样的三态笔，只是缺省相反：这一枚**只有写了才算说话**，
+  // 而授权口径里写了的 200 枚枚枚裸写（=允许）、说关 0 枚（`.scratch/cjk-typo-audience.py`，正文 7,357 枚 `w:pPr`）。
+  // 说关的拼法照 §17.4.77 的 `w:val="0"` 补齐，为的是让对话框那一次取消也落得了地，不是从件里抄来的形状。
+  const wrapMoved = moved("wordWrap") && p.wordWrap !== undefined;
+  if (wrapMoved) {
+    wanted.push({
+      tag: "wordWrap",
+      xml: p.wordWrap ? `<${prefix}:wordWrap/>` : `<${prefix}:wordWrap ${prefix}:val="0"/>`,
+    });
+  }
   const snapMoved = moved("snapToGrid") && p.snapToGrid !== undefined;
   if (snapMoved) {
     wanted.push({
@@ -5379,6 +5421,7 @@ export function syncParaSlots(p: Paragraph): void {
   // `<w:pageBreakBefore w:val="0"/>`（授权 46 份里 180 枚）会在认领时连同槽位一起消失。
   const owned = new Set(["pStyle", ...(p.pageBreakBefore === true ? ["pageBreakBefore"] : []), "numPr", "jc",
     ...(indMoved ? ["ind"] : []), ...(spacingMoved ? ["spacing"] : []),
+    ...(wrapMoved ? ["wordWrap"] : []),
     ...(snapMoved ? ["snapToGrid"] : []), ...(box ? ["pBdr"] : []), ...(shdMoved ? ["shd"] : [])]);
   let next = slots.filter((s) => !owned.has(s.tag));
   for (const w of wanted) {

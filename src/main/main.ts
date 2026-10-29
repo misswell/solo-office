@@ -2658,6 +2658,33 @@ function smoke(): void {
             }
             return [...groups.values()].map((g) => g.n + "x" + g.tw + "=" + g.w.toFixed(1) + (g.own ? "/" + g.own : ""));
           })(),
+          // #218：w:tblPr/w:tblpPr 浮动表在装机件里钉在哪——报**纸的像素**里的 left/top（视口读数减纸盒上沿、
+          // 除回 zoom）、宽高、data-tblp-page 与文件说的那两个缇数，外加每张表的 computed position。
+          // 比对留给 .scratch/tblppr-install-check.sh：纸高 16838 缇 = 1122.53px、页缝 24px、1117 缇 = 74.47px、
+          // 10912 缇 = 727.47px 都是它自己算的。不报文档正文，只报几何。
+          tblpPr: (() => {
+            const p = document.querySelector("#view .page");
+            if (!p) return [];
+            const zz = Number.parseFloat(p.style.getPropertyValue("zoom")) || 1;
+            const box = p.getBoundingClientRect();
+            const r2 = (n) => Math.round(n * 100) / 100;
+            return [...p.querySelectorAll("table")].map((el) => {
+              const r = el.getBoundingClientRect();
+              // 首格首句：装机件的判据按件里给表起的名字认表，不按张数——烟测自己后面还会往正文尾插表。
+              const cell = el.querySelector("td, th") || el;
+              return {
+                n: (cell.textContent || "").replace(/[\\s\\u00a0]+/g, " ").trim().slice(0, 8),
+                px: el.getAttribute("data-tblp-x") || "",
+                py: el.getAttribute("data-tblp-y") || "",
+                page: el.getAttribute("data-tblp-page") || "",
+                pos: getComputedStyle(el).position,
+                l: r2((r.left - box.left) / zz),
+                t: r2((r.top - box.top) / zz),
+                w: r2(r.width / zz),
+                h: r2(r.height / zz),
+              };
+            });
+          })(),
         };
 
         // 导航窗格: the page leaves one [data-outline] mark per paragraph whose outline level resolves, and the

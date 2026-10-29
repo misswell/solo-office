@@ -850,6 +850,45 @@ function tableAlign(t: Table): string {
   return indent ? `margin-left:${indent}px;` : "";
 }
 
+/**
+ * `w:tblPr/w:tblpPr`（浮动表，§17.4.58）：这张表的坐标写在**纸**上，不写在流里。
+ *
+ * 受众（授权 46 件，`.scratch/cantsplit-audience.py` 同趟数）：**2 枚 / 2 件**——`shareholding agreement.dotm`
+ * 的 zh_CN 与 zh_HK 各一张签章表，两句逐字相同：`w:vertAnchor="page" w:horzAnchor="page" w:tblpX="1117"
+ * w:tblpY="10912"`，左右各留 180 缇给文字。纸是 A4 11906×16838、左页边距 1080，所以那张表落在离纸左沿
+ * 74.5px、离纸上沿 727.5px 的地方（`twipsToPx`）；它比栏宽（9746 缇）还宽 568 缇，右边探出页边距——
+ * 浮动的表就是这样，栏管不着它。不画它，这张表就跟着（以下无正文）往下排，离纸上沿多远全看前面排了多少行。
+ *
+ * 说了 `w:tblpXSpec`/`w:tblpYSpec`（left/center/right、top/center/bottom）的表不在这里答：授权口径 **0 枚**，
+ * 那两句说的是「相对谁居中」，没有一处数可以量。锚不是 `page`/`margin`（`text` 那两档）也不画：留在流里至少
+ * 还是文件里那一张表，按猜出来的坐标摆才是替文件说话。
+ */
+function floatingOf(t: Table): { x: number; y: number; vert: string; horz: string } | undefined {
+  const el = /<w:tblpPr\b[^>]*\/?>/.exec(t.tblPrXml ?? "")?.[0];
+  if (!el || /\bw:tblp[XY]Spec=/.test(el)) return undefined;
+  const num = (name: string): number | undefined => {
+    const m = new RegExp(`w:${name}="(-?\\d+)"`).exec(el);
+    return m ? Number(m[1]) : undefined;
+  };
+  const vert = /w:vertAnchor="([^"]*)"/.exec(el)?.[1];
+  const horz = /w:horzAnchor="([^"]*)"/.exec(el)?.[1];
+  const x = num("tblpX");
+  const y = num("tblpY");
+  if (x === undefined || y === undefined) return undefined;
+  if ((vert !== "page" && vert !== "margin") || (horz !== "page" && horz !== "margin")) return undefined;
+  return { x, y, vert, horz };
+}
+
+/**
+ * 浮动表落点的原料，`data-` 而不是内联样式：坐标换成像素要等铺排知道这一枚在哪张纸上（`doc-layout.ts` 的
+ * `applySheetGaps`），而**文件说的是缇**——把这些数原样带上纸，落一步算一步，读回模型时也没有一句样式
+ * 冒充格式（与 `data-tbl-header` 同一条口径）。
+ */
+export const TBLP_X_ATTR = "data-tblp-x";
+export const TBLP_Y_ATTR = "data-tblp-y";
+export const TBLP_VERT_ATTR = "data-tblp-vert";
+export const TBLP_HORZ_ATTR = "data-tblp-horz";
+
 /** `w:vAlign` on a cell, in the words CSS uses for the same thing. */
 const VALIGN: Record<string, string> = { top: "top", center: "middle", bottom: "bottom" };
 
@@ -1039,7 +1078,11 @@ function renderTable(t: Table, doc: WordDocument, state: CommentState, gridPx?: 
         .join("")}</tr>`;
     })
     .join("");
-  return `<table class="doc-table"${css ? ` style="${css}"` : ""}><tbody>${rows}</tbody></table>`;
+  const floated = floatingOf(t);
+  const floatAttrs = floated
+    ? ` ${TBLP_X_ATTR}="${floated.x}" ${TBLP_Y_ATTR}="${floated.y}" ${TBLP_VERT_ATTR}="${floated.vert}" ${TBLP_HORZ_ATTR}="${floated.horz}"`
+    : "";
+  return `<table class="doc-table"${floatAttrs}${css ? ` style="${css}"` : ""}><tbody>${rows}</tbody></table>`;
 }
 
 function renderBlocks(blocks: Block[], doc: WordDocument, counters: Map<string, number> = new Map(), state: CommentState = { open: new Set(), numbers: new Map(), done: new Set() }, gridPx?: number): string {

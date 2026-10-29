@@ -24,7 +24,10 @@
  *   的注），只按声明 charging 会一路累出纸的底边距。段与段之间真正画出来的空白（`w:spacing` 的
  *   before/after 在 CSS 里合成后的那一截）并进下一段第一枚单位里，所以流的总高与纸上画的一致。
  * - 段落只在**它自己的行盒之间**断开跨页；表格按**整行**铺（一行算一行，格子里换了几行不改这个数），
- *   只读容器（`.doc-carry`）整块算一枚。`w:cantSplit` 这一版没读，所以「这行不许拆」的文件与没写的同样铺。
+ *   只读容器（`.doc-carry`）整块算一枚。`w:cantSplit` 这一版没读，所以「这行不许拆」的文件与没写的同样铺
+ *   （本版里一行本来就是整枚，两句话画出来同脸）。**浮在纸上的表**（`w:tblPr/w:tblpPr`）不产单位：它离开流、
+ *   按文件写在纸坐标系里的那一句贴到它该在的那张纸上（`parkFloatingTable` 与 `applySheetGaps` 里那一趟），
+ *   页界按「这一流里没有它」算。
  * - 另起一页的来路有三条，都是**声明**不是几何：`br[data-brk]` 里那句源文本的 `w:type` 为 `page`、
  *   `render.ts` 由 `w:pageBreakBefore` 写出的 `page-break-before:always`，以及**节界**——带
  *   `w:pPr/w:sectPr` 的段落结束它那一节，下一节从新的一页起。`w:type` 这一版没读：授权口径 46 份里段级
@@ -93,7 +96,7 @@
  * （字体度量、行盒取整、页眉占位、孤行控制都不一样，这些也都**未取证**），所以这里不写「与 WPS 一致」。
  */
 import { DEFAULT_SECTION, sectionEndsOf, twipsToPx, type Section, type WordDocument } from "../core/docx.js";
-import { BAND_MASTER_CLASS, BAND_SOURCE_CLASS, CARRY_CLASS, PAGE_BORDER_CLASS, TBL_HEADER_ATTR } from "../core/render.js";
+import { BAND_MASTER_CLASS, BAND_SOURCE_CLASS, CARRY_CLASS, PAGE_BORDER_CLASS, TBL_HEADER_ATTR, TBLP_HORZ_ATTR, TBLP_VERT_ATTR, TBLP_X_ATTR, TBLP_Y_ATTR } from "../core/render.js";
 
 /**
  * 铺在纸上的一枚单位：一个行盒，或一枚不能拆的东西（表格的一行、一个只读容器）。
@@ -410,6 +413,31 @@ function measuredRows(table: HTMLTableElement): { el: HTMLTableRowElement; rect:
   return out;
 }
 
+/**
+ * 浮在纸上的那几张表（`w:tblPr/w:tblpPr`，§17.4.58）：文件把它们的坐标写在纸上，它们不占流里的高。
+ * 认的是 `render.ts` 盖的 `data-tblp-*`——只认能画的那一档（页/边距锚 + 两枚缇数，见 `floatingOf`）。
+ */
+function floatingTablesOf(page: HTMLElement): HTMLTableElement[] {
+  return [...page.children].filter(
+    (el): el is HTMLTableElement => el.tagName === "TABLE" && el.hasAttribute(TBLP_X_ATTR) && el.hasAttribute(TBLP_Y_ATTR),
+  );
+}
+
+/**
+ * 让浮动表离开流：`position:absolute` 之后它不占高度，`unitBlocksOf` 量行这一趟也就不会再数它一枚——
+ * 它与它后面那一块之间原本那段空白不再算进正文，页界按**文件里没有这张表**的那一流算，这正是浮动表的
+ * 意思（字不绕它排，只是它压在纸上）。落点先按「第 1 张纸 + 文件坐标」写一版：量不出纸（`applySheetGaps`
+ * 不给 plan）时，这就是它唯一说得出的位置。
+ */
+function parkFloatingTable(t: HTMLTableElement): void {
+  const x = Number(t.getAttribute(TBLP_X_ATTR));
+  const y = Number(t.getAttribute(TBLP_Y_ATTR));
+  t.style.position = "absolute";
+  t.style.margin = "0";
+  t.style.left = `${twipsToPx(Number.isFinite(x) ? x : 0)}px`;
+  t.style.top = `${twipsToPx(Number.isFinite(y) ? y : 0)}px`;
+}
+
 /** 一块画出来的东西自己的上下沿（不含它与上一块之间那段空白）。枚的高与沿都按**视口像素**报。 */
 function unitsOfBlock(el: HTMLElement, zoom: number): PlacedUnit[] {
   if (el.tagName === "TABLE") {
@@ -473,6 +501,9 @@ function unitBlocksOf(page: HTMLElement): { el: HTMLElement; units: PlacedUnit[]
   for (const child of [...page.children]) {
     const el = child as HTMLElement;
     if (el.classList.contains(PAGE_BORDER_CLASS) || el.classList.contains(SHEET_STRIP_CLASS) || el.classList.contains(BAND_CLONE_CLASS) || el.classList.contains(BAND_MASTER_CLASS)) continue;
+    // 浮在纸上的表不是流里的一员（`w:tblpPr`，见 `floatingTablesOf`）：它不产单位，也不该把它的高算成
+    // 下一块之前的空白——`applySheetGaps` 已经让它离开流，量纸高的每一条路读的都是同一份。
+    if (el.tagName === "TABLE" && el.hasAttribute(TBLP_X_ATTR) && el.hasAttribute(TBLP_Y_ATTR)) continue;
     const rect = el.getBoundingClientRect();
     const gap = Math.max(0, rect.top - cursor);
     const units = unitsOfBlock(el, zoom);
@@ -1719,10 +1750,13 @@ export type SheetLayout = { strips: SheetStrip[]; pages: number };
 
 export function applySheetGaps(page: HTMLElement, doc: WordDocument): SheetLayout | undefined {
   clearSheetGaps(page);
+  // 浮在纸上的表（`w:tblPr/w:tblpPr`）先离开流：它不占高度，量行的这一趟不该数它——页界按「这一流里没有
+  // 这张表」算，正是浮动表的意思（字不绕它排，它只压在纸上）。落点等这一趟量完纸再算。
+  const floats = floatingTablesOf(page);
+  for (const t of floats) parkFloatingTable(t);
   const plan = planOf(page, doc);
   if (!plan) return undefined;
   const { blocks, units, unitSections, places, pages } = plan;
-  if (pages < 2) return { strips: [], pages };
   const sections = doc.sections.length ? doc.sections : [DEFAULT_SECTION];
   // 下一张纸的正文开始线 = 节说的上边距 + 这一节为页眉让出的那一截。第一张由纸盒画出来的上内边距表达，
   // 往后的每一张由这里的推距表达——同一趟 `applyBandYield` 量出来的同一个数（#157：真机上带子在纸内，
@@ -1763,6 +1797,43 @@ export function applySheetGaps(page: HTMLElement, doc: WordDocument): SheetLayou
   for (let target = 2; target <= pages; target++) {
     sheetTop.push(sheetTop[target - 1]! + paperHOf(unitSections[firstUnitOfPage(target - 1)] ?? 0) + SHEET_GAP_PX);
   }
+  // 浮动表贴到纸上（`w:tblpPr`，§17.4.58）：文件把左上角写在**纸的坐标系**里——锚 `page` 从纸沿量起，
+  // `margin` 从边距线量起。纵坐标落在哪一张纸上，看它后面那一块被铺到第几张（后面没有块时才看前面那一块）：
+  // 表自己已经离开流，页界不认识它。（Word 的锚是一枚段落标记；这里表与相邻那段同在一处，取谁都是同一张纸。）
+  const unitStart = new Map<HTMLElement, number>();
+  const unitCount = new Map<HTMLElement, number>();
+  for (let i = 0, at = 0; i < blocks.length; i++) {
+    unitStart.set(blocks[i]!.el, at);
+    unitCount.set(blocks[i]!.el, blocks[i]!.units.length);
+    at += blocks[i]!.units.length;
+  }
+  const pageOfBlock = (el: HTMLElement, edge: "first" | "last"): number | undefined => {
+    const at = unitStart.get(el);
+    if (at === undefined) return undefined;
+    return places[edge === "first" ? at : at + (unitCount.get(el) ?? 1) - 1];
+  };
+  const kids = [...page.children];
+  for (const t of floats) {
+    const here = kids.indexOf(t);
+    let sheet: number | undefined;
+    for (let i = here + 1; i < kids.length && sheet === undefined; i++) sheet = pageOfBlock(kids[i] as HTMLElement, "first");
+    for (let i = here - 1; i >= 0 && sheet === undefined; i--) sheet = pageOfBlock(kids[i] as HTMLElement, "last");
+    const on = sheet ?? 1;
+    const marginOf = sections[unitSections[firstUnitOfPage(on)] ?? 0] ?? sections[0]!;
+    const x = Number(t.getAttribute(TBLP_X_ATTR)) || 0;
+    const y = Number(t.getAttribute(TBLP_Y_ATTR)) || 0;
+    // 纵坐标也按纸沿起算：`margin` 那一档量的是上边距那条线，不把带子让出的那一截算进去——那是我们贴带子的
+    // 地方，不是文件说的话。
+    // `sheetTop[n]` 就是第 n 张纸的上沿（`sheetTop[0]` 与 `sheetTop[1]` 都是 0，第 1 张的上沿），
+    // 与下面 `sheetBottom = sheetTop[p] + 纸高` 同一个刻度。
+    const top =
+      sheetTop[on]! + (t.getAttribute(TBLP_VERT_ATTR) === "margin" ? twipsToPx(marginOf.margins.top) : 0) + twipsToPx(y);
+    const left = (t.getAttribute(TBLP_HORZ_ATTR) === "margin" ? twipsToPx(marginOf.margins.left) : 0) + twipsToPx(x);
+    t.style.left = `${left}px`;
+    t.style.top = `${top}px`;
+    t.dataset.tblpPage = String(on);
+  }
+  if (pages < 2) return { strips: [], pages };
   const opaque = (el: HTMLElement | undefined): boolean => !!el && (el.tagName === "TABLE" || el.classList.contains(CARRY_CLASS));
   const strips: SheetStrip[] = [];
   // 推距是三角形方程组：第 p 道缝的垫片会把**下面所有内容**一起推下沉，所以往下解时每一道都要扣掉上面

@@ -1134,6 +1134,52 @@ export interface HfSegment {
 }
 
 /**
+ * Where one band paragraph says it sits on the paper. Read from the paragraph's own `w:pPr` — the same two
+ * children a body paragraph is asked — and used only for drawing: the part travels back as its own bytes, so
+ * nothing here is ever written.
+ */
+export interface BandPlace {
+  /**
+   * `w:jc`: this paragraph's own statement, or the one its `w:pStyle` chain lends beneath it. `undefined` means
+   * nobody in the file said, and the page draws what its stylesheet says, as it did before.
+   * 授权 46 份的眉脚部件共 76 段里，**12 段自己说 `center`**（6 个全路径件 / 3 份模板名），另有 2 段从样式链借到
+   * `center`、48 段借到 `left`、2 段借到 `both`、12 段谁都没说（`.scratch/band-para-align-audience.py`，链在同包
+   * `word/styles.xml` 里按 `w:pStyle → w:basedOn` 走）。此前带子里一枚排版属性都没贴，所以那 14 段居中全画在左沿。
+   */
+  align?: string;
+  /** `w:pPr/w:framePr` — the frame that paragraph is drawn as. See `FramePlace`. */
+  frame?: FramePlace;
+}
+
+/**
+ * The part of `w:framePr` (§17.4.2.5) this page can draw. A file puts a frame's box where its own sentence
+ * names, not where the column flows, so a footer that says `w:hAnchor="margin" w:xAlign="right"` is the page
+ * number at the **right** margin rather than at the left.
+ *
+ * Only the shapes the authorized 46 份 actually write are honoured. Every one of its 6 枚 `w:framePr`（全在页脚，
+ * 4 个全路径件 / 2 份模板名）says exactly `w:wrap="around" w:vAnchor="text" w:hAnchor="margin" w:y="1"` plus
+ * `w:xAlign` right ×4 / center ×2, and **0 枚 says `w:hRule`, `w:x`, `w:w`, `w:h`, `w:*Space*` or
+ * `w:hAnchor="page"`**（`.scratch/layout-families-audience.py` 与 `.scratch/framepr-tblp-detail.py` 两趟同口径）。
+ * So `hAnchor` gates the alignment: a box anchored to the **page** would swing outside the margin column this
+ * band is drawn in, and nothing measured here says how far, so it is left undrawn rather than guessed.
+ * `w:wrap` decides how body text flows around the box; a band has no body text to flow, so it is not read.
+ */
+export interface FramePlace {
+  /** `w:hAnchor`: whose box the offsets count from. `margin` and `text` share this band's content column. */
+  hAnchor?: string;
+  /** `w:vAnchor`: named so a later reader can see which anchor the `y` below counts from. */
+  vAnchor?: string;
+  /** `w:xAlign`: the edge of the anchor box this frame is pushed to. */
+  xAlign?: string;
+  /** `w:yAlign`: same sentence, vertically. 0 枚 writes it; read so a file that does is not silently dropped. */
+  yAlign?: string;
+  /** `w:x`: offset from that edge, in twips. With `w:hRule` unmodelled this is read as the left-edge offset the attribute's own default (§17.4.2.5 `hRule="left"`) describes. */
+  xTwips?: number;
+  /** `w:y`: offset from the anchor, in twips. All 6 枚 say `1` — 0.07px, so this moves ink only where a file says more. */
+  yTwips?: number;
+}
+
+/**
  * A header or footer part the model can show and (when simple) edit. Rich parts — tables, containers,
  * tracked changes — stay byte-identical on save and are not editable. Two shapes that look rich are read
  * through instead: a `PAGE` or `NUMPAGES` field sitting at run level travels as one atom with the text
@@ -1165,6 +1211,14 @@ export interface HeaderFooter {
    * A save writes those pieces back into every copy of the box the file kept, and leaves the frame alone.
    */
   boxedParagraphs?: boolean[];
+  /**
+   * Per paragraph, what it says about its own place on the band (`BandPlace`). Paragraph i lines up with
+   * paragraph i of `source`, the same pairing `segments` keeps, so the array keeps a hole (`undefined`) where a
+   * paragraph says nothing rather than shifting every later paragraph up a slot. A band with nothing stated
+   * anywhere leaves `place` off entirely rather than carrying 76 empty objects.
+   * Draw-only: a save splices text into the part's own bytes and never reads this array.
+   */
+  place?: (BandPlace | undefined)[];
   /**
    * The part as the file wrote it, `""` for one this session created. A save splices its edits into
    * these bytes rather than rebuilding the part, so the root's declarations and every paragraph the
@@ -4246,6 +4300,7 @@ export class WordDocument {
     const editable = walked !== null && parsed.every((p) => p.ok);
     const segments = editable ? parsed.map((p) => p.segs) : undefined;
     const paragraphs = segments ? segments.map(hfSegmentsText) : paraSpans.map(hfParagraphText);
+    const place = paraSpans.map((s) => this.bandPlace(s));
     const hf: HeaderFooter = {
       part,
       id,
@@ -4254,10 +4309,52 @@ export class WordDocument {
       baseline: [...paragraphs],
       ...(segments ? { segments, baselineSegments: segments.map(copyHfSegments) } : {}),
       ...(segments && parsed.some((p) => p.boxed) ? { boxedParagraphs: parsed.map((p) => p.boxed) } : {}),
+      ...(place.some((p) => p !== undefined) ? { place } : {}),
       source: partRaw,
     };
     this.bandByPart.set(part, hf);
     return hf;
+  }
+
+  /**
+   * One band paragraph's own sentence about where it sits, with the alignment its style chain lends beneath it.
+   *
+   * Read off the same span scan a save splices into, so paragraph i of the page is paragraph i of the bytes —
+   * pairing a parsed tree against these spans would let the two count paragraphs differently.
+   *
+   * The paragraph's own `w:jc` wins; under it sits `w:pStyle`'s chain, which is where most of the band's answer
+   * lives (of those 76 段, 12 say it themselves and 52 take one from the chain — 48 of those saying `left`, which
+   * is the number the chain really lends and not a guess). `w:framePr` is the paragraph's alone: 授权 46 份的
+   * `word/styles.xml` writes it 0 times, so there is no chain to walk for it (`.scratch/layout-families-audience.py`).
+   */
+  private bandPlace(span: { xml: string }): BandPlace | undefined {
+    const pr = childSpans(elementContent(span.xml)).find((k) => k.tag === "pPr");
+    if (!pr) return undefined;
+    const inner = childSpans(elementContent(pr.xml));
+    const attrs = (tag: string): Record<string, string> | undefined => {
+      const el = inner.find((k) => k.tag === tag);
+      return el ? attrsOf(el.xml) : undefined;
+    };
+    const twips = (raw: string | undefined): number | undefined => {
+      const n = raw === undefined ? NaN : Number(raw);
+      return Number.isFinite(n) ? n : undefined;
+    };
+    const out: BandPlace = {};
+    const align = attrs("jc")?.val ?? this.paraLent(attrs("pStyle")?.val)?.align;
+    if (align) out.align = align;
+    const frame = attrs("framePr");
+    if (frame) {
+      const f: FramePlace = {};
+      for (const [key, name] of [["hAnchor", "hAnchor"], ["vAnchor", "vAnchor"], ["xAlign", "xAlign"], ["yAlign", "yAlign"]] as const) {
+        if (frame[name]) f[key] = frame[name];
+      }
+      const x = twips(frame.x);
+      const y = twips(frame.y);
+      if (x !== undefined) f.xTwips = x;
+      if (y !== undefined) f.yTwips = y;
+      out.frame = f;
+    }
+    return out.align === undefined && out.frame === undefined ? undefined : out;
   }
 
   /**

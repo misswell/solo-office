@@ -264,6 +264,55 @@ function smoke(): void {
         const title = document.getElementById("title")?.textContent;
         const page = view?.querySelector(".page");
         if (!page) return { title, view: view?.firstElementChild?.className, heading: view?.querySelector("h1, .para")?.textContent?.slice(0, 40) };
+        // #211：带子里那一段说自己坐在哪（w:jc 与 w:framePr）——这一腿一枚也不按，也不打字，所以在最开头那一跳
+        // （选区+插字）之前读：读的是壳刚画完、还没被本烟测牵动过的那张纸。第二趟开的是第一趟写回的那份，
+        // 于是「两趟读数一字不差 + 盘上 footer 字节一字未改」就是装机壳自己把落点画出来、又原样带回的唯一证据。
+        // 件由 .scratch/make-band-place-smoke.ts 现拼（照 tests/helpers/make-band-place.ts 的同一份形状，带子 8 段）。
+        // 问三样：① 壳把那句落点写没写进行内样式（style 属性字面，与缩放无关）；② 写了之后盒子与那一行墨在带子
+        // 内容盒里落到哪（框摆右的那一枚必须贴右沿，锚在纸上那一枚照旧走常规流）；③ 正文上沿与纸缝数——这两格
+        // 不动才谈得上「落点只上身在这一行，没牵动铺排」。量的全是距离与属性，一个字的文档内容也不出页面。
+        // 几何按纸的单位算：rect 会跟着 zoom 放大，getComputedStyle 的 padding 却不放大（DOM 门禁那一腿踩过同一坑）。
+        const zPaper = (el) => { const z = parseFloat(getComputedStyle(el).zoom); return z > 0 ? z : 1; };
+        const round1 = (n) => Math.round(n * 10) / 10;
+        const gapRead = (el, boxL, boxR, bandTop) => {
+          const cs = getComputedStyle(el);
+          const r = el.getBoundingClientRect();
+          const rg = document.createRange();
+          rg.selectNodeContents(el);
+          const lines = rg.getClientRects();
+          // 墨的左右沿只在 Range 交回来的那些行矩形里取，不许拿外框当起点：外框是整栏宽，一当起点，
+          // 居中与靠右的那几行会被自己的盒子吃掉，读回来永远是 0/0（这一趟第一次就踩了它）。
+          let inkL = -1, inkR = -1;
+          for (let q = 0; q < lines.length; q++) {
+            if (lines[q].width < 0.5) continue;
+            if (inkL < 0 || lines[q].left < inkL) inkL = lines[q].left;
+            if (inkR < 0 || lines[q].right > inkR) inkR = lines[q].right;
+          }
+          if (inkL < 0) { inkL = r.left; inkR = r.right; }
+          return { css: el.getAttribute("style") ?? "", align: cs.textAlign, pos: cs.position, boxW: round1(r.width / zz), gL: round1(r.left / zz - boxL), gR: round1(boxR - r.right / zz), iL: round1(inkL / zz - boxL), iR: round1(boxR - inkR / zz), field: el.querySelectorAll("[data-field]").length };
+        };
+        let bandLeg = null;
+        const footBand = page.querySelector(".hf-footer");
+        const zz = zPaper(page);
+        if (footBand) {
+          const bCss = getComputedStyle(footBand);
+          const bRect = footBand.getBoundingClientRect();
+          const boxL = bRect.left / zz + parseFloat(bCss.paddingLeft);
+          const boxR = bRect.right / zz - parseFloat(bCss.paddingRight);
+          // 正文里第一个进流的块：两只带子（纸上的 .hf 与藏起来的复件）都带 data-hf-part，是绝对摆的，不算正文；
+          // STYLE/SCRIPT 也不占流。谁排在最前就问谁——本烟测后面那一腿会在正文前插一张表，按「第一段」量的第二趟
+          // 读到的是表后面那一格（96 变 112 踩的就是这个，不是落点把正文推下去了）。
+          const firstFlow = [...page.children].find((e) => !e.hasAttribute("data-hf-part") && e.tagName !== "STYLE" && e.tagName !== "SCRIPT");
+          bandLeg = {
+            paras: [...footBand.children].filter((e) => e.classList.contains("hf-p")).map((e) => gapRead(e, boxL, boxR, bRect.top / zz)),
+            padL: round1(parseFloat(bCss.paddingLeft)), padR: round1(parseFloat(bCss.paddingRight)), boxW: round1(boxR - boxL), zoom: zz,
+            seams: document.querySelectorAll("#view .page").length,
+            // 正文第一块离**纸顶**多远（纸的单位）：件里 w:pgMar@w:top=1440 缇 = 96px。不减 padding——减了就永远得 0。
+            flowTop: firstFlow ? round1(firstFlow.getBoundingClientRect().top / zz - page.getBoundingClientRect().top / zz) : null,
+            flowKind: firstFlow ? String(firstFlow.className).split(" ")[0] : "",
+            kids: [...page.children].map((e) => e.tagName + "." + String(e.className).split(" ")[0]).join("|"),
+          };
+        }
         const blocks = page.children.length;
         const last = page.children[blocks - 1];
         const range = document.createRange();
@@ -2538,7 +2587,7 @@ function smoke(): void {
         const recovered = { cells: document.querySelectorAll(".sheet-wrap td").length, title: document.getElementById("title")?.textContent };
         // The run ends on a modified document, so quitting goes through the unsaved prompt.
         // A PDF the export asked for shows up in saveAsWrites, next to the pptx/xlsx saves.
-        return { docPart, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
+        return { docPart, bandLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
       })()`;
       void last?.webContents
         .executeJavaScript(probe)

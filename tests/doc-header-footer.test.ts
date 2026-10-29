@@ -272,7 +272,9 @@ describe("docx header/footer parts travel as the file wrote them", () => {
 describe("docx 页眉页脚：显示", () => {
   it("draws one line per paragraph on the paper, with the tab kept", () => {
     const html = renderWord(WordDocument.openBytes(makeStyledHeaderDocx()));
-    expect(html).toContain('<div class="hf-p">机密\t第一段</div>');
+    // 这一段自己写了 `w:jc w:val="right"`，纸面就得靠右（#211：此前带子里清一色左对齐，段说的话没人问）。
+    // 第二段借的是 `Footer` 样式，那份 `word/styles.xml` 里没写 `w:jc`，所以一个属性都不多。
+    expect(html).toContain('<div class="hf-p" style="text-align:right">机密\t第一段</div>');
     expect(html).toContain('<div class="hf-p">第二段</div>');
     // 带子排在纸盒**之内**、正文块之后（#157：此前它排在纸盒之外，画在纸上看不到，正文也从没为它让位）。
     // 排在最后一条与页面边框同一先例：编辑器按块在 `.page` 孩子里的下标寻址，任何排在前面的装饰会把下标顶偏。

@@ -1,4 +1,4 @@
-import type { Block, Carried, CarriedInline, HeaderFooter, Inline, NumberLevel, PageBorder, Paragraph, PropSlot, RowInfo, Section, Table, TableBorder, TableCell, WordDocument } from "./docx.js";
+import type { Block, BandPlace, Carried, CarriedInline, HeaderFooter, Inline, NumberLevel, PageBorder, Paragraph, PropSlot, RowInfo, Section, Table, TableBorder, TableCell, WordDocument } from "./docx.js";
 import { DEFAULT_SECTION, hasLine, LINE_ONE, MARGIN_SIDES, PAGE_BORDER_SIDES, PBDR_ORDER, headingLevel, lineGridPitchTwips, twipsToPx } from "./docx.js";
 import type { CommentAnchor } from "./comments.js";
 import type { Presentation, Shape, SlideParagraph } from "./pptx.js";
@@ -1039,17 +1039,59 @@ function renderPageBorders(sec: Section): string {
 }
 
 /**
+ * 那一段在带子里摆在哪：`BandPlace` 的两句话换成这一格的四条声明。
+ *
+ * 框摆位（`w:framePr@w:xAlign`）与段内对齐（`w:jc`）问的不是同一件事，所以两条可以同时给：前者把整段收成它自己的
+ * 墨宽再推到锚盒声明的那一侧，后者管框里那几行怎么排。锚盒取 `margin`/`text`——带子的内容盒就是页边距盒
+ * （`renderWord` 里那句 `padding-left:var(--pad-l);padding-right:var(--pad-r)`），这两锚指的是同一栏。
+ * `w:hAnchor="page"` 的锚是整张纸，比这一栏宽出一整个页边距，授权 46 份写 0 枚，所以不猜：照这一栏以外什么都不动。
+ * 说了 `xAlign` 就不叠加 `w:x`（§17.4.2.5：对齐一说出，按左沿量的 `x` 让位）；没说才按声明的缇偏。
+ */
+function bandPlaceCss(p?: BandPlace): string {
+  if (!p) return "";
+  const out: string[] = [];
+  const f = p.frame;
+  // 两只锚各自问一件事，所以要各自判：带子的内容盒是页边距盒（`renderWord` 里那句 `padding-left:var(--pad-l);
+  // padding-right:var(--pad-r)`），`hAnchor="margin"`/`"text"` 指的是同一栏，`"page"` 是宽出一整个页边距的另一张
+  // 尺；纵向同理，`vAnchor="text"` 才坐在这一段自己的行位上，`"page"` 是从纸沿量的。两者在授权 46 份里各写 0 枚
+  // （那 6 枚全是 `vAnchor="text" hAnchor="margin"`），所以纸沿那一只不猜——横竖都不落，这一格照旧是个常规流的段。
+  const shiftX = f !== undefined && (f.hAnchor === undefined || f.hAnchor === "margin" || f.hAnchor === "text");
+  const shiftY = f !== undefined && (f.vAnchor === undefined || f.vAnchor === "text");
+  const edge = f?.xAlign === "right" || f?.xAlign === "end" ? "right" : f?.xAlign === "center" ? "center" : "";
+  let moved = false;
+  if (edge && shiftX) {
+    out.push("width:fit-content", edge === "right" ? "margin-left:auto" : "margin-left:auto;margin-right:auto");
+  } else if (shiftX && f?.xTwips) {
+    out.push("position:relative", `left:${twipsToPx(f.xTwips)}px`);
+    moved = true;
+  }
+  // 偏移要有落脚处才生效：`top` 落在还在常规流里的盒子上一天不动。`xAlign` 那一推之后同样要挪，所以补
+  // `position:relative` 再给 `top`——相对定位不参与 auto 边距的算法，那一推不受影响。
+  if (shiftY && f?.yTwips) {
+    if (!moved) out.push("position:relative");
+    out.push(`top:${twipsToPx(f.yTwips)}px`);
+  }
+  if (p.align && ALIGN[p.align]) out.push(`text-align:${ALIGN[p.align]}`);
+  return out.join(";");
+}
+
+/**
  * A band's paragraphs as the page shows them. `.hf-p` is `white-space: pre-wrap`, so a tab the part holds stays
  * a tab on screen and comes back as one when the line is read out of the page again. A paragraph that holds a
  * field is drawn piece by piece, because the field is not text and the order the two sit in is the file's, not
  * the reader's.
+ *
+ * 段落自己说过落点才写 `style`：谁都没说的那一段（授权 46 份的 76 段里 12 段）一个属性都不多，画出来与这一片
+ * 之前逐字节相同。这一句只上行内样式，不动 `.hf-p` 这一层结构——带子的文字按段下标从纸面上读回去，多一枚属性
+ * 不改下标，改结构才改。
  */
 function bandParagraphsHtml(area: HeaderFooter): string {
   return (
     area.paragraphs
       .map((_, i) => {
         const segs = area.segments?.[i] ?? [{ text: area.paragraphs[i] ?? "" }];
-        return `<div class="hf-p">${segs.map((s) => (s.carry ? hfFieldTag(s.carry) : esc(s.text ?? ""))).join("") || "<br>"}</div>`;
+        const css = bandPlaceCss(area.place?.[i]);
+        return `<div class="hf-p"${css ? ` style="${css}"` : ""}>${segs.map((s) => (s.carry ? hfFieldTag(s.carry) : esc(s.text ?? ""))).join("") || "<br>"}</div>`;
       })
       .join("") || '<div class="hf-p"><br></div>'
   );

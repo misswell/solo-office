@@ -200,8 +200,10 @@ export class DocStatusBar {
     if (at) this.lastPage = at.page;
     // 光标不在纸面上时几何那几格不给数，但总页数不跟着光标走：那一趟里已经现量过，量不出来才留空。
     const total = at?.pages ?? st.pages;
-    this.pageItem.textContent = total === undefined ? "" : `第 ${this.lastPage} 页`;
-    this.pagesItem.textContent = total === undefined ? "" : `共 ${total} 页`;
+    // 页码/页面两格的字面照 WPS（#240）：「页码: 1」「页面: 1/5」——页面那一格把当前与总数合在一处，
+    // 不再是「共 X 页」的单独一句；`lastPage` 在光标跑出纸面时保留上一次读数（文件头那条口径）。
+    this.pageItem.textContent = total === undefined ? "" : `页码: ${this.lastPage}`;
+    this.pagesItem.textContent = total === undefined ? "" : `页面: ${this.lastPage}/${total}`;
     const cs = this.editor.caretSection();
     if (cs) {
       this.lastSection = cs.section;

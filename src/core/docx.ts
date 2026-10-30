@@ -1321,6 +1321,7 @@ export interface ListAddition {
 
 const TWIPS_PER_PX = 15;
 export const twipsToPx = (tw: number): number => tw / TWIPS_PER_PX;
+export const pxToTwips = (px: number): number => px * TWIPS_PER_PX;
 
 /**
  * 「页面设置」上的单位是厘米，而 `w:pgSz`/`w:pgMar` 以缇计（ECMA-376 §17.3.2.13），一条 = 1440/2.54 缇。

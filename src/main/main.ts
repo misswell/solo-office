@@ -355,6 +355,19 @@ function smoke(): void {
             const off = { hidden: ru.hidden, h: round1(ru.getBoundingClientRect().height), pageH: round1(page.getBoundingClientRect().height) };
             rb?.click();
             await wait(120);
+            // 标尺上那三枚缩进标记要能拖：把光标放进第一段，看尺子报不报纸面几何与可拖光标。
+            // 这里只读数、不按下——落笔那一趟由 DOM 闸门（ruler-dom）在真实 Chrome 里走。
+            const firstPara = view.querySelector(".page .para");
+            if (firstPara) {
+              const r0 = document.createRange();
+              r0.setStart(firstPara.firstChild ?? firstPara, 0);
+              r0.collapse(true);
+              const s0 = document.getSelection();
+              s0?.removeAllRanges();
+              s0?.addRange(r0);
+              await wait(120);
+            }
+            const ind = ru.querySelector('[data-ruler-mark="left"]');
             rulerLeg = {
               sibling: ru.nextElementSibling === page,
               one: view.querySelectorAll(".doc-ruler").length,
@@ -365,6 +378,7 @@ function smoke(): void {
               unit: (ru.querySelector(".ruler-unit")?.textContent ?? "").length > 0,
               sticky: getComputedStyle(ru).position,
               hasButton: !!rb,
+              drag: ind ? { cursor: getComputedStyle(ind).cursor, geom: !!ru.dataset.dragGeom, marks: ru.querySelectorAll("[data-ruler-mark]").length } : null,
               off,
               back: { hidden: ru.hidden, h: round1(ru.getBoundingClientRect().height) },
               dirtyKept: (document.getElementById("title")?.textContent ?? "") === tit0,

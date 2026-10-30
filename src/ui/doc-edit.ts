@@ -12,7 +12,7 @@ import { applyBandYield, applyFitText, applySheetGaps, applyTabStops, BAND_CLONE
 import { ReviewPanel } from "./doc-review.js";
 import { OutlinePanel } from "./doc-outline.js";
 import { openPageSetup as showPageSetupDialog } from "./doc-page-setup.js";
-import { drawRuler, ensureRuler } from "./doc-ruler.js";
+import { bindRulerDrag, drawRuler, ensureRuler, type RulerDragKind } from "./doc-ruler.js";
 import { currentUnit } from "./doc-units.js";
 import { CELL_BOX_SIDES, PARA_BOX_SIDES, applyBoxPatch, cellOuterPatch, showCellBoxDialog, showParaBorderDialog, showTableBoxDialog, TABLE_BOX_SIDES, TABLE_EDGE_SHAPE } from "./doc-para-border.js";
 import type { BoxPatch, BoxState, CellBoxSide, ParaBoxPatch, ParaBoxState, TableBoxSide } from "./doc-para-border.js";
@@ -1184,6 +1184,50 @@ export class DocEditor {
     const el = node ? (node instanceof Element ? node : node.parentElement) : null;
     const caret = el?.closest<HTMLElement>(".para") ?? null;
     drawRuler(ruler, page, { unit: currentUnit(), zoom: this.zoomLevel || 1, caret });
+    bindRulerDrag(ruler, {
+      enabled: () => this.revisionView !== "original",
+      commit: (kind, twips) => this.setIndentMark(kind, twips),
+      repaint: () => this.paintRuler(),
+    });
+  }
+
+  /**
+   * 标尺上拖出来的缩进落到件里那一句：`kind` 说拖的是哪一枚，`twips` 是纸面折回来的缇（首行**正数往里、
+   * 负数悬挂**，与 `w:firstLine`/`w:hanging` 一一对应）。不替 WPS 发明吸附步长——真机那一步还没取证，
+   * 拖到哪个像素就落哪个 15 缇。拖到绝对位置的那一枚会清掉自己的字符孪生（`w:*Chars`），
+   * 不然两个数在件里互相打架。改不动（同一格、只读）时返回 false，标尺自己把标记摆回原处。
+   */
+  setIndentMark(kind: RulerDragKind, twips: number): boolean {
+    if (this.revisionView === "original") return false;
+    const targets = this.selectionParagraphs();
+    if (!targets.length) return false;
+    const patch: Partial<Paragraph> =
+      kind === "left"
+        ? { indentLeft: twips || undefined, indentLeftChars: undefined }
+        : kind === "right"
+          ? { indentRight: twips || undefined }
+          : twips > 0
+            ? { indentFirstLine: twips, indentFirstLineChars: undefined, indentHanging: undefined }
+            : twips < 0
+              ? { indentFirstLine: undefined, indentFirstLineChars: undefined, indentHanging: -twips }
+              : { indentFirstLine: undefined, indentFirstLineChars: undefined, indentHanging: undefined };
+    const keys = Object.keys(patch) as (keyof Paragraph)[];
+    if (!targets.some((p) => keys.some((k) => p[k] !== patch[k]))) return false;
+    this.snapshot(this.caretPath());
+    for (const paragraph of targets) {
+      const was = carriedShape(paragraph);
+      const wasSlots = paragraph.pPrSlots;
+      Object.assign(paragraph, patch);
+      syncParaSlots(paragraph);
+      if (this.trackRevisions && JSON.stringify(was) !== JSON.stringify(carriedShape(paragraph))) {
+        paragraph.revFormat = this.signParagraphRevision(paragraph, was, wasSlots);
+      }
+    }
+    const caret = this.caretPath();
+    this.render();
+    if (caret) this.setCaret(this.clamp(caret));
+    this.hooks.changed();
+    return true;
   }
 
   /** Ids are re-stamped per render because the model and the DOM are built in the same pass. */

@@ -27,7 +27,7 @@
  * 的那一段）。带子里（`.hf-p`）同理——它不在 `.page` 的正文流里。
  */
 
-import { twipsToPx } from "../core/docx.js";
+import { pxToTwips, twipsToPx } from "../core/docx.js";
 import { TAB_STOPS_ATTR, parseTabStops } from "./doc-layout.js";
 import { currentUnit, pxPerUnit, unitDef, type Unit } from "./doc-units.js";
 
@@ -81,6 +81,9 @@ export interface RulerMarks {
   left?: number;
   first?: number;
   right?: number;
+  /** 段自己画在盒子里的左右内边距（列表缩进与段落边框的留白都在这一条里），纸面像素。 */
+  inlineLeft?: number;
+  inlineRight?: number;
   tabs: { x: number; val: "left" | "center" | "right" }[];
 }
 
@@ -102,16 +105,172 @@ export function rulerMarksOf(page: HTMLElement, para: HTMLElement | null, zoom: 
   const rect = page.getBoundingClientRect();
   const box = para.getBoundingClientRect();
   const cs = getComputedStyle(para);
-  const left = (box.left - rect.left) / scale + pxOf(cs.paddingLeft);
+  const padLeft = pxOf(cs.paddingLeft);
+  const padRight = pxOf(cs.paddingRight);
+  const left = (box.left - rect.left) / scale + padLeft;
   marks.left = left;
   marks.first = left + pxOf(cs.textIndent);
-  marks.right = (box.right - rect.left) / scale - pxOf(cs.paddingRight);
+  marks.right = (box.right - rect.left) / scale - padRight;
+  marks.inlineLeft = padLeft;
+  marks.inlineRight = padRight;
   // 制表位的位置与 `applyTabStops` 一样从正文栏左沿起算；这里只画，不问几何，所以直接用同一枚 `twipsToPx`。
   const column = pxOf(page.style.getPropertyValue("--pad-l"));
   for (const stop of parseTabStops(para.getAttribute(TAB_STOPS_ATTR) ?? "")) {
     marks.tabs.push({ x: column + twipsToPx(stop.posTwips), val: stop.val });
   }
   return marks;
+}
+
+/**
+ * 标尺上能拖的三枚标记。制表位（`.ruler-tab`）不在这条路上：WPS 那边它拖到哪一档、右键菜单怎么落，
+ * 都还没有实据。
+ */
+export type RulerDragKind = "first" | "left" | "right";
+
+/** 拖标记要的几何，全是纸面像素（`zoom` 之前那一层）：纸宽、左右页边距、段自己的左右内边距，三条边各在哪。 */
+export interface RulerDragGeometry {
+  pageW: number;
+  padL: number;
+  padR: number;
+  inlineLeft: number;
+  inlineRight: number;
+  leftX: number;
+  firstX: number;
+  rightX: number;
+}
+
+/**
+ * 纸面上的一个 x 折回件里那句话说的是谁，单位缇。三条都与 `rulerMarksOf` 量的盒子同一条口径：
+ * 左缩进减掉页边距与段自己的 padding（列表缩进画在 padding 里），右缩进从正文栏右沿往回数，
+ * 首行给的是**相对左标记的偏移**——负数就是悬挂。吸附步长不在这里发明（WPS 真机未取证），
+ * 拖到哪个像素就落哪个 15 缇。
+ */
+export function indentTwipsOf(kind: RulerDragKind, x: number, geom: RulerDragGeometry): number {
+  if (kind === "left") return Math.round(pxToTwips(x - geom.padL - geom.inlineLeft));
+  if (kind === "first") return Math.round(pxToTwips(x - geom.leftX));
+  return Math.round(pxToTwips(geom.pageW - geom.padR - x - geom.inlineRight));
+}
+
+/** 拖动要问编辑器的三件事：能不能拖、怎么落笔、落不了时把标记摆回去。 */
+export interface RulerDragHooks {
+  /** 修订视图「原始状态」下纸是只读的，尺上的标记也不该动。 */
+  enabled(): boolean;
+  /** 落进件里；没改动（或改不了）返回 false，由 `repaint()` 把标记摆回原处。 */
+  commit(kind: RulerDragKind, twips: number): boolean;
+  repaint(): void;
+}
+
+const dragHooks = new WeakMap<HTMLElement, RulerDragHooks>();
+
+const geomOf = (ruler: HTMLElement): RulerDragGeometry | null => {
+  const raw = ruler.dataset.dragGeom;
+  if (!raw) return null;
+  try {
+    const g = JSON.parse(raw) as RulerDragGeometry;
+    return Number.isFinite(g.pageW) && g.pageW > 0 && Number.isFinite(g.leftX) ? g : null;
+  } catch {
+    return null;
+  }
+};
+
+const zoomOf = (ruler: HTMLElement): number => {
+  const z = parseFloat(ruler.style.zoom);
+  return Number.isFinite(z) && z > 0 ? z : 1;
+};
+
+const place = (ruler: HTMLElement, kind: RulerDragKind, x: number): void => {
+  const el = ruler.querySelector<HTMLElement>(`[data-ruler-mark="${kind}"]`);
+  if (!el) return;
+  el.style.left = `${x.toFixed(2)}px`;
+  el.dataset.x = String(Math.round(x * 10) / 10);
+};
+
+/** 左标记不许压到右标记上，右标记也不许压到左标记上；三枚都留在纸里。 */
+const clampX = (kind: RulerDragKind, x: number, geom: RulerDragGeometry): number => {
+  let lo = 0;
+  let hi = geom.pageW;
+  if (kind === "left") hi = Math.min(hi, geom.rightX);
+  if (kind === "right") lo = Math.max(lo, geom.leftX);
+  return Math.min(hi, Math.max(lo, x));
+};
+
+/**
+ * 给一枚标尺挂上拖动：按下 `.ruler-ind` 就跟指针走，松手才落进件里。监听器挂在标尺自己身上
+ * （指针捕获把 move/up 都送回它），纸重铺换掉标尺时一起消失，不会往 `window` 上攒。
+ *
+ * 拖左标记时首行标记跟着走（件里首行存的是相对左标记的偏移：`w:firstLine` 或 `w:hanging`），
+ * 拖首行越过左标记就换档：往右是 `w:firstLine`，往左是 `w:hanging`。
+ */
+export function bindRulerDrag(ruler: HTMLElement, hooks: RulerDragHooks): void {
+  dragHooks.set(ruler, hooks);
+  if (ruler.dataset.dragBound === "1") return;
+  ruler.dataset.dragBound = "1";
+  let state: {
+    kind: RulerDragKind;
+    geom: RulerDragGeometry;
+    zoom: number;
+    pointerId: number;
+    startClientX: number;
+    baseX: number;
+    x: number;
+    moved: boolean;
+  } | null = null;
+
+  const finish = (commit: boolean): void => {
+    if (!state) return;
+    const st = state;
+    state = null;
+    const live = dragHooks.get(ruler);
+    if (!live) return;
+    if (commit && st.moved && live.enabled()) {
+      if (live.commit(st.kind, indentTwipsOf(st.kind, st.x, st.geom))) return;
+    }
+    live.repaint();
+  };
+
+  const onDown = (e: PointerEvent): void => {
+    const live = dragHooks.get(ruler);
+    if (!live?.enabled() || state) return;
+    const target = e.target instanceof Element ? e.target.closest<HTMLElement>("[data-ruler-mark]") : null;
+    if (!target || !ruler.contains(target)) return;
+    const kind = target.dataset.rulerMark as RulerDragKind | undefined;
+    const geom = kind ? geomOf(ruler) : null;
+    if (!kind || !geom) return;
+    e.preventDefault();
+    const baseX = kind === "left" ? geom.leftX : kind === "first" ? geom.firstX : geom.rightX;
+    state = { kind, geom, zoom: zoomOf(ruler), pointerId: e.pointerId, startClientX: e.clientX, baseX, x: baseX, moved: false };
+    try {
+      ruler.setPointerCapture(e.pointerId);
+    } catch {
+      // 合成事件（探针）没有可捕获的指针：不捕获也照拖，监听器本来就挂在尺子上。
+    }
+  };
+
+  const onMove = (e: PointerEvent): void => {
+    if (!state || e.pointerId !== state.pointerId) return;
+    const dx = e.clientX - state.startClientX;
+    if (!state.moved && Math.abs(dx) < 0.5) return;
+    state.moved = true;
+    const x = clampX(state.kind, state.baseX + dx / state.zoom, state.geom);
+    state.x = x;
+    place(ruler, state.kind, x);
+    if (state.kind === "left") place(ruler, "first", state.geom.firstX + (x - state.baseX));
+  };
+
+  const onUp = (e: PointerEvent): void => {
+    if (!state || e.pointerId !== state.pointerId) return;
+    try {
+      ruler.releasePointerCapture(e.pointerId);
+    } catch {
+      // 捕获已经没了：照常收尾。
+    }
+    finish(e.type === "pointerup");
+  };
+
+  ruler.addEventListener("pointerdown", onDown);
+  ruler.addEventListener("pointermove", onMove);
+  ruler.addEventListener("pointerup", onUp);
+  ruler.addEventListener("pointercancel", onUp);
 }
 
 /** 标尺这一趟的入参：单位、缩放，以及光标那一段（没有就给空段）。 */
@@ -155,6 +314,21 @@ export function drawRuler(ruler: HTMLElement, page: HTMLElement, paint: RulerPai
     nodes.push(el);
   }
   const marks = rulerMarksOf(page, paint.caret, paint.zoom);
+  if (marks.left !== undefined && marks.first !== undefined && marks.right !== undefined) {
+    const geom: RulerDragGeometry = {
+      pageW: width,
+      padL,
+      padR,
+      inlineLeft: marks.inlineLeft ?? 0,
+      inlineRight: marks.inlineRight ?? 0,
+      leftX: marks.left,
+      firstX: marks.first,
+      rightX: marks.right,
+    };
+    ruler.dataset.dragGeom = JSON.stringify(geom);
+  } else {
+    delete ruler.dataset.dragGeom;
+  }
   for (const which of ["first", "left", "right"] as const) {
     const x = marks[which];
     if (x === undefined) continue;

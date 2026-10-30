@@ -12,6 +12,8 @@ import { applyBandYield, applyFitText, applySheetGaps, applyTabStops, BAND_CLONE
 import { ReviewPanel } from "./doc-review.js";
 import { OutlinePanel } from "./doc-outline.js";
 import { openPageSetup as showPageSetupDialog } from "./doc-page-setup.js";
+import { drawRuler, ensureRuler } from "./doc-ruler.js";
+import { currentUnit } from "./doc-units.js";
 import { CELL_BOX_SIDES, PARA_BOX_SIDES, applyBoxPatch, cellOuterPatch, showCellBoxDialog, showParaBorderDialog, showTableBoxDialog, TABLE_BOX_SIDES, TABLE_EDGE_SHAPE } from "./doc-para-border.js";
 import type { BoxPatch, BoxState, CellBoxSide, ParaBoxPatch, ParaBoxState, TableBoxSide } from "./doc-para-border.js";
 import { showParaSpacingDialog } from "./doc-para-spacing.js";
@@ -785,6 +787,8 @@ export class DocEditor {
     this.wire();
     this.applyRevisionView();
     this.applySheets();
+    // 标尺挂在纸盒前面、跟着纸走；`innerHTML` 那一句把上一趟那枚一起换掉了，所以每次重铺都得再挂回去。
+    this.paintRuler();
   }
 
   /**
@@ -1143,6 +1147,43 @@ export class DocEditor {
     // 条带与复件的 `top` 写的是纸的像素，`zoom` 把纸连同缝一起放大：换了比例得重量重画，
     // 不然带子还守着旧坐标，跟它钉的那道缝错开。
     this.applySheets();
+    // 标尺是纸上的一把尺：它跟纸同一个 `zoom`，刻度、缩进标记与制表位都得按新的纸面像素重画。
+    this.paintRuler();
+  }
+
+  /**
+   * 视图页那枚标尺开关（WPS `CT_View.kuip` 的 `ViewRulerWord`：`ksoCmd="Ruler"`、`hotKey="l"`）。
+   * 它说的是工作台上画不画标尺，件里没有这一句——所以不进撤销栈、不把件弄脏，与「查看网格线」同一类。
+   * WPS 那一档默认开还是关未取证（真机卡在首次启动那页）；家里默认开。
+   */
+  private rulerShown = true;
+
+  setRulerShown(on: boolean): void {
+    if (this.rulerShown === on) return;
+    this.rulerShown = on;
+    this.paintRuler();
+  }
+
+  /** 换了测量单位：刻度上的数字口径跟着换（`doc-units.ts`），纸与标记一个都不动。 */
+  refreshRuler(): void {
+    this.paintRuler();
+  }
+
+  /**
+   * 重画标尺。光标那一段从当前选区现找（`.para`），找不到就一枚标记都不画——纸面上没摆出来的段，
+   * 标尺也不替它说话。表格里的段由 `drawRuler` 自己挡掉（格子里的缩进基准是格沿）。
+   */
+  private paintRuler(): void {
+    const page = this.page;
+    if (!page) return;
+    const ruler = ensureRuler(this.host, page);
+    ruler.hidden = !this.rulerShown;
+    if (!this.rulerShown) return;
+    const sel = document.getSelection();
+    const node = sel?.rangeCount ? sel.getRangeAt(0).startContainer : null;
+    const el = node ? (node instanceof Element ? node : node.parentElement) : null;
+    const caret = el?.closest<HTMLElement>(".para") ?? null;
+    drawRuler(ruler, page, { unit: currentUnit(), zoom: this.zoomLevel || 1, caret });
   }
 
   /** Ids are re-stamped per render because the model and the DOM are built in the same pass. */
@@ -1310,6 +1351,8 @@ export class DocEditor {
     // 报信要放在记账之后：ribbon 里那一格「边框」按 `pageSelection` 决定落点是段落、表还是格，先报后记就是把
     // 上一条选区的话说给这一条听（用户选了整张表，那一格还在说单元格）。
     this.hooks.moved?.();
+    // 标尺上那三枚缩进标记说的是光标那一段：光标一走，它们跟着走。
+    if (this.rulerShown) this.paintRuler();
   }
 
   /** Whether a path lands on one of the cells a selection command lit up. */

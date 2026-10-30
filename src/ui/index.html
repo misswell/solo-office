@@ -405,6 +405,36 @@
       }
       .find button:hover { background: #e2e9f3; }
 
+      /* ---- 标尺（视图·显示组的 ViewRulerWord，#228）----
+         与纸同宽、同一个 `zoom`，宽度与缩放由 `doc-ruler.ts` 写在元素上；这里只管长相。它挂在纸盒前面，
+         `position: sticky` 让它滚动时贴在滚动容器上沿（Word/WPS 的标尺也是这样）。`--pad-l` 以左、右沿
+         以右是页边距，留在底色里；正文栏那一块由 `.ruler-area` 提亮。 */
+      .doc-ruler {
+        position: sticky;
+        top: 0;
+        z-index: 6;
+        height: 22px;
+        margin: 0 auto;
+        background: #dfe4ea;
+        box-shadow: inset 0 -1px #c3c9d2;
+        overflow: hidden;
+        user-select: none;
+      }
+      .doc-ruler[hidden] { display: none; }
+      .doc-ruler .ruler-area { position: absolute; top: 0; bottom: 0; background: #f7f9fc; }
+      .doc-ruler .ruler-tick { position: absolute; bottom: 0; width: 1px; height: 4px; background: #8d96a3; }
+      .doc-ruler .ruler-tick.major { height: 7px; background: #525b68; }
+      .doc-ruler .ruler-tick b { position: absolute; left: 2px; bottom: 6px; font: 400 9px/1 var(--font-ui, sans-serif); color: #3a404a; }
+      .doc-ruler .ruler-ind { position: absolute; width: 0; height: 0; margin-left: -5px; border: 5px solid transparent; }
+      .doc-ruler .ruler-ind.first { top: 0; border-top: 6px solid #2f7de1; border-bottom: 0; }
+      .doc-ruler .ruler-ind.left { bottom: 0; border-bottom: 6px solid #2f7de1; border-top: 0; }
+      .doc-ruler .ruler-ind.right { bottom: 0; border-bottom: 6px solid #2f7de1; border-top: 0; }
+      .doc-ruler .ruler-tab { position: absolute; bottom: 0; width: 7px; height: 6px; }
+      .doc-ruler .ruler-tab.val-l { border-left: 1px solid #2f7de1; border-bottom: 1px solid #2f7de1; }
+      .doc-ruler .ruler-tab.val-r { margin-left: -6px; border-right: 1px solid #2f7de1; border-bottom: 1px solid #2f7de1; }
+      .doc-ruler .ruler-tab.val-c { width: 9px; margin-left: -4px; border-left: 1px solid #2f7de1; border-right: 1px solid #2f7de1; border-bottom: 1px solid #2f7de1; }
+      .doc-ruler .ruler-unit { position: absolute; right: 3px; top: 3px; font: 400 9px/1 var(--font-ui, sans-serif); color: #6b7482; }
+
       /* ---- word ---- */
       .page {
         background: #fff;
@@ -592,6 +622,8 @@
 
       @media print {
         header, .ribbon, .bar, .sheetbar { display: none !important; }
+        /* 标尺是工作台上的尺，跟前头的工具栏一样上不了纸。 */
+        .doc-ruler { display: none !important; }
         body { background: #fff; }
         main { display: block; overflow: visible !important; }
         #view { overflow: visible !important; }

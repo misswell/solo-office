@@ -1286,6 +1286,14 @@ function buildDocRibbon(): void {
     editor?.showOutlinePane();
     syncDocRibbon();
   });
+  // 标尺紧跟导航窗格：`CT_View.kuip` 的 `RB_Show`（`:30`，`idMso="GroupViewShowHide"`）里 `ViewRulerWord`
+  // （`:34`，`ksoCmd="Ruler"`、`customTip="Ruler"`、`hotKey="l"`、`text="@Ruler"`）就排在
+  // `sp_ShowDocumentMap` 之后、`CommentOrTrackingChangeMarkup` 之前，缩放是下一组 `RB_Zoom` 的事。
+  // 它说的是工作台上画不画标尺：件里没有这一句，所以不进撤销栈，也不把件弄脏。
+  button(view, "ruler", "标尺", "显示或隐藏标尺（WPS 视图·显示组 ViewRulerWord）", () => {
+    showRuler = !showRuler;
+    syncDocRibbon();
+  });
   // 缩放另起一组，不塞进导航窗格那一组里：WPS 那一页把 `ZoomToolBar` 单挂在 `RB_Zoom`。
   bars["view"].append(zoomGroup());
 
@@ -1294,9 +1302,13 @@ function buildDocRibbon(): void {
   for (const bar of Object.values(bars)) bar.addEventListener("scroll", syncOverflow, { passive: true });
   syncOverflow();
   // 测量单位换了，`RB_Page_Setup` 那四格的字面口径就跟着换：回显只有一条路，就是再跑一遍 `syncDocRibbon`。
+  // 标尺上那排数字也是一句「按哪个单位读」，所以同一趟把刻度重画一遍（`refreshRuler` 只改视图，不碰件）。
   // 这一枚订阅归本趟重建持有，先收上一趟的，不然每开一个文档就多留一个监听。
   unitEchoOff?.();
-  unitEchoOff = onUnitChange(() => syncDocRibbon());
+  unitEchoOff = onUnitChange(() => {
+    syncDocRibbon();
+    editor?.refreshRuler();
+  });
 }
 
 /** `RB_Page_Setup` 那几格的「单位换了就重算」监听：同一个持有法则是溢出箭头的 `resize` 监听（`overflowAbort`）。 */
@@ -1320,6 +1332,14 @@ let tableTab: { button: HTMLButtonElement; shown: () => string; show: (key: stri
  * 在屏幕上连地界都看不见，用户无从下手。
  */
 let showGridlines = true;
+
+/**
+ * 标尺画不画（`CT_View.kuip` 的 `ViewRulerWord`，`ksoCmd="Ruler"`）。与「查看网格线」同一条性质：
+ * 它挂在工作台上，件里没有这一句，`word/settings.xml` 里也没有——所以既不改字节也不进撤销栈。
+ * WPS 默认开还是关未取证（真机卡在首次启动那一页）；家里默认开，理由与标尺本身一样：看不到正文栏在哪，
+ * 段落缩进就只能猜。标尺自己怎么画在 `doc-ruler.ts`。
+ */
+let showRuler = true;
 
 /**
  * ribbon 跟着文档读的那一趟。`force` 只在**换文档**那一趟给：上一份里打了还没落笔的那串字属于上一份文件，
@@ -1348,6 +1368,10 @@ function syncDocRibbon(force = false): void {
   // 容器上那一枚 `doc-grid` 也在这一趟挂/摘——换文件、开关、编辑后重读走的都是这一条路，不留第二处写法。
   mark("gridlines", showGridlines);
   view.classList.toggle("doc-grid", showGridlines);
+  // 标尺那一枚与「查看网格线」同一条：回显的是**视图档**，不问文档。画与不画落在编辑器那边
+  // （`DocEditor.setRulerShown` 同值不动，所以每趟 `syncDocRibbon` 都可以走这一句）。
+  mark("ruler", showRuler);
+  editor?.setRulerShown(showRuler);
   // 「没说」与「明说 left」画的是一件事（§17.3.1.13 默认左；授权 46 份里 88 段明说 left，
   // `.scratch/authorized-jc-echo.ts`），两档都该亮「左」——只亮 `undefined` 那一档，停在那 88 段上时
   // 纸面靠左、按钮上一枚都不亮，说的是谎话。

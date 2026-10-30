@@ -334,6 +334,43 @@ function smoke(): void {
             }),
           };
         }
+        // #228 标尺：这只装机盒子里尺子与纸同框、视图页那枚开关真有面、开合不动件。只报矩形、计数与
+        // 「脏点还在不在」，一个字的文档内容也不出页面。标尺说的每一格都来自纸自己（--page-w 减两条边距、
+        // 光标段落量出来的盒子、data-tab-stops），所以这里问的是「尺与纸同框」「正文栏宽与纸写的那两只数对得上」
+        // 与「关掉不占位、开回来又占那一格」。件里没有一句说过标尺，开合前后标题必须一字不差。
+        let rulerLeg = null;
+        {
+          const ru = view.querySelector(":scope > .doc-ruler");
+          const tit0 = document.getElementById("title")?.textContent ?? "";
+          if (ru) {
+            const pr = page.getBoundingClientRect();
+            const rr = ru.getBoundingClientRect();
+            const pcs = getComputedStyle(page);
+            const paperW = parseFloat(page.style.getPropertyValue("--page-w")) || 0;
+            const padL = parseFloat(pcs.paddingLeft || "0");
+            const padR = parseFloat(pcs.paddingRight || "0");
+            const rb = [...document.querySelectorAll("#ribbon button.rb")].find((b) => b.textContent === "标尺");
+            rb?.click();
+            await wait(120);
+            const off = { hidden: ru.hidden, h: round1(ru.getBoundingClientRect().height), pageH: round1(page.getBoundingClientRect().height) };
+            rb?.click();
+            await wait(120);
+            rulerLeg = {
+              sibling: ru.nextElementSibling === page,
+              one: view.querySelectorAll(".doc-ruler").length,
+              sameBox: Math.abs(rr.width - pr.width) < 0.8 && Math.abs(rr.left - pr.left) < 0.8,
+              text: round1(parseFloat(ru.dataset.rulerText || "0")),
+              textWant: round1(paperW - padL - padR),
+              majors: ru.querySelectorAll(".ruler-tick.major").length,
+              unit: (ru.querySelector(".ruler-unit")?.textContent ?? "").length > 0,
+              sticky: getComputedStyle(ru).position,
+              hasButton: !!rb,
+              off,
+              back: { hidden: ru.hidden, h: round1(ru.getBoundingClientRect().height) },
+              dirtyKept: (document.getElementById("title")?.textContent ?? "") === tit0,
+            };
+          } else rulerLeg = { missing: true };
+        }
         const blocks = page.children.length;
         const last = page.children[blocks - 1];
         const range = document.createRange();
@@ -4069,7 +4106,7 @@ function smoke(): void {
         const recovered = { cells: document.querySelectorAll(".sheet-wrap td").length, title: document.getElementById("title")?.textContent };
         // The run ends on a modified document, so quitting goes through the unsaved prompt.
         // A PDF the export asked for shows up in saveAsWrites, next to the pptx/xlsx saves.
-        return { docPart, bandLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, clearLeg, styleLeg, vertLeg, origLeg, origTableLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
+        return { docPart, bandLeg, rulerLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, clearLeg, styleLeg, vertLeg, origLeg, origTableLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
       })()`;
       void last?.webContents
         .executeJavaScript(probe)

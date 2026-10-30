@@ -63,6 +63,10 @@ export function onUnitChange(fn: () => void): () => void {
 
 const PER_PX: Record<Unit, number> = { cm: 2.54 / 96, mm: 25.4 / 96, in: 1 / 96, pt: 72 / 96 };
 
+/** 一单位折成多少 CSS 像素：纸面口径（1 英寸 = 96px，与 `docx.ts` 的 15 缇/px 同一枚）。标尺的刻度用它。 */
+const PX_PER_UNIT: Record<Unit, number> = { cm: 96 / 2.54, mm: 96 / 25.4, in: 96, pt: 96 / 72 };
+export const pxPerUnit = (u: Unit = unit): number => PX_PER_UNIT[u];
+
 /** 一个长度读数的字面：「2.54 厘米」。小数位照该单位的口径。 */
 export function formatLength(px: number, u: Unit = unit): string {
   const def = unitDef(u);

@@ -7333,8 +7333,11 @@ export type WordCounts = {
  * 一个元素就是一段（空段落也占一个元素，所以段落数是 `texts.length`），选区传进来的是它自己那几段被切出来的片段。
  */
 export function countTexts(texts: readonly string[]): WordCounts {
-  // 汉字（含扩充 A 与兼容区）、假名、谚文（含字母区与兼容 Jamo）。增补平面 B–F 用 \u{…} 写。
-  const CJK = /[\u3040-\u30ff\u3130-\u318f\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u1100-\u11ff\u{20000}-\u{2fa1f}]/gu;
+  // 「中文字符和朝鲜语单词」那一份的取材：汉字（含扩充 A 与兼容区）、假名、谚文，**加中文标点与全角形式**
+  // （、。：？！，《》（）与全角 ASCII）——WPS 的「字数」里中文标点逐枚计一字（#238：`event plan.dotm` 上
+  // 只有含标点的口径能咬合 763：597 汉字 + 79 标点 + 87 非中文词 = 763，WPS 状态栏实测同数）。增补平面
+  // B–F 用 \u{…} 写。全角空格 U+3000 是空白不是字，区间从 3001 起——那一格留给「不计空格」。
+  const CJK = /[\u3040-\u30ff\u3130-\u318f\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u1100-\u11ff\u3001-\u303f\uff00-\uffef\u2010-\u2027\u00b7\u{20000}-\u{2fa1f}]/gu;
   let characters = 0;
   let charactersNoSpace = 0;
   let cjk = 0;
@@ -7345,7 +7348,9 @@ export function countTexts(texts: readonly string[]): WordCounts {
       if (!/\s/u.test(ch)) charactersNoSpace++;
     }
     cjk += text.match(CJK)?.length ?? 0;
-    for (const token of text.replace(CJK, " ").split(/\s+/)) if (/[\p{L}\p{N}]/u.test(token)) words++;
+    // 非中文「词」：CJK 类剥掉之后按空白切，**非空 token 计一**——纯符号的 token（「[」「]」各一枚）也算；
+    // WPS 的 763 里那 28 枚方括号正是这么进去的。数字串（6.1）与字母串（abc）照旧各计一词。
+    for (const token of text.replace(CJK, " ").split(/\s+/)) if (token !== "") words++;
   }
   return { paragraphs: texts.length, characters, charactersNoSpace, cjk, words };
 }
@@ -7357,6 +7362,14 @@ export function paragraphTextsOf(blocks: readonly Block[]): string[] {
     for (const b of bs) {
       if (b.kind === "table") {
         for (const row of b.rows) for (const cell of row) walk(cell.paragraphs);
+        continue;
+      }
+      // 只带容器（目录就是它）里的段也是纸上的字：WPS 的字数把它们数进去（#238：`event plan.dotm`
+      // 目录 22 段入账后 763 与 WPS 状态栏同数）。逐段收 `paras` 的展示文字（域缓存已在内、tab 是 \t）；
+      // 混着表的容器没有逐段那一份，按整块一段收 `text`。
+      if (b.kind === "carried") {
+        if (b.paras?.length) for (const p of b.paras) out.push(p.text);
+        else out.push(b.text);
         continue;
       }
       if (b.kind !== "paragraph") continue;

@@ -54,9 +54,10 @@ describe("docx 字数统计：页数之外那几行由模型数出来", () => {
     expect(doc.wordCounts().characters).toBe(12 + 9 + 2 + 3 + 2);
     // 不计空格：10 + 8（全角空格 U+3000 剔掉）+ 2 + 3 + 2 = 25
     expect(doc.wordCounts().charactersNoSpace).toBe(10 + 8 + 2 + 3 + 2);
-    // 汉字：中文 2 + 那句 7（，不算）+ 格子 2 + 格子里 3 + 前后 2 = 16
-    expect(doc.wordCounts().cjk).toBe(2 + 7 + 2 + 3 + 2);
-    // 非中文单词：只有 two、words
+    // 中文字符：中文 2 + 那句 8（，按 #238 的口径逐枚计一字）+ 格子 2 + 格子里 3 + 前后 2 = 17
+    // （全角空格 U+3000 是空白不是字）
+    expect(doc.wordCounts().cjk).toBe(2 + 8 + 2 + 3 + 2);
+    // 非中文「词」：two、words 两枚；中文标点剥掉后剩下的空 token 不计
     expect(doc.wordCounts().words).toBe(2);
   });
 

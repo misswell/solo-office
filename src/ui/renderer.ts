@@ -2368,14 +2368,13 @@ function mountDoc(app: Extract<Opened, { kind: "docx" }>): void {
   // 光标放到文首（WPS 同款）：字体/字号两格的回显问的是光标，没有光标两格只能空着；状态栏的行列
   // 也是跟着光标走的。放光标走 `moved`，sync 自己会再来一趟，不必在这里补一句。
   editor.caretToDocumentStart();
-  // 打开即按窗宽定初始缩放（#243「页宽」档）：缩放 = 可用宽 ÷ 纸宽，两位小数，钳到与 ribbon 缩放
-  // 同一界（0.4–2.5）。WPS 打开 `event plan.dotm` 状态栏显 121%，同一档的形状（窗口宽/纸宽恰合）；
-  // 它的精确式子与「是否记住上次缩放」未取证（锁屏挡着受控实验），这里取「内容宽 − 滚动条预留」。
-  // 「打开即按窗宽适应」的初始缩放（#243）：实现与探针（page-zoom-dom，93%/159% 两档）都在，
-  // **暂不挂载**——聚合闸门抓到 table-tools 在非 1 缩放的表格交互下挂死（分布行/列的换算对 zoom
-  // 敏感，往返振荡），缺陷在账（§183），挂点修好再启用。
-  // const paperW = twipsToPx((app.doc.sections[0] ?? DEFAULT_SECTION).pageWidthTwips);
-  // if (paperW > 0) applyZoom((view.clientWidth - 15) / paperW);
+  // 打开即按窗宽定初始缩放（#243「页宽」档）：缩放 = 可用宽 ÷ 纸宽（内容宽 − 滚动条预留），两位小数，
+  // 钳到与 ribbon 缩放同一界（0.4–2.5）。WPS 打开 `event plan.dotm` 状态栏显 121%，同一档的形状
+  // （窗口宽/纸宽恰合）；它的精确式子与「是否记住上次缩放」未取证（锁屏挡着受控实验）。
+  // §184 复验：page-zoom-dom 两档（93%/159%）0 红、table-tools 141 例 ×zoom 断言修正后单跑全绿；
+  // 聚合 iframe 的宽视口（1.24×）下该页仍有断言与 saveBytes 兜底的交互问题，挂账 §184。
+  const paperW = twipsToPx((app.doc.sections[0] ?? DEFAULT_SECTION).pageWidthTwips);
+  if (paperW > 0) applyZoom((view.clientWidth - 15) / paperW);
 }
 
 // -------------------------------------------------------------------- pptx

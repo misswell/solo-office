@@ -1634,8 +1634,11 @@ const TAB_MIN_PX = 0.5;
  *
  * 两档写在明面上没接：① 格子里那一段（`w:tc` 里的 `w:p`）挡掉不做，它的基准该是
  * 格沿而不是正文区左沿——授权 46 份里这样的 `w:tabs` **0 块**（`.scratch/tabs-inside-table.py`），所以这一挡
- * 眼下没有受众，只是不让将来落进格子里的制表位按纸的边距画。② 带子里的 12 枚位与 2 枚制表符仍按 `pre-wrap`
- * 的浏览器默认走，不带这一趟的账（带子的字面字号那一档本就未取证）。
+ * 眼下没有受众，只是不让将来落进格子里的制表位按纸的边距画。② 带子里的段落（`.hf-p`）与正文同一趟走
+ * （#235）：带子的内容盒就是页边距盒（`render.ts` 给带子写的 `padding-left:var(--pad-l)`），原点与正文同一格，
+ * 位是 `BandPlace.tabStops` 合过样式链的那一份。此前带子里的 12 枚位与 2 枚制表符按 `pre-wrap` 的浏览器默认走
+ * （`.scratch/band-tab-chars-audience.py`：唯一受众是 `event plan.dotm` 页脚段#0 那枚裸制表符，位从 `footer`
+ * 样式借）；带子自己的**字面字号**那一档仍未取证，落点不动它。
  *
  * 落点由 `.scratch/tab-place-dom.ts` 在真 DOM 里量（18 例：三档各贴自己的位、走过第一格找下一格、清单乱序按缇
  * 排、没写位的走 `w:defaultTabStop` 整步、借位与 `clear`、无 settings 时的兜底那一步、zoom 与重跑不改答案，
@@ -1700,7 +1703,9 @@ export function applyTabStops(page: HTMLElement, doc: WordDocument): void {
   // 凡是画了制表符的正文段都要走这一趟，**没有** `data-tab-stops` 的那一类也算：授权 46 份里带制表符的正文段
   // 14 段共 30 枚，其中 10 段 / 26 枚的样式链上一枚位都没写（`.scratch/tabs-default-audience.ts`），
   // 它们该按 `w:defaultTabStop` 的步长走，而不是留在 CSS 那枚发明的 32px 上。
-  const hosts = [...page.querySelectorAll<HTMLElement>(".para")].filter(
+  // `.hf-p`（页眉页脚带）同一趟（#235）：纸里的原件与画出来的复件都在 `page` 里，母本在纸盒外、
+  // `querySelector` 碰不到它，也本来量不了（`display:none` 的矩形全是 0）。
+  const hosts = [...page.querySelectorAll<HTMLElement>(".para, .hf-p")].filter(
     (el) => !el.closest("table") && el.querySelector("span.tab"),
   );
   if (!hosts.length) return;

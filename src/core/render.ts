@@ -1,4 +1,4 @@
-import type { Block, BandPlace, Carried, CarriedInline, HeaderFooter, IndentFields, Inline, NumberLevel, PageBorder, Paragraph, PropSlot, RowInfo, Section, Table, TableBorder, TableCell, WordDocument } from "./docx.js";
+import type { Block, BandPlace, Carried, CarriedInline, HeaderFooter, IndentFields, Inline, NumberLevel, PageBorder, Paragraph, PropSlot, RowInfo, Section, Table, TableBorder, TableCell, TabStop, WordDocument } from "./docx.js";
 import { DEFAULT_SECTION, TAB_LEADER_TOKENS, hasLine, LINE_ONE, MARGIN_SIDES, PAGE_BORDER_SIDES, PBDR_ORDER, headingLevel, lineGridPitchTwips, twipsToPx } from "./docx.js";
 import type { CommentAnchor } from "./comments.js";
 import type { Presentation, Shape, SlideParagraph } from "./pptx.js";
@@ -626,19 +626,9 @@ function renderParagraph(p: Paragraph, doc: WordDocument, counters: Map<string, 
   const classes = `para${p.styleName ? " s-" + esc(p.styleName.replace(/\s+/g, "-")) : ""}${mark ? ` rev-mark-${mark.kind}` : ""}${fmt ? " para-rev" : ""}`;
   const carried =
     // 段落自己算好的制表位（缇、档、前导符），由 `doc-layout.ts` 的 `applyTabStops` 拿去量每一枚制表符该走多宽、
-    // 该不该把那一截空隙铺成点线。前导符这一段是 `w:leader` 的原词，不在 ST_LeaderType 六个档里的不写——
-    // 页面猜一种点线，比空着更容易骗人。
+    // 该不该把那一截空隙铺成点线。格式只有这一份（下面的 `tabStopsAttr`），带子段写的也是它。
     // 写在 data 上而不是 style 上：编辑读回的是格式，不该把这些数当成段落自己新说的一句话。
-    (p.tabStops?.length
-      ? ` data-tab-stops="${p.tabStops
-          .map(
-            (s) =>
-              `${s.posTwips}:${s.val === "right" ? "r" : s.val === "center" ? "c" : "l"}${
-                s.leader && TAB_LEADER_TOKENS.includes(s.leader) ? `:${s.leader}` : ""
-              }`,
-          )
-          .join(",")}"`
-      : "") +
+    tabStopsAttr(p.tabStops) +
     (mark
       ? ` data-rev-mark="${mark.kind}" data-rev-mark-id="${mark.id}" data-rev-mark-author="${esc(mark.author)}"${mark.date ? ` data-rev-mark-date="${esc(mark.date)}"` : ""}${mark.move ? ` data-rev-mark-move="${mark.move}"` : ""}`
       : "") +
@@ -1222,6 +1212,24 @@ function bandPlaceCss(p?: BandPlace): string {
 }
 
 /**
+ * 段落自己算好的制表位写成 `data-tab-stops`：`缇:档` 逗号分隔，档 `l`/`c`/`r`，前导符那一段是 `w:leader` 的
+ * 原词，不在 ST_LeaderType 六个档里的不写——页面猜一种点线，比空着更容易骗人。正文段与带子段同一份格式：
+ * `doc-layout.ts` 的 `parseTabStops` 是唯一的读法，`applyTabStops` 是唯一的落点趟。
+ */
+function tabStopsAttr(stops: TabStop[] | undefined): string {
+  return stops?.length
+    ? ` data-tab-stops="${stops
+        .map(
+          (s) =>
+            `${s.posTwips}:${s.val === "right" ? "r" : s.val === "center" ? "c" : "l"}${
+              s.leader && TAB_LEADER_TOKENS.includes(s.leader) ? `:${s.leader}` : ""
+            }`,
+        )
+        .join(",")}"`
+    : "";
+}
+
+/**
  * A band's paragraphs as the page shows them. `.hf-p` is `white-space: pre-wrap`, so a tab the part holds stays
  * a tab on screen and comes back as one when the line is read out of the page again. A paragraph that holds a
  * field is drawn piece by piece, because the field is not text and the order the two sit in is the file's, not
@@ -1230,6 +1238,12 @@ function bandPlaceCss(p?: BandPlace): string {
  * 段落自己说过落点才写 `style`：谁都没说的那一段（授权 46 份的 76 段里 12 段）一个属性都不多，画出来与这一片
  * 之前逐字节相同。这一句只上行内样式，不动 `.hf-p` 这一层结构——带子的文字按段下标从纸面上读回去，多一枚属性
  * 不改下标，改结构才改。
+ *
+ * 制表符那一枚包成 `<span class="tab">&#9;</span>`（#235）：字面 `\t` 留在 span **里面**，段的 `textContent`
+ * 一字不变——`doc-edit.ts` 的 `readHF` 把不是域的那一枚孩子按 `textContent` 收进段文字，读回逐字节同前，
+ * `commitHF` 的「DOM 与模型说同一句话」比较也不会抖。span 外面那层与正文同一个名字（`.tab`），`applyTabStops`
+ * 把它当同一枚垫片量宽、落位；带子段借的那一串位写在 `data-tab-stops` 上（上面的 `tabStopsAttr`，
+ * `BandPlace.tabStops` 已按正文同一条裁判合过样式链）。
  */
 function bandParagraphsHtml(area: HeaderFooter): string {
   return (
@@ -1237,7 +1251,11 @@ function bandParagraphsHtml(area: HeaderFooter): string {
       .map((_, i) => {
         const segs = area.segments?.[i] ?? [{ text: area.paragraphs[i] ?? "" }];
         const css = bandPlaceCss(area.place?.[i]);
-        return `<div class="hf-p"${css ? ` style="${css}"` : ""}>${segs.map((s) => (s.carry ? hfFieldTag(s.carry) : esc(s.text ?? ""))).join("") || "<br>"}</div>`;
+        const stops = tabStopsAttr(area.place?.[i]?.tabStops);
+        const body = segs
+          .map((s) => (s.carry ? hfFieldTag(s.carry) : esc(s.text ?? "").split("\t").join('<span class="tab">&#9;</span>')))
+          .join("");
+        return `<div class="hf-p"${stops}${css ? ` style="${css}"` : ""}>${body || "<br>"}</div>`;
       })
       .join("") || '<div class="hf-p"><br></div>'
   );

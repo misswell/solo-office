@@ -1184,6 +1184,20 @@ export interface BandPlace {
    * 用同一句话答的两枚都被丢掉：右缩进画到纸沿、首行缩进一格不缩。
    */
   ind?: IndentFields;
+  /**
+   * `w:pPr/w:tabs`: this paragraph's own stops over the ones its `w:pStyle` chain lends, merged **one position
+   * at a time** by the same referee the body paragraphs use (`mergeTabStops`) — with every `w:val="clear"` already
+   * spent, so what reaches the page only ever names a stop that paints.
+   *
+   * The positions travel to the page as the paragraph's `data-tab-stops` (`render.ts`), where
+   * `doc-layout.ts` 的 `applyTabStops` places the band's tab characters on them, exactly as it does for the body.
+   * 授权 46 份的眉脚部件里这一族有受众：段自己说 `w:tabs` 的 **12 段 / 20 枚定义**、链上借来 **58 段各 2 枚**
+   * （`footer` 样式那对 `center 4153` / `right 8306`），但带子里真正的 `w:r/w:tab` 只有 **2 枚**——都在
+   * `event plan.dotm` 的页脚段#0（语料与 office6 各算一次的同一份），一枚裸制表符、无文字，位全从链上借
+   * （`.scratch/band-tab-chars-audience.py`）。那 2 枚都不带 `w:leader`，带子侧的前导符墨因此在语料里 0 受众：
+   * 机制随同一条代码路径来（token 只挂在这一枚真正停进去的格上），不为它另立形状。
+   */
+  tabStops?: TabStop[];
   /** `w:pPr/w:framePr` — the frame that paragraph is drawn as. See `FramePlace`. */
   frame?: FramePlace;
 }
@@ -4497,6 +4511,28 @@ export class WordDocument {
     const ownInd = attrs("ind");
     const ind = indResolve(indOfAttrs((a) => ownInd?.[a]), lent);
     if (Object.values(ind).some((v) => v !== undefined)) out.ind = ind;
+    // 制表位同一句道理合（`mergeTabStops`，逐位置：自己的顶掉链上同位置的，`clear` 把那一格花掉）。带的段
+    // 不经解析树，`w:tab` 的三样属性从 `w:tabs` 孩子的裸字面取，语义与 `tabStopsOf` 同一条：没说 `w:pos` 的
+    // 不落位，`w:val` 没说按 `left` 算。链上这一份 58 段在借（`footer` 样式的 center 4153 / right 8306），
+    // 段自己说的 12 段 / 20 枚——`.scratch/band-tab-chars-audience.py`。
+    const tabsSpan = inner.find((k) => k.tag === "tabs");
+    if (tabsSpan || lent?.tabStops?.length) {
+      const ownStops: TabStop[] = [];
+      for (const t of childSpans(elementContent(tabsSpan?.xml ?? ""))) {
+        if (t.tag !== "tab") continue;
+        const a = attrsOf(t.xml);
+        const pos = Number(a.pos);
+        if (!Number.isFinite(pos)) continue;
+        const val = str(a.val);
+        ownStops.push({
+          posTwips: pos,
+          val: val === "center" || val === "right" || val === "clear" ? val : "left",
+          leader: str(a.leader),
+        });
+      }
+      const stops = mergeTabStops(lent?.tabStops, ownStops.length ? ownStops : undefined);
+      if (stops?.length) out.tabStops = stops;
+    }
     const frame = attrs("framePr");
     if (frame) {
       const f: FramePlace = {};
@@ -4509,7 +4545,9 @@ export class WordDocument {
       if (y !== undefined) f.yTwips = y;
       out.frame = f;
     }
-    return out.align === undefined && out.frame === undefined && out.ind === undefined ? undefined : out;
+    return out.align === undefined && out.frame === undefined && out.ind === undefined && out.tabStops === undefined
+      ? undefined
+      : out;
   }
 
   /**

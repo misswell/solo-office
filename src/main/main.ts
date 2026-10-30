@@ -315,6 +315,29 @@ function smoke(): void {
             kids: [...page.children].map((e) => e.tagName + "." + String(e.className).split(" ")[0]).join("|"),
           };
         }
+        // #235：带子里制表符的落点在装机壳里长什么样。同一只只读腿、同一跳里量：位是 BandPlace.tabStops
+        // 合过样式链的那一份（渲染器写进 data-tab-stops），applyTabStops 把每一枚 span.tab 垫到该停的那一格；
+        // 字面 \t 装在 span 里，所以每段的 textContent 里制表符还在（只报计数，不出文档内容——bandLeg 的老规矩）。
+        // 复件（paintBandCopies 画出来的那份）由 applySheets 末尾那一趟补跑接管，问它与原件同落。
+        let bandTabsLeg = null;
+        {
+          const fb2 = page.querySelector(".hf-footer");
+          if (fb2) {
+            const z2 = zPaper(page);
+            const pCs = getComputedStyle(page);
+            const origin2 = page.getBoundingClientRect().left / z2 + parseFloat(pCs.paddingLeft);
+            const readSpan = (t) => { const r = t.getBoundingClientRect(); return { w: round1(r.width / z2), land: round1(r.left / z2 - origin2), leader: t.dataset.leader || "" }; };
+            const readPara = (e) => ({ attr: e.getAttribute("data-tab-stops") || "", tabs: (e.textContent.match(/\\t/g) || []).length, spans: [...e.querySelectorAll("span.tab")].map(readSpan) });
+            const paras2 = [...fb2.children].filter((e) => e.classList.contains("hf-p"));
+            const clones2 = [...page.querySelectorAll(".hf-footer")].filter((e) => e !== fb2);
+            bandTabsLeg = {
+              padL: round1(parseFloat(pCs.paddingLeft)), zoom: z2,
+              paras: paras2.map(readPara),
+              cloneParas: clones2.length ? [...clones2[0].children].filter((e) => e.classList.contains("hf-p")).map(readPara) : [],
+              clones: clones2.length,
+            };
+          }
+        }
         // #213：正文里的表在栏里坐哪（w:jc 与 w:tblInd 上身之后浏览器算完的那一格）。同一条只读腿，
         // 在读带子这一跳之前、壳刚画完那张纸的时候量；件由 .scratch/make-table-place-smoke.ts 现拼，
         // 六张表照授权口径的形状排：过宽居中 / 居中不说缩进 / 居中+288 / 居中−687 / 只说缩进 / 什么都没说。
@@ -4682,7 +4705,7 @@ function smoke(): void {
         const recovered = { cells: document.querySelectorAll(".sheet-wrap td").length, title: document.getElementById("title")?.textContent };
         // The run ends on a modified document, so quitting goes through the unsaved prompt.
         // A PDF the export asked for shows up in saveAsWrites, next to the pptx/xlsx saves.
-        return { docPart, bandLeg, rulerLeg, painterLeg, leaderLeg, tabStopsLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, clearLeg, styleLeg, vertLeg, caseLeg, origLeg, origTableLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
+        return { docPart, bandLeg, bandTabsLeg, rulerLeg, painterLeg, leaderLeg, tabStopsLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, clearLeg, styleLeg, vertLeg, caseLeg, origLeg, origTableLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
       })()`;
       void last?.webContents
         .executeJavaScript(probe)

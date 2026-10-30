@@ -849,6 +849,10 @@ export class DocEditor {
       const band = this.host.querySelector<HTMLElement>(`:scope .hf-${which}:not(.${BAND_CLONE_CLASS})`);
       if (band) this.numberPageFields(band, which === "header" ? 1 : pages, pages);
     }
+    // 复件身上的制表位补一趟（#235）：复件是上面 `cloneNode` 画出来的，第一趟 `applyTabStops`（铺排前）时它们
+    // 还不存在；母本又躲在纸盒外，那一趟天生量不了它。这一趟落的是复件与原件——同一份 DOM 重跑一遍结果不变
+    // （先撤宽再逐枚量），页码域的数也已在位，带子里跟着制表符的那截文字按填完数的宽量。
+    applyTabStops(page, this.doc);
   }
 
   /**

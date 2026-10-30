@@ -6,7 +6,8 @@ import type { CellWhere, TableEdit } from "../core/doc-table-ops.js";
 import { allCells, applyRowHeights, cellOuterSides, cellRangeFor, cellRect, columnCells, cellsInRect, cellsInSweep, deleteCellHere, deleteColumnHere, deleteRowHere, deleteTableBlock, distributeColumns, distributeRows, gridColumns, gridWidths, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, setColumnWidth, splitHere, splitTableAt, tableToText, type RowHeightMove, type TableTextSeparator } from "../core/doc-table-ops.js";
 import { IMAGE_EXT_BY_MIME } from "../core/media.js";
 import { BAND_SOURCE_CLASS, CARRY_CLASS, CARRY_STYLE, BAND_MASTER_CLASS, PAGE_BORDER_CLASS, RUN_CARRY_CLASS, type RevisionView, fontStack, highlightColor, renderWord } from "../core/render.js";
-import { flatOf, inlineLength, isMark, keepRunIdentity } from "../core/run-identity.js";
+import { flatOf, inlineLength, isMark, keepRunIdentity, restampRunText } from "../core/run-identity.js";
+import { caseText, changedRanges, type CaseMode } from "../core/doc-case.js";
 import { CommentPanel } from "./doc-comments.js";
 import { applyBandYield, applyFitText, applySheetGaps, applyTabStops, BAND_CLONE_CLASS, caretCharTop, caretStatusOf, lineCaretAnchor, lineNumberAt, measurePageLayout, pageAtCaret, pageCaretAnchor, pagePositionAt, REPEAT_HEADER_ROW_CLASS, rowColumnAt, sectionCaretAnchor, SHEET_GAP_ROW_CLASS, SHEET_STRIP_CLASS, type CaretLine, type CaretStatus, type PageAnchor, type PageMeasure, type PagePlacement, type SheetStrip } from "./doc-layout.js";
 import { ReviewPanel } from "./doc-review.js";
@@ -1844,24 +1845,47 @@ export class DocEditor {
    * 段落级那三条命令（左中右与两端对齐、项目符号／编号、增加／减少缩进量）要改的段落：折叠光标就只光标那一段，
    * 有选区就是选区盖住的**每一段**。跨段的取材与 `applyStyle` 改文字格式时是同一句 `rangeEnds()`、同一条走法
    * （首段、末段、顶层两者之间的那些块），所以「这一段被加粗了却没被居中」这种分裂不可能出现。
+   *
+   * 段与段之间那一截由 `selectionSpans()` 一个人说，这里只取它交回的那些段。
    */
   private selectionParagraphs(): Paragraph[] {
+    return this.selectionSpans().map((span) => span.paragraph);
+  }
+
+  /**
+   * 选区盖住的每一段，连着**段里被盖住的那一截**（模型偏移，与 `pathOf` 同一个空间：标记各占一枚字符）。
+   * 段落级命令只问有哪些段（`selectionParagraphs`），「更改大小写」问的是每段里从第几个字到第几个字——
+   * 两头都从这一条走法派生，跨段时不会出现「这一段被加粗了却没被换字面」那种分裂。
+   *
+   * 折叠光标交回整段（`from === to`）：段落级命令按整段办是老口径，按字面改的那一条要的是 `to > from`，
+   * 自己把它筛掉。`rangeEnds()` 交回的是 `Range` 的起止（纸头那端在前），拖选的方向不带进这里。
+   */
+  private selectionSpans(): { paragraph: Paragraph; from: number; to: number }[] {
+    const whole = (paragraph: Paragraph): { paragraph: Paragraph; from: number; to: number } => ({
+      paragraph,
+      from: 0,
+      to: charLength(paragraph.inlines),
+    });
     const ends = this.rangeEnds();
     if (!ends) {
       const at = this.caretPath();
       const only = at ? this.paragraphAt(at.path) : undefined;
-      return only ? [only] : [];
+      return only ? [whole(only)] : [];
     }
     const first = this.paragraphAt(ends.start.path);
-    if (ends.start.path.join() === ends.end.path.join()) return first ? [first] : [];
-    const out: Paragraph[] = [];
-    if (first) out.push(first);
+    if (!first) return [];
+    if (ends.start.path.join() === ends.end.path.join()) {
+      return [{ paragraph: first, from: ends.start.offset, to: ends.end.offset }];
+    }
+    const out: { paragraph: Paragraph; from: number; to: number }[] = [
+      { paragraph: first, from: ends.start.offset, to: charLength(first.inlines) },
+    ];
     for (let i = ends.start.path[0] + 1; i < ends.end.path[0]; i += 1) {
       const block = this.doc.blocks[i];
-      if (block?.kind === "paragraph") out.push(block);
+      if (block?.kind === "paragraph") out.push(whole(block));
     }
     const last = this.paragraphAt(ends.end.path);
-    if (last && last !== first) out.push(last);
+    if (last && last !== first) out.push({ paragraph: last, from: 0, to: ends.end.offset });
     return out;
   }
 
@@ -3585,6 +3609,71 @@ export class DocEditor {
     this.render();
     if (caret) this.setCaret(this.clamp(caret));
     this.hooks.changed();
+  }
+
+  /**
+   * 开始页「更改大小写」那五档（`CT_Home.kuip:121` 的折叠钮 `Font1`，`referenceCommand="ChangeCaseRainbow"`、
+   * `idMso="ChangeCaseGallery"`、`ksoCmd="ChangeCase"`、`rbHotKey="7"`；组内它排在字号放大/缩小之后、
+   * `ClearFormatsRainbow` 之前，`:120-123`）：只改选区里那一截的**字面**，长度、run 的切分、run 身上的格式都不动。
+   *
+   * 折叠光标下不动手：WPS 那一枚在光标折成一点时改的是哪个词、哪一句**未取证**（`mui/zh_CN/wps.qm` 只证明
+   * 「更改大小写」「全部大写」这些字面在包里有，不证明下拉摆哪几档、也不证明点下去管多大一片），
+   * 这里不替它编手感。返回有没有真的改了字——一次没改就不记撤销、不报「改了」。
+   *
+   * 先把手要落的位置全算好再动手：开修订时 `recordRevisions` 会把字重新切开，边算边写就找不到下一处了。
+   * 段内按**连续改动区间**、并从纸尾往纸头落：一次签名划的是流里第一个到最后一个变了的字之间那截，整段一起交
+   * 会把中间没变的汉字也划掉重写；倒着走还让先量好的偏移一直有效——签名把划掉的字留在原地，只有它**后面**的
+   * 位置才后移。
+   */
+  changeCase(mode: CaseMode): boolean {
+    // 与 `applyStyle` 同一条回放：焦点在 ribbon 的格子里时页面里最后一次选区才是用户圈的那一截。
+    if (!this.rangeEnds() && this.pageSelection) this.selectRange(this.pageSelection.start, this.pageSelection.end);
+    const sel = document.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.getRangeAt(0).collapsed) return false;
+    const spans = this.selectionSpans().filter((span) => span.to > span.from);
+    if (!spans.length) return false;
+    const plan = spans.flatMap((span) => {
+      const text = flatOf(span.paragraph.inlines).slice(span.from, span.to);
+      const next = caseText(text, mode);
+      return changedRanges(text, next).map(([from, to]) => ({ ...span, from: span.from + from, to: span.from + to, text: next.slice(from, to) }));
+    });
+    if (!plan.length) return false;
+    const ends = this.rangeEnds();
+    if (!ends) return false;
+    this.snapshot(this.caretPath());
+    let struck = 0;
+    for (const edit of plan.reverse()) {
+      const before = this.trackRevisions ? this.bodyText() : undefined;
+      this.writeSlice(edit.paragraph, edit.from, edit.to, edit.text);
+      if (before) struck += this.recordRevisions(before).struck;
+    }
+    for (const span of spans) restampRunText(span.paragraph.inlines);
+    this.render();
+    // 选区留在原地：接着换一档再点、或者按撤回都是这一笔的事。开修订时划掉的那些字仍留在件里，
+    // 所以纸尾那一端要往后挪它们那么多（与 `replaceAt` 落光标同一条算术）。
+    this.selectRange(ends.start, { path: ends.end.path, offset: ends.end.offset + struck });
+    this.hooks.changed();
+    return true;
+  }
+
+  /**
+   * 段内 `[from,to)` 那一截换成 `text`（等长，模型偏移）。逐枚 run 只替换自己那半段：run 的切分与它身上的
+   * `w:rPr`、修订、图片/断行那类标记一概不动——标记占一枚字符但没有字面，`text` 里那一格本来就是给它的占位。
+   *
+   * 改到的那枚是**复制**而不是就地赋值，`paragraph.inlines` 换成新数组（与 `replaceAt` 走 `spliceText` 换数组
+   * 同一个道理）：`bodyText()` 交回的是模型里那几枚 run 的**引用**，开修订时先照它抄一份「改前」再落笔，
+   * 就地赋值会把那份「改前」一起改掉，`recordRevisions` 读到前后同文，一句修订也不记。
+   */
+  private writeSlice(paragraph: Paragraph, from: number, to: number, text: string): void {
+    let at = 0;
+    paragraph.inlines = paragraph.inlines.map((run) => {
+      const start = at;
+      at += inlineLength(run);
+      if (run.text === "" || to <= start || from >= at) return run;
+      const a = Math.max(from, start);
+      const b = Math.min(to, at);
+      return { ...run, text: run.text.slice(0, a - start) + text.slice(a - from, b - from) + run.text.slice(b - start) };
+    });
   }
 
   /** Paragraph-level properties go straight from the toolbar into the model. */

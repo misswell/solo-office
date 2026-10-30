@@ -82,7 +82,7 @@ function runAt(inlines: Inline[], pos: number): Inline | undefined {
  * A rebuilt child with no carried reference is left alone: without one the writer never joins its neighbours, so
  * there is no run for a group to speak for.
  */
-function restampRunText(next: Inline[]): void {
+export function restampRunText(next: Inline[]): void {
   for (let i = 0; i < next.length; ) {
     const slots = next[i].rPrSlots;
     let j = i + 1;

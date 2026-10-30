@@ -5,6 +5,7 @@ import { OpcPackage } from "../core/opc.js";
 import { writeXlsx } from "../core/write.js";
 import { writeDocx } from "../core/write-docx.js";
 import { History } from "../core/history.js";
+import { CASE_OPTIONS, type CaseMode } from "../core/doc-case.js";
 import { isError } from "../core/formula.js";
 import { rangeSpec, rect, refOf, type Rect } from "../core/sheet-ops.js";
 import { SheetView } from "./sheet-view.js";
@@ -425,7 +426,7 @@ function buildSheetRibbon(): void {
     ctl[key] = i;
     g.append(i);
   };
-  const chooser = (g: HTMLElement, key: string, tip: string, options: [string, string][], run: (value: string) => void): void => {
+  const chooser = (g: HTMLElement, key: string, tip: string, options: readonly [string, string][], run: (value: string) => void): void => {
     const s = document.createElement("select");
     s.className = "pick";
     s.title = tip;
@@ -725,7 +726,7 @@ function buildDocRibbon(): void {
     ctl[key] = b;
     g.append(b);
   };
-  const chooser = (g: HTMLElement, key: string, tip: string, options: [string, string][], run: (value: string) => void): void => {
+  const chooser = (g: HTMLElement, key: string, tip: string, options: readonly [string, string][], run: (value: string) => void): void => {
     const s = document.createElement("select");
     s.className = "pick";
     s.title = tip;
@@ -844,10 +845,22 @@ function buildDocRibbon(): void {
     return box;
   };
   font.append(sizeBox("size"));
-  // 组内次序照 WPS `CT_Home.kuip` 的 `RB_Font`（同一份里的 id 序）：字体名 → 字号 → 清除格式 → 加粗 → 斜体 → 下划线
-  // →（上标/下标、文字效果）→ 突出显示 → 字体颜色。清除格式是 `ClearFormatsRainbow`（`idMso="ClearFormatting"`、
-  // `ksoCmd="ClearFormats"`、`icon="eraser_kd"`、`hotKey="E"`），就排在字号与加粗之间；中文界面字面「清除格式」
-  // 见 `mui/zh_CN/wps.qm`（`.qm` 是 UTF-16BE，只用来确认这四个字，不搬任何资源）。
+  // 「更改大小写」是 `RB_Font` 里那枚折叠钮 `Font1`（`CT_Home.kuip:121`，`referenceCommand="ChangeCaseRainbow"`、
+  // `idMso="ChangeCaseGallery"`、`ksoCmd="ChangeCase"`、`rbHotKey="7"`）。左邻是字号那几枚（`FontSize:111` 与放大/缩小
+  // `:115`/`:117`），右邻是 `ClearFormatsRainbow:122`——这两枚同挂在 `:120-123` 那一枚 `KRbLayoutListCommand` 里。中文界面字面（「更改大小写」「全部大写」「切换大小写」「词首字母大写」「小写」）在
+  // `mui/zh_CN/wps.qm` 里都有，但那张池子只证明字在包里有，不证明下拉就摆这五档、也不证明次序：档位按 Word 那五档，
+  // 「小型大写字母」那一枚（字面同在 `wps.qm`，落的是 `w:smallCaps` 那种格式而不是改字面）本片不接。
+  // 这一格与「转换成文本」同形状：选方向的一次性命令，落完笔回到占位，不当开关、不回显。
+  chooser(font, "changeCase", "更改大小写（WPS：Change Case）", CASE_OPTIONS, (v) => {
+    (ctl.changeCase as HTMLSelectElement).value = "";
+    if (v) editor?.changeCase(v as CaseMode);
+    syncDocRibbon();
+  });
+  // 组内次序照 WPS `CT_Home.kuip` 的 `RB_Font`（同一份里的 id 序）：字体名 → 字号 →（放大/缩小）→ 更改大小写 →
+  // 清除格式 → 加粗 → 斜体 → 下划线 →（上标/下标、文字效果）→ 突出显示 → 字体颜色。
+  // 清除格式是 `ClearFormatsRainbow`（`idMso="ClearFormatting"`、`ksoCmd="ClearFormats"`、`icon="eraser_kd"`、
+  // `hotKey="E"`），与 `Font1` 同挂在 `:120-123` 那一条布局里、在它之后；中文界面字面「清除格式」见
+  // `mui/zh_CN/wps.qm`（`.qm` 是 UTF-16BE，只用来确认这四个字，不搬任何资源）。
   button(font, "clearfmt", "清除格式", "清除所选文字的直接格式（字体/字号/粗细/斜体/下划线/删除线/颜色/突出显示/上下标/字距）；段落格式与段落样式不动", () => {
     editor?.clearFormat();
     syncDocRibbon();
@@ -1605,7 +1618,7 @@ function buildDeckRibbon(): void {
     deck?.applyStyle(kind);
     syncDeckRibbon();
   };
-  const chooser = (g: HTMLElement, key: string, tip: string, options: [string, string][], run: (value: string) => void): void => {
+  const chooser = (g: HTMLElement, key: string, tip: string, options: readonly [string, string][], run: (value: string) => void): void => {
     const s = document.createElement("select");
     s.className = "pick";
     s.title = tip;

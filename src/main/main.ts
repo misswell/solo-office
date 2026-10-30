@@ -3201,6 +3201,147 @@ function smoke(): void {
             savedDirty: (document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0,
           };
         }
+        // #231：开始页「更改大小写」那一格在装机这只壳里走一趟。WPS 的 CT_Home.kuip:121 把这几条命令折成一枚
+        // 折叠钮 Font1（referenceCommand="ChangeCaseRainbow"、idMso="ChangeCaseGallery"、ksoCmd="ChangeCase"、
+        // rbHotKey="7"），组内排在字号放大/缩小之后、ClearFormatsRainbow 之前（:120-123）。档位与档位名按
+        // Word 那五档摆：mui/zh_CN/wps.qm 只证明「更改大小写」「全部大写」这些字面在包里有（那是一张扁平哈希池），
+        // 不证明下拉就摆这五档、也不证明次序——未取证。这一腿问四件事：① 格在开始页有面、与字号框同组、
+        // 字号到更改大小写到清除格式自左向右；② 落「全部大写」把拉丁抬起来、汉字一个字不动、格子落回占位、件报脏；
+        // ③ 改的是字面不是格式——丁组自己那句粗与 16 磅在纸上仍读得回来，撤销之后字面回原样而格式还在；
+        // ④ ß 不摊成 SS（长度不变是这一族的根，WPS 真机在那一点上怎么落未取证）。
+        // 乙组那句 w:tab 与盘上落回的 w:t 字面由装机器反读那一步问。
+        const csDoc = (document.getElementById("title")?.textContent ?? "").includes("大小写");
+        let caseLeg = null;
+        if (csDoc) {
+          const csHomeTab = [...document.querySelectorAll(".rtabs button")].find((b) => b.textContent === "开始");
+          if (csHomeTab && !csHomeTab.classList.contains("on")) {
+            csHomeTab.click();
+            await wait(220);
+          }
+          // 同 #223/#226/#227：修订开着时这一笔会划出 w:del/w:ins，与本族问的「字面改了、格式没改」混在一起。
+          const csTrackBtn = () => [...document.querySelectorAll("#ribbon button.rb")].find((b) => b.textContent === "修订");
+          const csTrackOn = () => (csTrackBtn()?.classList.contains("on") ? 1 : 0);
+          const csTrack0 = csTrackOn();
+          if (csTrack0) {
+            csTrackBtn()?.click();
+            await wait(320);
+          }
+          const ZW = String.fromCharCode(8203);
+          const csPara = (needle) => [...document.querySelectorAll("#view .page .para")].find((x) => (x.textContent ?? "").includes(needle));
+          // 每问一次都重新查：落笔那一趟 render() 换的是 host.innerHTML，上一趟拿到的节点已经不在树上。
+          const csText = (needle) => {
+            const el = csPara(needle);
+            return el ? (el.textContent ?? "").split(ZW).join("") : null;
+          };
+          const csWalk = (needle) => {
+            const el = csPara(needle);
+            if (!el) return null;
+            const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+            for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+              if ((n.textContent ?? "").includes(needle)) return n;
+            }
+            return null;
+          };
+          // 整段圈进来：焦点得先落回页里，ribbon 那一格才把这一截当用户圈的选区（与 applyStyle 同一条回放）。
+          const csPut = (needle) => {
+            const el = csPara(needle);
+            if (!el) return 0;
+            const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+            const nodes = [];
+            for (let n = walk.nextNode(); n; n = walk.nextNode()) nodes.push(n);
+            if (!nodes.length) return 0;
+            const lastNode = nodes[nodes.length - 1];
+            const r = document.createRange();
+            r.setStart(nodes[0], 0);
+            r.setEnd(lastNode, (lastNode.textContent ?? "").length);
+            const s = document.getSelection();
+            s?.removeAllRanges();
+            if (s) s.addRange(r);
+            el.closest(".page")?.focus?.();
+            document.dispatchEvent(new Event("selectionchange"));
+            return 1;
+          };
+          const csBox = () => [...document.querySelectorAll("#ribbon .rbar[data-tab='home'] select.pick")].find((x) => (x.getAttribute("title") ?? "").includes("更改大小写"));
+          const csPick = (label) => {
+            const box = csBox();
+            if (!box) return 0;
+            const opt = [...box.options].find((o) => o.textContent === label);
+            if (!opt) return 0;
+            box.value = opt.value;
+            box.dispatchEvent(new Event("change"));
+            return 1;
+          };
+          const csSizeBox = () => document.querySelector("#ribbon .rbar[data-tab='home'] input.sizebox");
+          const csClearBtn = () => [...document.querySelectorAll("#ribbon .rbar[data-tab='home'] button")].find((b) => (b.textContent ?? "").trim() === "清除格式");
+          const csGroup = csBox() && csSizeBox() ? (csBox().parentElement === csSizeBox().parentElement ? 1 : 0) : 0;
+          const csOptions = [...(csBox() ? csBox().options : [])].map((o) => o.textContent).join("|");
+          const csOrder = (() => {
+            const a = csSizeBox()?.getBoundingClientRect();
+            const b = csBox()?.getBoundingClientRect();
+            const c = csClearBtn()?.getBoundingClientRect();
+            if (!a || !b || !c) return null;
+            return { sizeLtCase: a.left < b.left ? 1 : 0, caseLtClear: b.left < c.left ? 1 : 0 };
+          })();
+          const csLook = (needle) => {
+            const node = csWalk(needle);
+            if (!node || !node.parentElement) return null;
+            const cs = getComputedStyle(node.parentElement);
+            return { weight: cs.fontWeight, size: round1(parseFloat(cs.fontSize)) };
+          };
+          const csDirty = () => ((document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0);
+          // 甲组：一句 run 里汉字与拉丁并排。抬起来之后汉字一个字不能少，格子要回到占位（这一格是选方向的，不是开关）。
+          csPut("甲组");
+          const csJiaBefore = csText("甲组");
+          csPick("全部大写");
+          await wait(260);
+          const csJiaUpper = { text: csText("甲组"), echo: csBox()?.value ?? "?", dirty: csDirty() };
+          csPut("甲组");
+          csPick("小写");
+          await wait(260);
+          const csJiaLower = csText("甲组");
+          // 乙组：三枚 run，中间那枚只有 w:tab 没有字面。两头的字都抬起来，那一枚不许被吃掉（盘上还剩一枚由反读问）。
+          csPut("乙组");
+          csPick("全部大写");
+          await wait(260);
+          const csYi = { text: csText("乙组"), len: (csText("乙组") ?? "").length };
+          // 丙组：ß 摊开是两枚字符，家里按「长度不变」那一档留着原字面。整段改前改后一样长才算这一条。
+          csPut("丙组");
+          const csBingBefore = csText("丙组");
+          csPick("全部大写");
+          await wait(260);
+          const csBing = { text: csText("丙组"), sameLen: (csText("丙组") ?? "").length === (csBingBefore ?? "").length ? 1 : 0 };
+          // 丁组：自己写了粗与 16 磅。切换大小写只改字面，那两句格式得仍站在纸上；撤销回原样，格式还得在。
+          csPut("丁组");
+          csPick("切换大小写");
+          await wait(260);
+          const csDingToggled = { text: csText("丁组"), look: csLook("丁组") };
+          [...document.querySelectorAll("#ribbon button.rb")].find((b) => (b.textContent ?? "").trim() === "↶")?.click();
+          await wait(260);
+          const csDingUndone = { text: csText("丁组"), look: csLook("丁组") };
+          if (csTrack0) {
+            csTrackBtn()?.click();
+            await wait(320);
+          }
+          fire("solo:save");
+          await wait(1400);
+          caseLeg = {
+            hasBox: csBox() ? 1 : 0,
+            group: csGroup,
+            order: csOrder,
+            options: csOptions,
+            jiaBefore: csJiaBefore,
+            jiaUpper: csJiaUpper,
+            jiaLower: csJiaLower,
+            yi: csYi,
+            bingBefore: csBingBefore,
+            bing: csBing,
+            dingToggled: csDingToggled,
+            dingUndone: csDingUndone,
+            trackBefore: csTrack0,
+            trackBack: csTrackOn(),
+            savedDirty: csDirty(),
+          };
+        }
         // #224：「显示原文」那一档纸面穿的是每条属性改动记录里的 prev（render.ts 走 doc.originalView()），
         // 所以读数的框也得说同一句。这一腿问三处同源：段落对话框里段前那一格、行距那一档、开始页对齐那四枚
         // 亮的是哪一枚；切回「显示修订」再问一遍，两档各自与纸面 text-align 对齐。
@@ -4151,7 +4292,7 @@ function smoke(): void {
         const recovered = { cells: document.querySelectorAll(".sheet-wrap td").length, title: document.getElementById("title")?.textContent };
         // The run ends on a modified document, so quitting goes through the unsaved prompt.
         // A PDF the export asked for shows up in saveAsWrites, next to the pptx/xlsx saves.
-        return { docPart, bandLeg, rulerLeg, painterLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, clearLeg, styleLeg, vertLeg, origLeg, origTableLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
+        return { docPart, bandLeg, rulerLeg, painterLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, clearLeg, styleLeg, vertLeg, caseLeg, origLeg, origTableLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
       })()`;
       void last?.webContents
         .executeJavaScript(probe)

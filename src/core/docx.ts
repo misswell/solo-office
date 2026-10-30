@@ -6732,7 +6732,9 @@ export function applyFacePick(run: Pick<Inline, "text" | "rPrSlots" | "runText">
  * 主人放在 core 而不是 UI：`src/ui/doc-edit.ts` 的 `restyle` 与 `armPending` 都只是它的调用方，UI 里再抄一份摊开
  * 的写法就是第二个主人（抄的那份永远不会漏，本文件第一轮即如此）。
  */
-export function applyRunPatch(inline: Inline, patch: Partial<RunStyle>): Inline {
+export type RunPatch = { [K in keyof RunStyle]?: RunStyle[K] | "" };
+
+export function applyRunPatch(inline: Inline, patch: RunPatch): Inline {
   const out: Inline = { ...inline };
   const entries = Object.entries(patch) as [keyof RunStyle, RunStyle[keyof RunStyle]][];
   if (patch.font) entries.push(...(Object.entries(applyFacePick(inline, patch.font)) as [keyof RunStyle, RunStyle[keyof RunStyle]][]));

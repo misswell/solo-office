@@ -849,6 +849,14 @@ function buildDocRibbon(): void {
   button(font, "italic", "斜", "斜体 ⌘I", () => style({ italic: !editor?.markState().italic }));
   button(font, "under", "线", "下划线 ⌘U", () => style({ underline: editor?.markState().underline ? "none" : "single" }));
   button(font, "strike", "删", "删除线", () => style({ strike: !editor?.markState().strike }));
+  // 上标/下标在 WPS 的 `RB_Font` 里是**一枚折叠钮**：`CT_Home.kuip:136` 那枚 `Font4`（`customTip="Superscript"`、
+  // `icon="math_superscript_kd"`、`singlerowfold="1"`）把 `Superscript`（:50）与 `Subscript`（:51）两枚折在一起，
+  // 组内声明序是 `Underline`（:133）→ `Font2` 删除线（:135）→ `Font4` 上下标（:136）→ `FontEffects`（:142）→
+  // `HighlightColor`（:147）——正是这一行现在的次序。折叠钮的那一半（下拉里的另一档、`FontEffects` 文字效果）家里
+  // 没有对应的控件形状，这里按两枚平铺：折进去的两只腿就是这两条命令，不另造一枚假下拉。两枚都是开关：按已按下的
+  // 那枚＝撤回（上标再按下标＝换成下标，那是另一枚的事）。落笔与回显走 `applyStyle`/`markState()` 同一条路。
+  button(font, "sup", "上标", "上标", () => style({ vertAlign: editor?.markState().vertAlign === "superscript" ? "" : "superscript" }));
+  button(font, "sub", "下标", "下标", () => style({ vertAlign: editor?.markState().vertAlign === "subscript" ? "" : "subscript" }));
   chooser(
     font,
     "highlight",
@@ -1332,6 +1340,10 @@ function syncDocRibbon(force = false): void {
   lit(["italic", "tblItalic"], state?.italic ?? false);
   lit(["under", "tblUnder"], state?.underline ?? false);
   mark("strike", state?.strike ?? false);
+  // 上下标两枚一起亮是不可能的：`markState()` 只交一个字段；明说 `baseline` 的那枚 run（授权 9 份作者件里 0 枚、
+  // 模型另有那一档）两枚都不亮——纸上它没抬也没落，亮哪一枚都是替它说话。
+  mark("sup", state?.vertAlign === "superscript");
+  mark("sub", state?.vertAlign === "subscript");
   // 「查看网格线」那一枚回显的是**视图档**、不问文档：它不跟着光标变，也不参与「件改了没有」的判断。
   // 容器上那一枚 `doc-grid` 也在这一趟挂/摘——换文件、开关、编辑后重读走的都是这一条路，不留第二处写法。
   mark("gridlines", showGridlines);

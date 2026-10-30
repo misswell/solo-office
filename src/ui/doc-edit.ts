@@ -568,8 +568,12 @@ type BodyText = { runs: Inline[]; spans: { paragraph: Paragraph; length: number;
  * 一次格式命令能说出口的那几句。`font` 说的是「这个 run 的脸」，而模型里它管两槽（§17.3.2.26 把一个 run 的字按书写
  * 系统分派），所以 `fontEastAsia` 不在这张名单上——它不是一条命令，只是 `font` 该不该管到汉字那一槽的另外半边
  * （`pickedFaceCoversHan`）。
+ *
+ * `vertAlign` 的 `""` 是「撤回上下标」：与 `underline: "none"` 不同，`w:vertAlign` 的 §17.3.2.24 取消极是
+ * `baseline`，而真机 WPS 把上标按回去时写的是哪一句**未取证**；家里按 `applyRunPatch` 的空串口径把槽撤掉，
+ * 落回原件没有任何一句的那一半字节，不替文件说一个它没写过的 `baseline`。
  */
-export type StylePatch = Partial<Pick<RunStyle, "bold" | "italic" | "underline" | "strike" | "sizePt" | "color" | "highlight" | "font">>;
+export type StylePatch = Partial<Pick<RunStyle, "bold" | "italic" | "underline" | "strike" | "sizePt" | "color" | "highlight" | "font">> & { vertAlign?: RunStyle["vertAlign"] | "" };
 
 /** `StylePatch` 加上一条命令摊开到的那一槽：只有 `patched` 与 `armPending` 会在内部写它，工具栏递不出。 */
 type WidePatch = StylePatch & Partial<Pick<RunStyle, "fontEastAsia">>;
@@ -1327,6 +1331,12 @@ export class DocEditor {
     if (patch.sizePt !== undefined && Number.isFinite(patch.sizePt)) parts.push(`font-size:${patch.sizePt}pt;`);
     // 预览用渲染器那一份拼法：占位 span 与它左边那段穿同一对脸，`solo-ea-` 那个借名才不会被当成文档说过的字。
     if (patch.font) parts.push(`font-family:${fontStack({ font: patch.font, fontEastAsia: patch.fontEastAsia })};`);
+    // 上下标只抬位置，不在这里写渲染器那句 `font-size:.75em`：缩一圈是纸的排版层（`render.ts` 把它套在内层），
+    // 写在这枚占位 span 上要么把上面那句磅数盖掉（`styleOf` 读到的就不是文件那个数），要么让占位 span 里先落
+    // 下来的字带着一个模型里没有的字号。撤回（`""`）说 `baseline`：接下来的字不能继承光标左边那枚上标。
+    if (patch.vertAlign !== undefined) {
+      parts.push(`vertical-align:${patch.vertAlign === "superscript" ? "super" : patch.vertAlign === "subscript" ? "sub" : "baseline"};`);
+    }
     return parts.join("");
   }
 
@@ -3214,7 +3224,7 @@ export class DocEditor {
    * 授权 46 份 20 枚）不在它的两档里。名字住在模型字段上，这里只报「这一段有没有穿线」，两页的灯与 `? "none" : "single"`
    * 那一句都问这一个答案；粗线因此在按钮眼里与单线同格，跳下去仍是把线说到「不要」。
    */
-  markState(): { bold: boolean; italic: boolean; underline: boolean; strike: boolean; sizePt?: number; color?: string; highlight?: string; font?: string; align?: string; list?: "bullet" | "number"; line?: number; lineRule?: LineSpacingRule; styleId?: string } {
+  markState(): { bold: boolean; italic: boolean; underline: boolean; strike: boolean; sizePt?: number; color?: string; highlight?: string; font?: string; vertAlign?: "baseline" | "superscript" | "subscript"; align?: string; list?: "bullet" | "number"; line?: number; lineRule?: LineSpacingRule; styleId?: string } {
     const sel = document.getSelection();
     let el: Element | null = null;
     if (sel?.rangeCount) {
@@ -3252,6 +3262,9 @@ export class DocEditor {
       // 「说了」与「没说」在纸上是两个读数，抵一个想象中的 `#000000` 就是把量出来的换了想出来的。
       color: carried.color ?? (el ? hexOf(getComputedStyle(el).color) : undefined),
       highlight: carried.highlight,
+      // 上下标问的是纸上这句字**现在**怎么摆（`styleOf` 从 `<sup>`/`<sub>` 与 `vertical-align` 都读），所以悬光标
+      // 处那枚占位 span 也在这条链上：按了上标还没打字时，回显已经说是上标，与 WPS 的开关钮同一眼。
+      vertAlign: carried.vertAlign,
       // 待用的那一张脸还没进模型（占位 span 上才算数），它得盖在回显上，否则工具栏说的是光标原来穿的脸。
       font: this.pendingFormatPatch.font ?? faceShown(this.caretRun()),
       align: shown?.align,
@@ -3289,7 +3302,10 @@ export class DocEditor {
       // 高亮、字号与字体这三族的待用格式由编辑器自己举（`armPending`）：Blink 交不出「无」，也没有写得出磅数的
       // 命令；`fontFamily` 那条命令交给页面的是 CSS 的栈，而这一页的栈带着渲染器借的族名，读回来就是给件里没写过
       // 的名字盖章。余下的（粗体/斜体/下划线/删除线/墨色）实测待用有效，仍交给它。
-      if (key === "highlight" || key === "sizePt" || key === "font") this.armPending(patch);
+      // 上下标也自己举：`superscript`/`subscript` 这两条命令是**开关**，WPS 真机在光标折成一点时按「下标」按回去
+      // 是换成下标还是抵成基线未取证，而这里要的恰恰是「上标再按下标＝下标」「同按两次＝撤掉」这两句；举在自己手里
+      // 还让撤回能说 `baseline`，不必猜 Blink 会留哪一句。
+      if (key === "highlight" || key === "sizePt" || key === "font" || key === "vertAlign") this.armPending(patch);
       else {
         document.execCommand("styleWithCSS", false, "true");
         // 线名递不进这条命令：它只认「true/false/别的（=toggle）」这一眼，`"single"` 递进去读的是什么没人量过。

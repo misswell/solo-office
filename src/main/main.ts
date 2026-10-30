@@ -2982,6 +2982,143 @@ function smoke(): void {
             savedDirty: (document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0,
           };
         }
+        // #227：开始页那两枚「上标/下标」在装机这只壳里走一趟。WPS 的 CT_Home.kuip:50-51 声明这两条命令，
+        // :136-138 又把它们折成一枚 Font4（singlerowfold="1"），摆在删除线与字体效果之间。这一腿问四件事——
+        // 组内次序（删除线/上标/下标自左向右）、件里三种说法各自回显（乙上标亮、丙下标亮、丁明说 baseline 两枚都不亮）、
+        // 甲组按上标再按下标是「换一档」而不是叠两句、乙组与丁组按回自己那一档是撤槽（纸上回到不抬不落）、
+        // 戊组那句 22 磅在字号框里仍读得回来（缩一圈只是纸的排版层）。盘上落回哪几句由装机器反读那一步问。
+        const vaDoc = (document.getElementById("title")?.textContent ?? "").includes("上下标");
+        let vertLeg = null;
+        if (vaDoc) {
+          const vaHomeTab = [...document.querySelectorAll(".rtabs button")].find((b) => b.textContent === "开始");
+          if (vaHomeTab && !vaHomeTab.classList.contains("on")) {
+            vaHomeTab.click();
+            await wait(220);
+          }
+          // 同 #223/#226：修订开着落这一击会多一枚 w:rPrChange，与本族问的「同槽只有一句」混在一起。
+          const vaTrackBtn = () => [...document.querySelectorAll("#ribbon button.rb")].find((b) => b.textContent === "修订");
+          const vaTrackOn = () => (vaTrackBtn()?.classList.contains("on") ? 1 : 0);
+          const vaTrack0 = vaTrackOn();
+          if (vaTrack0) {
+            vaTrackBtn()?.click();
+            await wait(320);
+          }
+          const vaPara = (needle) => [...document.querySelectorAll("#view .page .para")].find((x) => (x.textContent ?? "").includes(needle));
+          const vaPut = (needle) => {
+            const el = vaPara(needle);
+            if (!el) return 0;
+            const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+            let node = null;
+            for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+              if ((n.textContent ?? "").includes(needle)) {
+                node = n;
+                break;
+              }
+            }
+            if (!node) return 0;
+            const r = document.createRange();
+            r.setStart(node, 0);
+            r.setEnd(node, (node.textContent ?? "").length);
+            const s = document.getSelection();
+            s?.removeAllRanges();
+            if (s) s.addRange(r);
+            el.closest(".page")?.focus?.();
+            document.dispatchEvent(new Event("selectionchange"));
+            return 1;
+          };
+          // 缩一圈套在 run 自己那一枚里面：里头那枚说 vertical-align，外头那枚说文件写的磅数。两处各问各的，
+          // 问到同一枚头上就会把「22 磅」读成 16.5（.75em 算出来的纸面值），那种读数正是这一族要防的降级。
+          const vaLook = (needle) => {
+            const el = vaPara(needle);
+            if (!el) return null;
+            const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+            let node = null;
+            for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+              if ((n.textContent ?? "").includes(needle)) {
+                node = n;
+                break;
+              }
+            }
+            if (!node) return null;
+            const inner = node.parentElement ?? el;
+            let outer = inner;
+            while (outer.parentElement && outer.parentElement !== el) outer = outer.parentElement;
+            const ci = getComputedStyle(inner);
+            const co = getComputedStyle(outer);
+            return { va: ci.verticalAlign, inner: round1(parseFloat(ci.fontSize)), outer: round1(parseFloat(co.fontSize)) };
+          };
+          const vaBtn = (label) => [...document.querySelectorAll("#ribbon .rbar[data-tab='home'] button")].find((b) => (b.textContent ?? "").trim() === label);
+          const vaEcho = (needle) => {
+            vaPut(needle);
+            return { sup: vaBtn("上标")?.classList.contains("on") ? 1 : 0, sub: vaBtn("下标")?.classList.contains("on") ? 1 : 0 };
+          };
+          const vaSizeBox = () => document.querySelector("#ribbon .rbar[data-tab='home'] input.sizebox");
+          const vaStrike = () => [...document.querySelectorAll("#ribbon .rbar[data-tab='home'] button")].find((b) => (b.getAttribute("title") ?? "").startsWith("删除线"));
+          const vaOrder = (() => {
+            const strike = vaStrike()?.getBoundingClientRect();
+            const sup = vaBtn("上标")?.getBoundingClientRect();
+            const sub = vaBtn("下标")?.getBoundingClientRect();
+            if (!strike || !sup || !sub) return null;
+            return { strikeLtSup: strike.left < sup.left ? 1 : 0, supLtSub: sup.left < sub.left ? 1 : 0 };
+          })();
+          const vaEchoYi = vaEcho("乙组");
+          const vaEchoBing = vaEcho("丙组");
+          const vaEchoDing = vaEcho("丁组");
+          const vaEchoJia = vaEcho("甲组");
+          // 甲组：一件什么都没说的 run，按上标再按下标。第二下是「换一档」，两句不许并排站着。
+          vaPut("甲组");
+          vaBtn("上标")?.click();
+          await wait(240);
+          const vaJiaSup = { echo: vaEcho("甲组"), look: vaLook("甲组") };
+          vaBtn("下标")?.click();
+          await wait(240);
+          const vaJiaSub = { echo: vaEcho("甲组"), look: vaLook("甲组") };
+          // 丙组：本来下标，按上标换过来。
+          vaPut("丙组");
+          vaBtn("上标")?.click();
+          await wait(240);
+          const vaBingSup = { echo: vaEcho("丙组"), look: vaLook("丙组") };
+          // 乙组：本来上标，再按一次上标就是撤回——纸上回到不抬不落，回显两枚都灭。
+          vaPut("乙组");
+          vaBtn("上标")?.click();
+          await wait(240);
+          const vaYiOff = { echo: vaEcho("乙组"), look: vaLook("乙组") };
+          // 丁组：明说 baseline 的 run 按上去再按回来，原来那句让位、回来时槽撤掉（不补写一句 baseline）。
+          vaPut("丁组");
+          vaBtn("上标")?.click();
+          await wait(240);
+          const vaDingOn = { echo: vaEcho("丁组"), look: vaLook("丁组") };
+          vaBtn("上标")?.click();
+          await wait(240);
+          const vaDingOff = { echo: vaEcho("丁组"), look: vaLook("丁组") };
+          // 戊组：22 磅的上标——字号框读文件那一句，纸里头那枚才是缩过的。
+          vaPut("戊组");
+          await wait(180);
+          const vaSizeEcho = { value: vaSizeBox()?.value ?? "?", look: vaLook("戊组") };
+          if (vaTrack0) {
+            vaTrackBtn()?.click();
+            await wait(320);
+          }
+          fire("solo:save");
+          await wait(1400);
+          vertLeg = {
+            order: vaOrder,
+            echoYi: vaEchoYi,
+            echoBing: vaEchoBing,
+            echoDing: vaEchoDing,
+            echoJia: vaEchoJia,
+            jiaSup: vaJiaSup,
+            jiaSub: vaJiaSub,
+            bingSup: vaBingSup,
+            yiOff: vaYiOff,
+            dingOn: vaDingOn,
+            dingOff: vaDingOff,
+            sizeEcho: vaSizeEcho,
+            trackBefore: vaTrack0,
+            trackBack: vaTrackOn(),
+            savedDirty: (document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0,
+          };
+        }
         // #224：「显示原文」那一档纸面穿的是每条属性改动记录里的 prev（render.ts 走 doc.originalView()），
         // 所以读数的框也得说同一句。这一腿问三处同源：段落对话框里段前那一格、行距那一档、开始页对齐那四枚
         // 亮的是哪一枚；切回「显示修订」再问一遍，两档各自与纸面 text-align 对齐。
@@ -3932,7 +4069,7 @@ function smoke(): void {
         const recovered = { cells: document.querySelectorAll(".sheet-wrap td").length, title: document.getElementById("title")?.textContent };
         // The run ends on a modified document, so quitting goes through the unsaved prompt.
         // A PDF the export asked for shows up in saveAsWrites, next to the pptx/xlsx saves.
-        return { docPart, bandLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, clearLeg, styleLeg, origLeg, origTableLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
+        return { docPart, bandLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, clearLeg, styleLeg, vertLeg, origLeg, origTableLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
       })()`;
       void last?.webContents
         .executeJavaScript(probe)

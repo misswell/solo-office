@@ -606,3 +606,46 @@ export function makeRowDistributeDocx(): Uint8Array {
         row(600, "寅一", "寅二"));
   return pack(document);
 }
+
+/**
+ * 「显示原文」那一档的表层读数（#225）：一张表把三层记录都挂上，纸面与读数框都该穿记录里的 `prev`。
+ *  · 表：现值 居中 / 缩进 284 / 固定列宽 / 左边距 108 / 地 DDEEFF / 顶边单线 12 红；记录说改前
+ *    右对齐 / 无缩进 / 自动列宽 / 左边距 72 / 地 F2F2F2 / 顶边点线 4 黑。
+ *  · 首行：现值 高 600 exact / 标题行 / 行对齐 center；记录说改前 高 300 / 允许断开 / 行对齐 left。
+ *  · 首格：现值 宽 2000 / 地 FFF2CC / 底对齐 / 顶边单线 8 绿；记录说改前 宽 1500 / 地 DDEBF7 /
+ *    顶对齐 / 顶边双线 4 品红。
+ * 第二行一句没说，两档同脸——原文不是把整张表都翻个面。记录按 MS 的例子裹一层同名元素
+ * （`<w:tblPrChange><w:tblPr>`、`<w:trPrChange><w:trPr>`），格那条直接写属性（同
+ * `makeTablePropertyRevisionDocx` 的两种拼法）。未取证：WPS 自己写这几种记录的字面仍未见过。
+ *
+ * 四格的词用 卯/辰/巳/午 而不是 甲/乙/丙/丁：装机烟测里 #146/#149/#152 那几腿按「甲」「末」找表落笔，
+ * 用同一批词会被它们改写，读数就不再是件里原本那一句（第一趟实测：格的底纹被填成 00B050、记录被接受掉）。
+ */
+export function makeOriginalTableReadDocx(): Uint8Array {
+  const document =
+    `<w:p><w:r><w:t>表前读数</w:t></w:r></w:p>` +
+    `<w:tbl><w:tblPr><w:tblW w:w="4000" w:type="dxa"/><w:jc w:val="center"/><w:tblInd w:w="284" w:type="dxa"/>` +
+    `<w:tblBorders><w:top w:val="single" w:sz="12" w:space="0" w:color="FF0000"/></w:tblBorders>` +
+    `<w:shd w:val="clear" w:color="auto" w:fill="DDEEFF"/><w:tblLayout w:type="fixed"/>` +
+    `<w:tblCellMar><w:left w:w="108" w:type="dxa"/></w:tblCellMar>` +
+    `<w:tblPrChange ${REV_ATTRS(71, "顾峰")}><w:tblPr><w:tblW w:w="4000" w:type="dxa"/><w:jc w:val="right"/><w:tblInd w:w="0" w:type="dxa"/>` +
+    `<w:tblBorders><w:top w:val="dashed" w:sz="4" w:space="0" w:color="000000"/></w:tblBorders>` +
+    `<w:shd w:val="clear" w:color="auto" w:fill="F2F2F2"/><w:tblLayout w:type="autofit"/>` +
+    `<w:tblCellMar><w:left w:w="72" w:type="dxa"/></w:tblCellMar></w:tblPr></w:tblPrChange></w:tblPr>` +
+    `<w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid>` +
+    `<w:tr><w:trPr><w:trHeight w:val="600" w:hRule="exact"/><w:tblHeader/><w:jc w:val="center"/>` +
+    `<w:trPrChange ${REV_ATTRS(72, "顾峰")}><w:trPr><w:trHeight w:val="300"/><w:cantSplit/><w:jc w:val="left"/></w:trPr></w:trPrChange></w:trPr>` +
+    `<w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/>` +
+    `<w:tcBorders><w:top w:val="single" w:sz="8" w:space="0" w:color="00FF00"/></w:tcBorders>` +
+    `<w:shd w:val="clear" w:color="auto" w:fill="FFF2CC"/><w:vAlign w:val="bottom"/>` +
+    `<w:tcPrChange ${REV_ATTRS(73, "顾峰")}><w:tcW w:w="1500" w:type="dxa"/>` +
+    `<w:tcBorders><w:top w:val="double" w:sz="4" w:space="0" w:color="FF00FF"/></w:tcBorders>` +
+    `<w:shd w:val="clear" w:color="auto" w:fill="DDEBF7"/><w:vAlign w:val="top"/></w:tcPrChange></w:tcPr>` +
+    `<w:p><w:r><w:t>卯</w:t></w:r></w:p></w:tc>` +
+    `<w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>辰</w:t></w:r></w:p></w:tc></w:tr>` +
+    `<w:tr><w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>巳</w:t></w:r></w:p></w:tc>` +
+    `<w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>午</w:t></w:r></w:p></w:tc></w:tr>` +
+    `</w:tbl>` +
+    `<w:p><w:r><w:t>表后读数</w:t></w:r></w:p>`;
+  return pack(document);
+}

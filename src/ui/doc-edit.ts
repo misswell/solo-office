@@ -1773,6 +1773,22 @@ export class DocEditor {
     return targets.map((p) => (p.revFormat ? this.doc.originalView([p])[0] ?? p : p));
   }
 
+  /**
+   * 同一张表，但按**纸上正在画的那一份**交——与 `shownParagraphs` 同一条 `originalView`（#225）。表的
+   * `w:tblPrChange`、每一行的 `w:trPrChange`、每一格的 `w:tcPrChange` 都由它按记录里的 `prev` 摆回去，
+   * 「边框与底纹」「表格属性」「单元格尺寸」这些读数才不在原文档里说现值那一句。表里一条记录都没有时
+   * 不必复制：`originalView` 交回来的只会是一模一样的克隆。
+   *
+   * 只给**读数**用。落笔那几条腿（`setTableBox`、`setTableProps`、`setCellHeight` 等）仍拿真身改模型。
+   */
+  private shownTable(table: Table): Table {
+    if (this.revisionView !== "original") return table;
+    const revised =
+      !!table.revFormat ||
+      table.rows.some((row) => !!row[0]?.row?.revFormat || row.some((cell) => (cell.revs?.length ?? 0) > 0));
+    return revised ? (this.doc.originalView([table])[0] ?? table) : table;
+  }
+
   setCaret(caret: DocPath): void {
     const el = this.elementAt(caret.path);
     const spot = this.spotOf(caret);
@@ -3586,14 +3602,16 @@ export class DocEditor {
   tableBoxState(): BoxState<TableBoxSide> | undefined {
     const segments = this.selectionTableSegments();
     if (!segments.length) return undefined;
-    const projected = segments.map((segment) => projectBox(TABLE_BOX_SIDES, segment.table.borders));
-    const ground = agreedValue(segments.map((segment) => segment.table.shading));
+    // 「显示原文」那一档纸面按记录里的 `prev` 画表（`shownTable`），读数跟着同一条路子走。
+    const shown = segments.map((segment) => this.shownTable(segment.table));
+    const projected = shown.map((table) => projectBox(TABLE_BOX_SIDES, table.borders));
+    const ground = agreedValue(shown.map((table) => table.shading));
     return {
       sides: agreedBox(TABLE_BOX_SIDES, projected),
       ...(ground !== undefined ? { shading: ground } : {}),
       mixed:
-        segments.length > 1 &&
-        !segments.every((segment, i) => samePropValue(projected[i], projected[0]!) && segment.table.shading === segments[0]!.table.shading),
+        shown.length > 1 &&
+        !shown.every((table, i) => samePropValue(projected[i], projected[0]!) && table.shading === shown[0]!.shading),
     };
   }
 
@@ -3603,11 +3621,12 @@ export class DocEditor {
    * 不一致的边与地一律留空（留空=不算说话），所以「原样确定」替其余格子改写它没说过的东西这种事在这一层做不出来。
    */
   cellBoxState(): BoxState<CellBoxSide> | undefined {
-    const cells = this.selectionTableSegments().flatMap((segment) =>
-      segment.cells
-        .map((where) => segment.table.rows[where.row]?.[where.col])
-        .filter((cell): cell is TableCell => !!cell),
-    );
+    const cells = this.selectionTableSegments().flatMap((segment) => {
+      const table = this.shownTable(segment.table);
+      return segment.cells
+        .map((where) => table.rows[where.row]?.[where.col])
+        .filter((cell): cell is TableCell => !!cell);
+    });
     if (!cells.length) return undefined;
     const projected = cells.map((cell) => projectBox(CELL_BOX_SIDES, cell.borders));
     const ground = agreedValue(cells.map((cell) => cell.shading));
@@ -3729,7 +3748,8 @@ export class DocEditor {
    * 摆的是件里那一句，不是页面的缺省；几张表、几行说法不一致时摆第一份的并说一句 `mixed`（与「边框与底纹」同一条口径）。
    */
   tablePropsState(): TablePropsState | undefined {
-    const segments = this.selectionTableSegments();
+    // 纸面在「显示原文」那一档按记录里的 `prev` 画（`shownTable`），四句读数与行那一句都问那一份。
+    const segments = this.selectionTableSegments().map((segment) => ({ table: this.shownTable(segment.table), cells: segment.cells }));
     if (!segments.length) return undefined;
     const first = segments[0]!.table;
     // 行那一句逐行问（与 `setCellHeight` 同一口径：选区盖住哪几行就问哪几行）。编辑器自己造的行没有
@@ -3995,9 +4015,13 @@ export class DocEditor {
   cellAlignState(): { inTable: boolean; valign?: string; align?: string; valignMixed: boolean; alignMixed: boolean } {
     const target = this.tableAt(this.caretPath());
     if (!target) return { inTable: false, valignMixed: false, alignMixed: false };
-    const caretCell = target.table.rows[target.where.row]?.[target.where.col];
-    const cells = this.selectionTableSegments().flatMap((segment) =>
-      segment.cells.map((where) => segment.table.rows[where.row]?.[where.col]).filter((cell): cell is TableCell => !!cell));
+    // 「显示原文」那一档纸面穿的是记录里的 `prev`（`shownTable`），格的脸与段的对齐都问那一份。
+    const caretTable = this.shownTable(target.table);
+    const caretCell = caretTable.rows[target.where.row]?.[target.where.col];
+    const cells = this.selectionTableSegments().flatMap((segment) => {
+      const table = this.shownTable(segment.table);
+      return segment.cells.map((where) => table.rows[where.row]?.[where.col]).filter((cell): cell is TableCell => !!cell);
+    });
     const listed = cells.length ? cells : caretCell ? [caretCell] : [];
     const vals = listed.map((cell) => cell.valign ?? "top");
     // 「没写」与「明说 left」在纸上是同一张纸（`render.ts:164` 的 ALIGN 把两档都画成左对齐；授权 46 份里光标
@@ -4024,12 +4048,14 @@ export class DocEditor {
   cellSizeState(): { inTable: boolean; heightTwips?: number; widthTwips?: number } {
     const target = this.tableAt(this.caretPath());
     if (!target) return { inTable: false };
-    const rect = cellRect(target.table, target.where);
-    const covered = rect ? gridWidths(target.table).slice(rect.c0, rect.c1).reduce((n, w) => n + w, 0) : 0;
-    const own = target.table.rows[target.where.row]?.[target.where.col];
+    // 行高、列宽与边上那枚地一样按「显示原文」那一档的记录 `prev` 读（`shownTable`）。
+    const table = this.shownTable(target.table);
+    const rect = cellRect(table, target.where);
+    const covered = rect ? gridWidths(table).slice(rect.c0, rect.c1).reduce((n, w) => n + w, 0) : 0;
+    const own = table.rows[target.where.row]?.[target.where.col];
     return {
       inTable: true,
-      heightTwips: target.table.rows[target.where.row]?.[0]?.row?.heightTwips,
+      heightTwips: table.rows[target.where.row]?.[0]?.row?.heightTwips,
       widthTwips: (own && (!own.widthType || own.widthType === "dxa") ? own.widthTwips : undefined) ?? (covered || undefined),
     };
   }
@@ -4135,7 +4161,7 @@ export class DocEditor {
   rowHeaderState(): boolean | undefined {
     const target = this.tableAt(this.caretPath());
     if (!target) return undefined;
-    const rows = target.table.rows;
+    const rows = this.shownTable(target.table).rows;
     let leading = 0;
     while (leading < rows.length && rows[leading]?.[0]?.row?.header) leading += 1;
     return target.where.row < leading;

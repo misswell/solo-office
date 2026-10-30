@@ -11,6 +11,7 @@ import { makePresenceDocx } from "./helpers/make-revisions.js";
 import {
   makeCellMergeViewDocx,
   makeCellRevisionDocx,
+  makeOriginalTableReadDocx,
   makePartialCellInsDocx,
   makeRowSignatureDocx,
   makeSoleColumnDocx,
@@ -712,5 +713,46 @@ describe("docx 修订：合并记录的两套范围", () => {
     expect(hits(renderWord(doc, "original"), "display:none")).toBe(0);
     // 最终态：甲一 restart 盖住甲二的 continue，甲二仍是隐藏的那一格。
     expect(hits(renderWord(doc, "final"), "display:none")).toBe(1);
+  });
+});
+
+/**
+ * 「显示原文」那一档纸面按记录里的 `prev` 摆表/行/格三套属性（`render.ts` 走 `doc.originalView()`）。
+ * 「表格属性」「边框与底纹」「单元格尺寸」的读数底就在这三套字段上（#225），所以这里钉住
+ * `originalView` 交出来的表是不是记录里那一句；读数的接腿本身在装机烟测里走。
+ */
+describe("「显示原文」表层读数底：originalView 摆回表/行/格三套属性", () => {
+  it("有记录的那一张：原文说改前那一句，模型照旧说现值", () => {
+    const doc = open(makeOriginalTableReadDocx());
+    const t = tableOf(doc);
+    expect(t).toMatchObject({ align: "center", indentTwips: 284, layout: "fixed", shading: "#DDEEFF" });
+    expect(t.cellMargin?.left).toBe(108);
+    expect(t.borders?.top).toMatchObject({ val: "single", size: 12, color: "FF0000" });
+    expect(t.rows[0]![0]!.row).toMatchObject({ heightTwips: 600, heightRule: "exact", header: true, jc: "center" });
+    expect(t.rows[0]![0]).toMatchObject({ widthTwips: 2000, shading: "#FFF2CC", valign: "bottom" });
+    expect(t.rows[0]![0]!.borders?.top).toMatchObject({ val: "single", size: 8, color: "00FF00" });
+
+    const shown = doc.originalView([t])[0] as Table;
+    expect(shown).not.toBe(t);
+    expect(shown).toMatchObject({ align: "right", indentTwips: 0, layout: "autofit", shading: "#F2F2F2" });
+    expect(shown.cellMargin?.left).toBe(72);
+    expect(shown.borders?.top).toMatchObject({ val: "dashed", size: 4, color: "000000" });
+    expect(shown.rows[0]![0]!.row).toMatchObject({ heightTwips: 300, jc: "left" });
+    expect(shown.rows[0]![0]!.row?.keepTogether).toBe(true);
+    expect(shown.rows[0]![0]!.row?.header).toBeUndefined();
+    expect(shown.rows[0]![0]).toMatchObject({ widthTwips: 1500, shading: "#DDEBF7", valign: "top" });
+    expect(shown.rows[0]![0]!.borders?.top).toMatchObject({ val: "double", size: 4, color: "FF00FF" });
+
+    // 视图是复制出来的：模型一个字段没被换掉。
+    expect(tableOf(doc)).toBe(t);
+    expect(t.rows[0]![0]).toMatchObject({ widthTwips: 2000, shading: "#FFF2CC", valign: "bottom" });
+  });
+
+  it("没记录的那一行两档同脸：原文不会把整张表都翻个面", () => {
+    const doc = open(makeOriginalTableReadDocx());
+    const t = tableOf(doc);
+    const shown = doc.originalView([t])[0] as Table;
+    expect(shown.rows[1]![0]).toMatchObject({ widthTwips: 2000, shading: undefined, valign: undefined });
+    expect(shown.rows[1]![0]!.row).toBeUndefined();
   });
 });

@@ -571,7 +571,10 @@ function smoke(): void {
         // 以及光标退回一格时列子是不是回到十一档。件里那句 w:tblBorders 由 .scratch/tbl-cmd-install-check.sh 在外面问。
         // #148 又加一件：撤销之后**页面上此刻那条选区**自己还铺不铺在甲格与末格之间（不是探针替它重选的），
         // 因为落点那一层是它的下游——历史只记一个点的话这里会塌成一格，第二击问的就是别的层。
-        const ringOf = (needle) => [...document.querySelectorAll("#view .page table.doc-table")].find((t) => (t.textContent ?? "").includes(needle));
+        // #225 那一件自带三层待判的属性记录；#146/#149 按「甲」「末」找表落笔、按窗格第一行判定，
+        // 会把这张表的记录接受掉、底纹改掉（第一趟实测）。这一件只让 #225 自己读，前面那几腿一律不落笔。
+        const otEarly = (document.getElementById("title")?.textContent ?? "").includes("原文表层");
+        const ringOf = (needle) => otEarly ? undefined : [...document.querySelectorAll("#view .page table.doc-table")].find((t) => (t.textContent ?? "").includes(needle));
         const cellOf = (needle) => [...(ringOf(needle)?.querySelectorAll("td") ?? [])].find((c) => (c.textContent ?? "").includes(needle));
         const spanOf = (needle) => cellOf(needle)?.querySelector("span")?.firstChild ?? null;
         const ringBottom = (el) => (el ? cssOf(el, "borderBottomStyle") + "/" + cssOf(el, "borderBottomWidth") : "");
@@ -581,6 +584,7 @@ function smoke(): void {
           return s ? [...s.options].length : -1;
         };
         const clickLeg = (value) => {
+          if (otEarly) return 0;
           const s = boxPick();
           if (!s) return 0;
           s.value = value;
@@ -739,6 +743,7 @@ function smoke(): void {
         const revKindList = () => revItems().map((it) => it.querySelector(".solo-rev-kind")?.textContent ?? "").join("|");
         const revRowOf = (kind) => revItems().find((it) => (it.querySelector(".solo-rev-kind")?.textContent ?? "") === kind);
         const revHit = (kind, label) => {
+          if (otEarly) return 0;
           const btn = [...(revRowOf(kind)?.querySelectorAll("button") ?? [])].find((b) => b.textContent === label);
           if (!btn) return 0;
           btn.click();
@@ -2930,6 +2935,166 @@ function smoke(): void {
           await wait(360);
           origLeg = { steps: orSteps, ctrl: orCtrl, dialogsLeft: document.querySelectorAll(".solo-pg-dialog").length, savedDirty: (document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0 };
         }
+        // #225：同一条 originalView 也穿到表的读数上（doc-edit.ts 的 shownTable）。件由 .scratch/
+        // make-original-table-read-smoke.ts 现拼：一张表把表/行/格三层记录都挂上，第二行一句没说。这一腿在三档之间拨
+        // （marks → original → marks），每档问同一批地方：纸面（表那一圈的行内摆位/地/顶缝、卯格的地/顶缝/竖排/宽）、
+        // 表格工具那两枚自旋格、「表格属性」对话框（对齐/左缩进/固定列宽/左边距/行对齐）、「边框与底纹」对话框在
+        // **格**那一层（光标停在卯）与**表**那一层（拖选卯到午）的回显，外加「标题行重复」与竖向三枚亮的是哪一枚。
+        // 读数框说的必须是纸面此刻正在画的那一句：原文档说记录里的 prev，显示修订档说现值。
+        // 这一段整篇在模板字符串里：不写反引号、不写美元花括号。
+        const otDoc = (document.getElementById("title")?.textContent ?? "").includes("原文表层");
+        let origTableLeg = null;
+        if (otDoc) {
+          const otTable = () => [...document.querySelectorAll("#view .page table.doc-table")].find((t) => (t.textContent ?? "").includes("卯"));
+          const otCell = (n) => [...(otTable()?.querySelectorAll("td") ?? [])].find((c) => (c.textContent ?? "").includes(n));
+          const otSpan = (n) => otCell(n)?.querySelector("span")?.firstChild ?? null;
+          const otSelect = (tip) => [...document.querySelectorAll("#ribbon select")].find((x) => x.title === tip);
+          const otView = (v) => {
+            const s = otSelect("显示对文档的修改");
+            if (!s) return 0;
+            s.value = v;
+            s.dispatchEvent(new Event("change", { bubbles: true }));
+            return 1;
+          };
+          const otBoxPick = () => [...document.querySelectorAll("#ribbon select")].find((s) => s.dataset && s.dataset.scope !== undefined);
+          const otLeg = (value) => {
+            const s = otBoxPick();
+            if (!s) return 0;
+            s.value = value;
+            s.dispatchEvent(new Event("change", { bubbles: true }));
+            return 1;
+          };
+          const otTab = (label) => [...document.querySelectorAll(".rtabs button")].find((b) => b.textContent === label);
+          const otPaper = () => {
+            const t = otTable();
+            const c = otCell("卯");
+            if (!t || !c) return null;
+            const ts = getComputedStyle(t);
+            const cs = getComputedStyle(c);
+            const r = c.getBoundingClientRect();
+            return {
+              ml: t.style.marginLeft,
+              mr: t.style.marginRight,
+              tblBg: ts.backgroundColor,
+              tblTop: ts.borderTopStyle + "/" + ts.borderTopWidth + "/" + ts.borderTopColor,
+              cellBg: cs.backgroundColor,
+              cellTop: cs.borderTopStyle + "/" + cs.borderTopWidth + "/" + cs.borderTopColor,
+              va: cs.verticalAlign,
+              w: Math.round(r.width * 10) / 10,
+              h: Math.round(r.height * 10) / 10,
+            };
+          };
+          const otPut = (n) => {
+            const node = otSpan(n);
+            if (!node) return 0;
+            const rg = document.createRange();
+            rg.setStart(node, 0);
+            rg.collapse(true);
+            const s = document.getSelection();
+            s?.removeAllRanges();
+            if (s) s.addRange(rg);
+            otCell(n)?.closest(".page")?.focus?.();
+            document.dispatchEvent(new Event("selectionchange"));
+            return 1;
+          };
+          const otAll = () => {
+            const a = otSpan("卯");
+            const z = otSpan("午");
+            if (!a || !z) return 0;
+            const rg = document.createRange();
+            rg.setStart(a, 0);
+            rg.setEnd(z, (z.textContent ?? "").length);
+            const s = document.getSelection();
+            s?.removeAllRanges();
+            if (s) s.addRange(rg);
+            document.dispatchEvent(new Event("selectionchange"));
+            return 1;
+          };
+          const otSpin = (label) => [...document.querySelectorAll("#ribbon .rbar[data-tab='table'] .rspin")]
+            .find((x) => (x.textContent || "").trim().indexOf(label) === 0)?.querySelector("input");
+          const otLit = () => {
+            const vTitles = ["顶端对齐", "垂直居中", "底端对齐"];
+            const v = [...document.querySelectorAll("#ribbon .rbar[data-tab='table'] button")]
+              .filter((b) => vTitles.includes(b.getAttribute("title") ?? "") && b.classList.contains("on"))
+              .map((b) => (b.getAttribute("title") ?? "").slice(0, 2))
+              .join(",");
+            const head = [...document.querySelectorAll("#ribbon .rbar[data-tab='table'] button")].find((b) => b.textContent === "标题行重复");
+            return { v: v, head: head?.classList.contains("on") ? 1 : 0 };
+          };
+          const otProps = async () => {
+            otTab("表格工具")?.click();
+            await wait(200);
+            const btn = [...document.querySelectorAll("#ribbon .rbar[data-tab='table'] button")].find((b) => b.textContent === "属性");
+            if (btn) btn.click();
+            await wait(300);
+            const d = document.querySelector(".solo-tp-dialog");
+            const f = (n) => d?.querySelector('[name="' + n + '"]') ?? null;
+            return {
+              open: d?.open === true ? 1 : 0,
+              align: f("tp-align")?.value ?? "?",
+              indent: f("tp-indent")?.value ?? "?",
+              fixed: f("tp-fixed")?.checked ? 1 : 0,
+              mleft: f("tp-m-left")?.value ?? "?",
+              row: f("tp-row-align")?.value ?? "?",
+            };
+          };
+          const otPropsClose = async () => {
+            document.querySelector(".solo-tp-dialog .solo-tp-cancel")?.click();
+            await wait(240);
+            return document.querySelector(".solo-tp-dialog") ? 0 : 1;
+          };
+          const otBorder = async () => {
+            otTab("开始")?.click();
+            await wait(160);
+            const opened = otLeg("more");
+            await wait(280);
+            const d = document.querySelector(".solo-pb-dialog");
+            const f = (n) => d?.querySelector('[name="' + n + '"]') ?? null;
+            const out = {
+              opened: opened,
+              open: d ? 1 : 0,
+              scope: d?.querySelector(".solo-pb-scope b")?.textContent ?? "",
+              top: f("pb-top")?.value ?? "?",
+              sz: f("pb-top-sz")?.value ?? "?",
+              co: f("pb-top-co")?.value ?? "?",
+              ground: f("pb-shading")?.value ?? "?",
+            };
+            d?.querySelector(".solo-pb-cancel")?.click();
+            await wait(240);
+            out.gone = document.querySelector(".solo-pb-dialog") ? 0 : 1;
+            return out;
+          };
+          const otSteps = [];
+          for (const v of ["marks", "original", "marks"]) {
+            const set = otView(v);
+            await wait(460);
+            const put = otPut("卯");
+            await wait(280);
+            const paper = otPaper();
+            otTab("表格工具")?.click();
+            await wait(200);
+            const spins = { h: otSpin("高度")?.value ?? "?", w: otSpin("宽度")?.value ?? "?" };
+            const lit = otLit();
+            const props = await otProps();
+            const propsClosed = await otPropsClose();
+            // 格那一层：光标停在卯里（刚才那一格还在）。
+            const cellBorder = await otBorder();
+            // 表那一层：拖选卯到午，整张表铺满才算「表」。
+            const all = otAll();
+            await wait(280);
+            const scope = otBoxPick()?.dataset?.scope ?? "";
+            const tableBorder = await otBorder();
+            otSteps.push({ view: v, set: set, put: put, paper: paper, spins: spins, lit: lit, props: props, propsClosed: propsClosed, cellBorder: cellBorder, all: all, scope: scope, tableBorder: tableBorder });
+          }
+          // 量完把档放回「显示修订」交给后面的腿（与 #224 同一条）。
+          otView("marks");
+          await wait(320);
+          origTableLeg = {
+            steps: otSteps,
+            dialogsLeft: document.querySelectorAll(".solo-tp-dialog, .solo-pb-dialog").length,
+            savedDirty: (document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0,
+          };
+        }
         // 上面那些落点把光标留在了格里；后面那三条断命令与图片要按这一趟原本的位置落在正文里，所以先放回纸的末尾。
         const pageNow = document.querySelector("#view .page");
         const lastBlock = pageNow?.children[pageNow.children.length - 1];
@@ -3620,7 +3785,7 @@ function smoke(): void {
         const recovered = { cells: document.querySelectorAll(".sheet-wrap td").length, title: document.getElementById("title")?.textContent };
         // The run ends on a modified document, so quitting goes through the unsaved prompt.
         // A PDF the export asked for shows up in saveAsWrites, next to the pptx/xlsx saves.
-        return { docPart, bandLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, clearLeg, origLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
+        return { docPart, bandLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, clearLeg, origLeg, origTableLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
       })()`;
       void last?.webContents
         .executeJavaScript(probe)

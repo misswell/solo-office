@@ -1,7 +1,7 @@
 import { strToU8, zipSync } from "fflate";
 import type { Block, BorderSet, CellStyle, Inline, ListAddition, MarginTwips, ParaStyle, Paragraph, ParagraphFormatRevision, PropSlot, RunStyle, RowInfo, RowStyle, Table, TableBorder, TableCell, TableStyle, WordDocument } from "./docx.js";
 import { bytesOfDataUrl } from "./media.js";
-import { BORDER_ORDER, PBDR_ORDER, ROW_REVISION_TAGS, ownParaStyle, ownRunStyle, paraBorderChanges, paraStyleOf, preserve, revisionTag, runStyleOf, samePropValue, shadingFillToken } from "./docx.js";
+import { BORDER_ORDER, PBDR_ORDER, ROW_REVISION_TAGS, ownParaStyle, ownRunStyle, paraBorderChanges, paraStyleOf, paraTabStopChanges, preserve, revisionTag, runStyleOf, samePropValue, shadingFillToken, tabStopXml } from "./docx.js";
 import { childSpans, elementContent } from "./opc.js";
 import { changeRecordXml, placeRecordXml, setChildren } from "./doc-table-revisions.js";
 import { commentDirty, commentElement, commentParaIds, commentsRootInfo, type DocComment } from "./comments.js";
@@ -27,6 +27,8 @@ const CT_W = "application/vnd.openxmlformats-officedocument.wordprocessingml";
 const DECL = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n`;
 /** Where list definitions live: this part is the only thing a list command on a definition-less file owes. */
 const NUMBERING_PART = "word/numbering.xml";
+/** 默认制表位那一句住在这里；只有用户改过它，这一件部件才由写手重拼一次。 */
+const SETTINGS_PART = "word/settings.xml";
 const EMU_PER_PX = 9525;
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -177,6 +179,14 @@ function paragraphProps(p: Paragraph): string {
   if (p.shading !== undefined && !samePropValue(p.asRead?.shading, p.shading)) {
     parts.push(`<w:shd w:val="clear" w:color="auto" w:fill="${XML_ESC(shadingFillToken(p.shading))}"/>`);
   }
+  // 制表位与上面几条同一个口径：**只有这一击动过的位置**说出去，被去掉的那一格写成 `w:val="clear"`。带 `w:pPr`
+  // 的段落由 `syncParaSlots` 逐位置认领、并把件原来的字节（含模型没有字段的那些写法）带着走，只剩字段的这一段
+  // 才由这里说——编辑器拆出来的段、以及件根本没写 `w:pPr` 的那几段是这种。拼法照件：一枚自闭合的 `w:tab`，
+  // 属性序 val→leader→pos（授权口径 320 枚块的 462 枚孩子只有 `w:val w:pos` 368 与 `w:val w:leader w:pos` 94
+  // 两种写法，枚枚自闭合、0 枚成对，`.scratch/tabs-slot-shape.py`），位置升序（318/320 枚块如此）。`CT_PPr`
+  // 把 `w:tabs` 排在 `w:shd` 之后、`w:wordWrap` 之前。
+  const tabs = paraTabStopChanges(p);
+  if (tabs) parts.push(`<w:tabs>${tabs.map((t) => tabStopXml(t, undefined, "w")).join("")}</w:tabs>`);
   // 「对齐到网格」不在 `PARA_STYLE_KEYS` 里——带 `w:pPr` 的段落由 `syncParaSlots` 按件的原字节带着走，这一段
   // 却可能一个 slot 也没有（编辑器自己拆出来的段、或那 159 段没写 `w:pPr` 的），那时候勾选框只剩字段可说。
   // 拼法照件：说开裸写、说关 `w:val="0"`。只说**这一击动过的**，与 `ownParaStyle` 对着读快照同一条口径——
@@ -1250,6 +1260,62 @@ function packageRelsXml(have: Set<string>): string {
   );
 }
 
+/**
+ * 「默认制表位」那一句的落笔处：`word/settings.xml` 里的 `w:defaultTabStop`（§17.15.1.12）。这一枚不落 `w:pPr`，
+ * 说的是整份件——一段没写自己的制表位时 Tab 迈多远由它定，所以「增加缩进量」那一族按缇迈步也问它。
+ *
+ * **件里已经有那一枚时只换 `w:val` 那一个数**，其余字节一个字不动：授权口径 46 份的 `word/settings.xml`
+ * 里 46/46 都写了它（43 枚 `w:val="420"`、3 枚 `720`，枚枚自闭合、只带 `w:val` 这一枚属性，
+ * `.scratch/settings-tabstop-shape.py`），这条路就是真实受众的全部。
+ *
+ * 件里缺那一枚时（`文件 → 新建` 的件、以及任何没写它的件）按件自己的顺序插在**第一枚之后兄弟之前**，
+ * 之后兄弟的名字列在 `SETTINGS_AFTER_TAB_STOP`——那 24 个名字不是从 ECMA 的表抄的，是这 46 份里量出来的：
+ * 每一枚在同批件里都排在 `w:defaultTabStop` 后面（`.scratch/settings-child-order.py`）。认不出这一列里的任何
+ * 名字时，就接在根的收尾之前；认不出根的字节整件原样带走：在一堆形状未知的字节旁边发明一个根，是比少写一句
+ * 更大的谎。
+ */
+function settingsXml(carried: string | undefined, tabTwips: number): string {
+  const value = String(Math.max(0, Math.round(tabTwips)));
+  if (!carried)
+    return `${DECL}<w:settings xmlns:w="${NS_W}"><w:defaultTabStop w:val="${value}"/></w:settings>`;
+  const open = /<([\w-]+):settings\b[^>]*>/.exec(carried);
+  if (!open) return carried;
+  const prefix = open[1]!;
+  const stated = new RegExp(`<${prefix}:defaultTabStop\\b[^>]*>`).exec(carried);
+  if (stated) {
+    const tag = stated[0];
+    const selfClosing = tag.endsWith("/>");
+    const head = tag.slice(0, tag.length - (selfClosing ? 2 : 1));
+    // 件那一枚已有的 `w:val` 就地换数；连 `w:val` 都没写的（授权口径 0 枚）在后面补一枚，属性序跟着件走。
+    const fixed = /\s(?:[\w.-]+:)?val="[^"]*"/.test(head)
+      ? head.replace(/\s(?:[\w.-]+:)?val="[^"]*"/, ` ${prefix}:val="${value}"`)
+      : `${head} ${prefix}:val="${value}"`;
+    return `${carried.slice(0, stated.index)}${fixed}${selfClosing ? "/>" : ">"}${carried.slice(stated.index + tag.length)}`;
+  }
+  const close = carried.lastIndexOf(`</${prefix}:settings>`);
+  if (close < 0) return carried;
+  const element = `<${prefix}:defaultTabStop ${prefix}:val="${value}"/>`;
+  // 自闭合的根没有孩子，也就没有之后兄弟：把它展成一枚带孩子的根，只带这一句。
+  if (open[0].endsWith("/>"))
+    return `${carried.slice(0, open.index)}${open[0].slice(0, -2)}>${element}</${prefix}:settings>${carried.slice(open.index + open[0].length)}`;
+  let where = -1;
+  for (const name of SETTINGS_AFTER_TAB_STOP) {
+    const at = carried.indexOf(`<${prefix}:${name}`, open.index + open[0].length);
+    if (at >= 0 && (where < 0 || at < where)) where = at;
+  }
+  const at = where < 0 ? close : where;
+  return `${carried.slice(0, at)}${element}${carried.slice(at)}`;
+}
+
+/** 授权 46 份里枚枚排在 `w:defaultTabStop` 之后的那些孩子（`.scratch/settings-child-order.py` 同批量的后兄弟列）。 */
+const SETTINGS_AFTER_TAB_STOP = [
+  "hyphenationZone", "drawingGridHorizontalSpacing", "drawingGridVerticalSpacing",
+  "displayHorizontalDrawingGridEvery", "displayVerticalDrawingGridEvery", "noPunctuationKerning",
+  "characterSpacingControl", "doNotValidateAgainstSchema", "doNotDemarcateInvalidXml", "compat", "rsids",
+  "mathPr", "themeFontLang", "clrSchemeMapping", "doNotIncludeSubdocsInStats", "docVars", "shapeDefaults",
+  "hdrShapeDefaults", "uiCompat97To2003", "shapelayout", "footnotePr", "endnotePr", "decimalSymbol", "listSeparator",
+];
+
 /** The package relationships can be kept as read when they still point at the part this writer emits. */
 function packageRelsAreUsable(bytes: Uint8Array | undefined): boolean {
   return bytes !== undefined && /relationships\/officeDocument"[^>]*Target="word\/document\.xml"/.test(new TextDecoder().decode(bytes));
@@ -1307,6 +1373,15 @@ export function writeDocx(doc: WordDocument): Uint8Array {
   if (doc.listDirty()) {
     files[NUMBERING_PART] = strToU8(numberingXml(src?.text(NUMBERING_PART), doc.listAdditions()));
     if (!rels.entries.some((e) => e.type === `${NS_R}/numbering`)) rels.relation(`${NS_R}/numbering`, "numbering.xml");
+  }
+
+  // 「默认制表位」那一句：只有用户改过它才重拼那一件部件，其余时候它按原件的字节从上面的 passthrough 带走。
+  // 件本来带这一件时才只换那一个数；件没有时补一句并按 `numbering.xml` 同一条路把关系与内容类型一起补齐——
+  // 一处没有关系的部件是 Word 会忽略的部件，用户刚填的那个距离就不会在下次打开时还在。
+  const tabStop = doc.defaultTabStopEdit();
+  if (tabStop !== undefined) {
+    files[SETTINGS_PART] = strToU8(settingsXml(src?.text(SETTINGS_PART), tabStop));
+    if (!rels.entries.some((e) => e.type === `${NS_R}/settings`)) rels.relation(`${NS_R}/settings`, "settings.xml");
   }
 
   files["word/_rels/document.xml.rels"] = strToU8(relsXml(rels));

@@ -16,14 +16,14 @@ const pack = (document: string, styles: string, settings = ""): Uint8Array =>
             settings ? `<Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>` : ""
           }</Types>`,
       ),
-      "_rels/.rels": strToU8(
-        XML_DECL +
-          `<Relationships xmlns="${NS_PKG}"><Relationship Id="rId1" Type="${NS_R}/officeDocument" Target="word/document.xml"/>${
-            settings ? `<Relationship Id="rId2" Type="${NS_R}/settings" Target="word/settings.xml"/>` : ""
-          }</Relationships>`,
-      ),
+      // 件级的 `.rels` 只挂正文本体；`word/settings.xml` 挂在正文那一页的关系表上——授权 46 份份份如此
+      // （`.scratch/settings-rel-census.py`：件级挂 settings 的 0 份）。挂错了地方，保存时就会发出第二张身份证。
+      "_rels/.rels": strToU8(XML_DECL + `<Relationships xmlns="${NS_PKG}"><Relationship Id="rId1" Type="${NS_R}/officeDocument" Target="word/document.xml"/></Relationships>`),
       "word/_rels/document.xml.rels": strToU8(
-        XML_DECL + `<Relationships xmlns="${NS_PKG}"><Relationship Id="rId1" Type="${NS_R}/styles" Target="styles.xml"/></Relationships>`,
+        XML_DECL +
+          `<Relationships xmlns="${NS_PKG}"><Relationship Id="rId1" Type="${NS_R}/styles" Target="styles.xml"/>${
+            settings ? `<Relationship Id="rId2" Type="${NS_R}/settings" Target="settings.xml"/>` : ""
+          }</Relationships>`,
       ),
       "word/document.xml": strToU8(XML_DECL + `<w:document xmlns:w="${NS_W}" xmlns:r="${NS_R}"><w:body>${document}</w:body></w:document>`),
       "word/styles.xml": strToU8(XML_DECL + styles),

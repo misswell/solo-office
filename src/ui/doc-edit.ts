@@ -19,6 +19,8 @@ import { CELL_BOX_SIDES, PARA_BOX_SIDES, applyBoxPatch, cellOuterPatch, showCell
 import type { BoxPatch, BoxState, CellBoxSide, ParaBoxPatch, ParaBoxState, TableBoxSide } from "./doc-para-border.js";
 import { showParaSpacingDialog } from "./doc-para-spacing.js";
 import type { ParaSpacingPatch, ParaSpacingState } from "./doc-para-spacing.js";
+import { showTabStopsDialog } from "./doc-tab-stops.js";
+import type { TabStopPatch, TabStopState } from "./doc-tab-stops.js";
 import { showTablePropsDialog, type TablePropsState } from "./doc-table-props.js";
 import { openWordCount, type WordCountReadout } from "./doc-word-count.js";
 import { openGoTo } from "./doc-goto.js";
@@ -3867,6 +3869,73 @@ export class DocEditor {
         paragraph.revFormat = this.signParagraphRevision(paragraph, was, wasSlots);
       }
     }
+    const caret = this.caretPath();
+    this.render();
+    if (caret) this.setCaret(this.clamp(caret));
+    this.hooks.changed();
+    return true;
+  }
+
+  /**
+   * 「制表位」的**读数**：段上那一份合并过样式链的清单（`p.tabStops`——样式借来的也算，那正是页面上正在画的
+   * 那一列刻度），加上件级那一枚 `w:defaultTabStop`。后者取 `doc.defaultTabStop()`：这一份件的
+   * `word/settings.xml` 没说就交 `undefined`，对话框那一格**留空**，不替它抄上 420/720（授权 46 份 46/46 都说了
+   * 这一枚、43 份 420 + 3 份 720，是那一族的用词，不是这一份件的话）。
+   *
+   * 多选跨段时清单逐段比对：不一致就摆**第一段**那一份并另交一颗 `mixed` 让那行小字说出来——WPS 在这种混合态上
+   * 摆什么**未取证**（对话框内部一概未取证，取证到的只有 `CT_Home.kuip:309` 那枚 `Tabs` 命令与 `dialogHint="1"`），
+   * 所以这里不猜；「原样确定」由对话框那一侧「清单没变就不交这一笔」保证。
+   */
+  tabStopState(): TabStopState | undefined {
+    const targets = this.shownParagraphs();
+    if (!targets.length) return undefined;
+    const state: TabStopState = {
+      stops: targets[0]!.tabStops ? [...targets[0]!.tabStops!] : undefined,
+      defaultTwips: this.doc.defaultTabStop(),
+    };
+    state.mixed = targets.length > 1 && targets.some((p) => !samePropValue(p.tabStops, targets[0]!.tabStops));
+    return state;
+  }
+
+  /** ribbon 段落组最后那一枚 `Tabs`：开「制表位」，改完交给 `setTabStops`。 */
+  openTabStops(): void {
+    const state = this.tabStopState();
+    if (!state) return;
+    showTabStopsDialog(state, (patch) => this.setTabStops(patch));
+  }
+
+  /**
+   * 「制表位」对话框的落笔处。两句各走各的：清单是**整份替换**（对话框交回的就是那一段要认的全部位置），
+   * 空清单落回 `undefined`——读取那头 `mergeTabStops` 说的就是「一枚没有 = 这一族没说」，字段与件里的形状
+   * 得是同一个，不然撤销与修订记录会看见一次没人改过的改动。被从清单里去掉的位置由写手逐位置补
+   * `w:val="clear"`（`paraTabStopChanges`），这一段不替它写。
+   *
+   * 逐段先比再落：**说法没变的段整段不动**——跨段不一致（`mixed`）时把同一份清单写给每一段，只有真变了的那几段
+   * 认领这一笔、也只有那几段签 `w:pPrChange`。每一段落的是**新数组**而不是 `patch.stops` 本体：`mergeTabStops`
+   * 在段落一枚没说时交回样式链那一份的同一个引用，几段共用一个物件后头改一段会把另一段一起改了。
+   *
+   * `defaultTwips` 落 `doc.setDefaultTabStop`：撤销不用另行登记，`snapshot()` 里那一份 `pageGeometryState()`
+   * 已经带着它（`PageGeometry.defaultTabStop`）。两句都没改动件时这一击不进撤销栈——与 `shiftParagraphIndent`
+   * 已经在边上时同一个判定。
+   */
+  setTabStops(patch: TabStopPatch): boolean {
+    const targets = patch.stops === undefined ? [] : this.selectionParagraphs();
+    const nextStops = patch.stops?.length ? patch.stops : undefined;
+    const stopsChanged = targets.some((p) => !samePropValue(p.tabStops, nextStops));
+    const defaultChanged = patch.defaultTwips !== undefined && this.doc.defaultTabStop() !== patch.defaultTwips;
+    if (!stopsChanged && !defaultChanged) return false;
+    this.snapshot(this.caretPath());
+    for (const paragraph of targets) {
+      if (samePropValue(paragraph.tabStops, nextStops)) continue;
+      const was = carriedShape(paragraph);
+      const wasSlots = paragraph.pPrSlots;
+      paragraph.tabStops = nextStops ? nextStops.map((s) => ({ ...s })) : undefined;
+      syncParaSlots(paragraph);
+      if (this.trackRevisions && JSON.stringify(was) !== JSON.stringify(carriedShape(paragraph))) {
+        paragraph.revFormat = this.signParagraphRevision(paragraph, was, wasSlots);
+      }
+    }
+    if (defaultChanged) this.doc.setDefaultTabStop(patch.defaultTwips!);
     const caret = this.caretPath();
     this.render();
     if (caret) this.setCaret(this.clamp(caret));

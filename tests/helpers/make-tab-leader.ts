@@ -58,12 +58,11 @@ export function makeTabLeaderDocx(): Uint8Array {
         XML_DECL +
           `<Types xmlns="${NS_CT}"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="${CT_W}"/><Override PartName="/word/styles.xml" ContentType="${CT_STY}"/><Override PartName="/word/settings.xml" ContentType="${CT_SET}"/></Types>`,
       ),
-      "_rels/.rels": strToU8(
-        XML_DECL +
-          `<Relationships xmlns="${NS_PKG}"><Relationship Id="rId1" Type="${NS_R}/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="${NS_R}/settings" Target="word/settings.xml"/></Relationships>`,
-      ),
+      // 件级的 `.rels` 只挂正文本体；settings 挂在正文那一页的关系表上（授权 46 份份份如此，件级挂它的 0 份：
+      // `.scratch/settings-rel-census.py`）。挂错地方，保存默认制表位时就会发出第二张指向同一部件的关系。
+      "_rels/.rels": strToU8(XML_DECL + `<Relationships xmlns="${NS_PKG}"><Relationship Id="rId1" Type="${NS_R}/officeDocument" Target="word/document.xml"/></Relationships>`),
       "word/_rels/document.xml.rels": strToU8(
-        XML_DECL + `<Relationships xmlns="${NS_PKG}"><Relationship Id="rId1" Type="${NS_R}/styles" Target="styles.xml"/></Relationships>`,
+        XML_DECL + `<Relationships xmlns="${NS_PKG}"><Relationship Id="rId1" Type="${NS_R}/styles" Target="styles.xml"/><Relationship Id="rId2" Type="${NS_R}/settings" Target="settings.xml"/></Relationships>`,
       ),
       "word/document.xml": strToU8(XML_DECL + `<w:document xmlns:w="${NS_W}" xmlns:r="${NS_R}"><w:body>${BODY}</w:body></w:document>`),
       "word/styles.xml": strToU8(XML_DECL + STYLES),

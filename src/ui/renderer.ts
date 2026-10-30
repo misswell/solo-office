@@ -962,6 +962,13 @@ function buildDocRibbon(): void {
     },
   );
 
+  // WPS 在同一个段落组（`tb_Paragraph`，`CT_Home.kuip:337`）里把 `Tabs` 排在 `Sort` 之后，也就是那一簇的最后一条；
+  // 它自己声明的就是这张对话框：`CT_Home.kuip:309` 的 `<KxLegacyTriggerCommand aid="780" customTip="Tabs"
+  // dialogHint="1" idMso="Tabs" ksoCmd="Tabs" icon="ruler_format_tabs_kd" text="@Tabs"/>`——`dialogHint="1"` 说明
+  // 这一条按下开的是**一张对话框**，不是一个开关。这张页面上没有可回显的「哪一档」：一段的制表位是一列位置，
+  // 说不出单选，所以这一枚不认领 `ctl`（同查找替换那两枚）。
+  button(align, "", "制表位", "制表位：这一段那一列位置、对齐与前导符，加件级的默认制表位", () => editor?.openTabStops());
+
   const lists = group("home");
   button(lists, "bullet", "• 符号", "项目符号", () => editor?.setParagraph({ list: "bullet" }));
   button(lists, "number", "1. 编号", "编号列表", () => editor?.setParagraph({ list: "number" }));

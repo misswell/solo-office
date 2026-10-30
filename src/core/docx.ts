@@ -1140,6 +1140,11 @@ export interface PageGeometry {
   sections: Section[];
   /** True once the user set geometry on a document whose sections said nothing, so a save owes a `w:sectPr`. */
   stated: boolean;
+  /**
+   * 「默认制表位」那一句（`word/settings.xml` 的 `w:defaultTabStop`，缇）：与节同属「件级、不在 `blocks` 里」
+   * 的那一族，所以撤销靠同一份载体带着走，而不是另立一条历史。`undefined` = 没人说过。
+   */
+  defaultTabStop?: number;
 }
 
 /**
@@ -1909,6 +1914,11 @@ export class WordDocument {
    * save, and what a page-setup change explicitly asks for.
    */
   private pageSetupSeen = false;
+  /**
+   * 「默认制表位」被用户改过的那一格（缇）；`undefined` = 没人说过，`word/settings.xml` 按原件字节带走。
+   * 这一枚不落 `w:pPr`：§17.7.2 的 `w:defaultTabStop` 说的是整份件，一段没有制表位时 Tab 迈多远由它定。
+   */
+  private tabStopEdit?: number;
   /** Namespace declarations read off the document root, so carried markup keeps its prefixes bound. */
   private rootNamespaces: Record<string, string> = {};
   private rootIgnorable = "";
@@ -1989,7 +1999,8 @@ export class WordDocument {
       // and the section list is what the page is drawn from. Left out of the hash, a margin change would read
       // as an untouched document — and `writeDocx` returns the source package byte for byte while `edited` says
       // nothing changed, so the user's dialog would close and the file on disk keep the old page.
-      JSON.stringify([this.bodySectPr, this.sections, this.pageSetupSeen])
+      // 「默认制表位」在这一列里的理由与节同一句：它落在 `word/settings.xml`，不在 `blocks` 里，漏了就改了不脏。
+      JSON.stringify([this.bodySectPr, this.sections, this.pageSetupSeen, this.tabStopEdit])
     );
   }
 
@@ -2719,12 +2730,27 @@ export class WordDocument {
    * states it: 43 spell `w:val="420"` and 3 spell `720`, and none leaves the element out
    * (`.scratch/authorized-tab-stop.py`; the earlier 36-of-39 over distinct bundle bodies is 待重证 — that walk
    * deduped by content hash, a different audience from the 件 the rest of this file counts). `word/settings.xml`
-   * is not a part this model owns, so this reads it on demand and a save still carries the bytes the file wrote.
+   * is not a part this model owns, so this reads it on demand and a save still carries the bytes the file wrote —
+   * 只有用户真的改过「默认制表位」那一次，写手才动那一句（`defaultTabStopEdit()`）。
    */
   defaultTabStop(): number | undefined {
+    if (this.tabStopEdit !== undefined) return this.tabStopEdit;
     const raw = this.pkg ? new TextDecoder().decode(this.pkg.bytes("word/settings.xml") ?? new Uint8Array()) : "";
     const v = /<(?:[\w-]+:)?defaultTabStop\s+(?:[\w-]+:)?val="(\d+)"/.exec(raw)?.[1];
     return v === undefined ? undefined : Number(v);
+  }
+
+  /** 写手要的问句：用户改过「默认制表位」才交那个数，`undefined` = 那件部件按原件带走，一个字节都不动。 */
+  defaultTabStopEdit(): number | undefined {
+    return this.tabStopEdit;
+  }
+
+  /**
+   * 写下「默认制表位」那一句（`word/settings.xml` 的 `w:defaultTabStop`）。撤销不用另行登记：这一枚跟着
+   * `pageGeometryState()` 走，而每一击前 `snapshot()` 已经把那一份压进撤销栈了。
+   */
+  setDefaultTabStop(twips: number): void {
+    this.tabStopEdit = twips;
   }
 
   /**
@@ -3079,13 +3105,14 @@ export class WordDocument {
    * `w:sectPr` and the geometry read off it sit outside that clone.
    */
   pageGeometryState(): PageGeometry {
-    return { bodySectPr: this.bodySectPr, sections: structuredClone(this.sections), stated: this.pageSetupSeen };
+    return { bodySectPr: this.bodySectPr, sections: structuredClone(this.sections), stated: this.pageSetupSeen, defaultTabStop: this.tabStopEdit };
   }
 
   restorePageGeometry(state: PageGeometry): void {
     this.bodySectPr = state.bodySectPr;
     this.sections = structuredClone(state.sections);
     this.pageSetupSeen = state.stated;
+    this.tabStopEdit = state.defaultTabStop;
   }
 
   /**
@@ -5020,6 +5047,10 @@ function paraReadSnapshot(p: Paragraph): ParaStyle {
     // 显示的那一份比的。样式链借来的那个盒子留在账上，段落自己没有 `w:pBdr` 的槽位时才不会替文件编一句。
     borders: p.borders,
     shading: p.shading,
+    // 制表位进这本账与 `borders` 同一个理由，只是比的单位是**位置**：`p.tabStops` 是按位置合并过样式链的那一份
+    // （`mergeTabStops`），入件时页面上画的就是它。写出侧对着它逐位置比才知道用户到底动了哪一格；少了这一行，
+    // 每一段都会被判成「改了制表位」，把样式借来的位整个抄到段落身上——#145 的框踩过同一坑。
+    tabStops: p.tabStops,
   };
 }
 
@@ -5634,12 +5665,20 @@ export function syncParaSlots(p: Paragraph): void {
   if (shdMoved) {
     wanted.push({ tag: "shd", xml: shadingSlotXml(slots.find((s) => s.tag === "shd")?.xml, shdFill, prefix) });
   }
+  // 制表位那一枚认领的粒度是**位置**而不是整块，理由与 `w:pBdr` 逐边同一句：`p.tabStops` 是合并过样式链的那一份，
+  // 整枚抄上去就是把样式的话算在段落头上。被去掉的那一格写成 `w:val="clear"`（§17.3.2.155），件里那一块本来
+  // 没有的位置按升序插进去，没被点名的孩子连件自己的写法一起留着。
+  const tabChanges = moved("tabStops") ? paraTabStopChanges(p) : undefined;
+  if (tabChanges) {
+    wanted.push({ tag: "tabs", xml: tabsSlotXml(slots.find((s) => s.tag === "tabs")?.xml, tabChanges, prefix) });
+  }
   // 断页那一枚也只在这支三态笔说了话时认领：`keep` 对 false 一言不发，若这里照样认领，件自己那句
   // `<w:pageBreakBefore w:val="0"/>`（授权 46 份里 180 枚）会在认领时连同槽位一起消失。
   const owned = new Set(["pStyle", "numPr", "jc", ...keepMoved,
     ...(indMoved ? ["ind"] : []), ...(spacingMoved ? ["spacing"] : []),
     ...(wrapMoved ? ["wordWrap"] : []),
-    ...(snapMoved ? ["snapToGrid"] : []), ...(box ? ["pBdr"] : []), ...(shdMoved ? ["shd"] : [])]);
+    ...(snapMoved ? ["snapToGrid"] : []), ...(box ? ["pBdr"] : []), ...(shdMoved ? ["shd"] : []),
+    ...(tabChanges ? ["tabs"] : [])]);
   let next = slots.filter((s) => !owned.has(s.tag));
   for (const w of wanted) {
     const at = next.findIndex((s) => pprRank(s.tag) > pprRank(w.tag));
@@ -5733,6 +5772,68 @@ function shadingSlotXml(own: string | undefined, fill: string, prefix: string): 
   putAttr(written, "color", said.get("color") ?? "auto", SHD_ATTR_ORDER, prefix);
   putAttr(written, "fill", shadingFillToken(fill), SHD_ATTR_ORDER, prefix);
   return `<${prefix}:shd ${written.map((k) => k.xml).join(" ")}/>`;
+}
+
+/**
+ * `CT_TabStop` 的属性序（§17.3.2.155）：授权口径那 320 枚 `w:tabs` 的 462 枚孩子只有两种写法——
+ * `w:val w:pos` 368 枚与 `w:val w:leader w:pos` 94 枚，枚枚自闭合（成对写法 0 枚），所以先后是 val→leader→pos
+ * （`.scratch/tabs-slot-shape.py`）。
+ */
+const TAB_ATTR_ORDER = ["val", "leader", "pos"];
+
+/**
+ * 这一段这一击**动过的制表位**，逐位置对着入件时画着的那一份比（`asRead.tabStops` 里含样式链借来的）：
+ * 说法变了的与新增的报成陈述，被去掉的那一格报成 `w:val="clear"`——§17.3.2.155 让一段作废样式给的那一格用的
+ * 正是这一枚孩子，授权口径的 `w:tabs` 里本来就有（clear 2 枚 / 462 枚，`.scratch/tabs-slot-shape.py`）。
+ * 没动过的位置一句不说，所以「原样确定」不落笔；样式借来的那几格也一样留着不抄到段身上。没有快照的段
+ * （编辑器自己拆出来的）每一格都算动过。
+ */
+export function paraTabStopChanges(p: Paragraph): TabStop[] | undefined {
+  const now = p.tabStops ?? [];
+  const was = p.asRead?.tabStops ?? [];
+  const out: TabStop[] = [];
+  for (const s of now) {
+    const before = was.find((x) => x.posTwips === s.posTwips);
+    if (before && before.val === s.val && (before.leader ?? "") === (s.leader ?? "")) continue;
+    out.push(s);
+  }
+  for (const s of was) if (!now.some((x) => x.posTwips === s.posTwips)) out.push({ posTwips: s.posTwips, val: "clear" });
+  return out.length ? out.sort((a, b) => a.posTwips - b.posTwips) : undefined;
+}
+
+/** 一格的字面：件在这一格写过的属性留着，模型认得的那三枚跟着字段走（与 `borderSideXml` 同一支笔）。 */
+export function tabStopXml(stop: TabStop, base: string | undefined, prefix: string): string {
+  const written = attrsWritten(base ?? "");
+  putAttr(written, "val", stop.val, TAB_ATTR_ORDER, prefix);
+  putAttr(written, "leader", stop.leader, TAB_ATTR_ORDER, prefix);
+  putAttr(written, "pos", String(Math.round(stop.posTwips)), TAB_ATTR_ORDER, prefix);
+  return `<${prefix}:tab ${written.map((k) => k.xml).join(" ")}/>`;
+}
+
+/** 一枚 `w:tab` 孩子说的是哪一格（`w:pos`）；说不出位置的child 不参与比对，按件的原样留在块里。 */
+function tabStopPos(xml: string): number {
+  const v = /(?:[A-Za-z_][\w.-]*:)?pos="(-?\d+)"/.exec(xml)?.[1];
+  return v === undefined ? NaN : Number(v);
+}
+
+/**
+ * 重建那一枚 `w:tabs`：`changes` 点名的位置由字段重写，其余的孩子按件的字节带着走（含模型不收的
+ * `decimal`/`bar` 那些写法）。件里本来没有那一格的，插在第一枚位置比它大的孩子前面——授权口径 320 枚块里
+ * **318 枚的孩子按 `w:pos` 升序**（另有 2 枚既非升序也非降序，`.scratch/tabs-slot-shape.py`）：升序是件的说法，
+ * 而那两枚原有的顺序一个字不改，比替文件把整块重排更诚实。
+ */
+function tabsSlotXml(own: string | undefined, changes: readonly TabStop[], prefix: string): string {
+  const kids = own ? [...childSpans(elementContent(own))] : [];
+  for (const c of changes) {
+    const at = kids.findIndex((k) => tabStopPos(k.xml) === c.posTwips);
+    const xml = tabStopXml(c, at >= 0 ? kids[at]!.xml : undefined, prefix);
+    if (at >= 0) kids[at] = { tag: "tab", xml };
+    else {
+      const after = kids.findIndex((k) => Number.isFinite(tabStopPos(k.xml)) && tabStopPos(k.xml) > c.posTwips);
+      kids.splice(after < 0 ? kids.length : after, 0, { tag: "tab", xml });
+    }
+  }
+  return kids.length ? `<${prefix}:tabs>${kids.map((k) => k.xml).join("")}</${prefix}:tabs>` : "";
 }
 
 /**
@@ -6354,8 +6455,12 @@ function tabStopsOf(tabs: any): TabStop[] | undefined {
  * the whole element — what `paraLent` does for every other key — would let one stop in the paragraph erase a
  * style's whole set, and 106 of the 370 blocks in the authorized 46 份 write two or more stops at once.
  */
-function mergeTabStops(lower?: readonly TabStop[], upper?: readonly TabStop[]): TabStop[] | undefined {
-  if (!upper?.length) return lower ? [...lower] : undefined;
+function mergeTabStops(lower?: TabStop[], upper?: TabStop[]): TabStop[] | undefined {
+  // 段自己一枚都没说时，交回链上那一份的**同一个物件**（不复制）：`applyParaStyle` 判「这一族归不归段落」用的是
+  // 引用比（`stated !== before?.[key]`，与 `mergeParaBorders` 同一条），复制过一次就把样式的话认成段落的直接格式，
+  // 换一次样式替段落抄一整块 `w:tabs`。因此这一族的字段只能**整个换掉**，不许就地改——与 `carriedShape` 头注
+  // 那句「值按引用带走」是同一条纪律。
+  if (!upper?.length) return lower;
   const byPos = new Map<number, TabStop>();
   for (const s of lower ?? []) byPos.set(s.posTwips, s);
   for (const s of upper) {

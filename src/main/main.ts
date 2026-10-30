@@ -3442,6 +3442,225 @@ function smoke(): void {
             savedDirty: ldDirty(),
           };
         }
+        // #234：「制表位」对话框在**装机这只盒子**里走两趟——两趟跑的是同一段腿代码，问的是同一批事，
+        // 由 .scratch/tab-stops-install-check.sh 拿两份日志与两份盘上的件各问各的。家里那 35 例
+        // （.scratch/tab-stops-dom.ts）量的是真 Chrome 里的 DOM；这一腿只问打包件才答得了的四件：
+        // ① ribbon 上那枚「制表位」在不在、排在那一组的第几枚（打进 renderer.js 才算）；
+        // ② 对话框那一段样式跟着打包件上身了没有（.solo-ts-dialog 的宽度、那枚「确定」的底色）；
+        // ③ 一次「确定」之后**真铺排**下纸上那一枚的落点，与写回盘上的那两句（w:tabs、settings.xml 的
+        //   w:defaultTabStop——纸与盘两条账各管各的，谁也不替谁背书）；
+        // ④ 撤销与重做在打包件的栈上是**一整件事**：↶ 一次纸上退回去，↷ 一次又落回来。
+        // ⑤ 「改了才报脏」的反面：取消、填错、原样确定三条都不许动那一枚 ●，真落笔的那一条必须动。
+        //   进这一条时纸已经脏着——在它前面的腿（docPart 打字、画者拖动）各自验的正是「改了字节要报脏」，
+        //   所以起手先存一次把 ● 清零（dirty.baseline），后面每一格读数才是绝对口径，不是两笔脏的差。
+        // 字面全按对话框自己那格的单位换算（壳的测量单位不落进文件，写死的期望会随档位漂）。
+        const tsDoc = (document.getElementById("title")?.textContent ?? "").includes("制表位这一击");
+        let tabStopsLeg = null;
+        if (tsDoc) {
+          const tsPara = (needle) => [...document.querySelectorAll("#view .page .para")].find((x) => (x.textContent ?? "").includes(needle));
+          const tsDirty = () => ((document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0);
+          const tsBtn = () => [...document.querySelectorAll("#ribbon button")].find((b) => String(b.title ?? "").indexOf("制表位") === 0);
+          const tsDlg = () => document.querySelector(".solo-ts-dialog");
+          const tsList = () => tsDlg()?.querySelector("[name='ts-list']") ?? null;
+          const tsRows = () => [...(tsList()?.options ?? [])];
+          const tsField = (n) => tsDlg()?.querySelector("[name='" + n + "']") ?? null;
+          const tsUnit = () => String(tsField("ts-pos")?.parentElement?.querySelector("span")?.textContent ?? "");
+          const tsPer = () => (tsUnit() === "毫米" ? 1440 / 25.4 : tsUnit() === "英寸" ? 1440 : tsUnit() === "磅" ? 20 : 1440 / 2.54);
+          const tsDec = () => (tsUnit() === "毫米" ? 2 : tsUnit() === "英寸" ? 4 : tsUnit() === "磅" ? 2 : 3);
+          // 缇 ↔ 那一格的字面：与 doc-units.ts 同一套（每单位缇数与该档能精确往返的最小小数位）。
+          const tsText = (tw) => String(Number((tw / tsPer()).toFixed(tsDec())));
+          const tsTwips = (txt) => { const v = parseFloat(txt); return isFinite(v) ? Math.round(v * tsPer()) : NaN; };
+          const tsType = (n, v) => { const el = tsField(n); if (el) { el.value = v; el.dispatchEvent(new Event("input", { bubbles: true })); } };
+          const tsMark = (v) => { const r = tsDlg()?.querySelector("input[name='ts-val'][value='" + v + "']"); if (r) { r.checked = true; r.dispatchEvent(new Event("change", { bubbles: true })); } };
+          const tsPickRow = (i) => { const l = tsList(); if (l) { l.selectedIndex = i; l.dispatchEvent(new Event("change", { bubbles: true })); } };
+          const tsClick = (n) => { const el = tsDlg()?.querySelector("[name='" + n + "']"); el?.click(); };
+          const tsApply = () => tsDlg()?.querySelector(".solo-ts-apply")?.click();
+          const tsCancel = () => tsDlg()?.querySelector(".solo-ts-cancel")?.click();
+          const tsRb = (label) => [...document.querySelectorAll("#ribbon button.rb")].find((b) => b.textContent === label);
+          const tsHint = (n) => String(tsDlg()?.querySelector("[data-hint='" + n + "']")?.textContent ?? "");
+          const tsErr = () => String(tsDlg()?.querySelector(".solo-ts-error")?.textContent ?? "");
+          const tsPut = (needle) => {
+            const el = tsPara(needle);
+            if (!el) return 0;
+            const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+            let node = null;
+            for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+              if ((n.textContent ?? "").includes(needle)) { node = n; break; }
+            }
+            if (!node) return 0;
+            const r = document.createRange();
+            r.setStart(node, 1);
+            r.setEnd(node, 1);
+            const s = document.getSelection();
+            s?.removeAllRanges();
+            if (s) s.addRange(r);
+            el.closest(".page")?.focus?.();
+            document.dispatchEvent(new Event("selectionchange"));
+            return 1;
+          };
+          // 那一枚制表符之后那截字的落点，按**这张纸自己**的 zoom 与左内边距折回纸像素（口径同 .scratch/tab-stops-dom.ts）。
+          const tsSeg = (needle, idx) => {
+            const el = tsPara(needle);
+            const page = el?.closest(".page");
+            if (!el || !page) return null;
+            const ts = [...el.querySelectorAll("span.tab")];
+            const t = ts[idx ?? 0];
+            if (!t) return null;
+            const z = parseFloat(page.style.getPropertyValue("zoom")) || 1;
+            const base = page.getBoundingClientRect().left;
+            const rg = document.createRange();
+            const nxt = ts[(idx ?? 0) + 1] ?? null;
+            if (nxt) { rg.setStartAfter(t); rg.setEndBefore(nxt); } else { rg.selectNodeContents(el); rg.setStartAfter(t); }
+            const rects = [...rg.getClientRects()].filter((b) => b.width > 0);
+            if (!rects.length) return null;
+            const top = rects[0].top;
+            const line = rects.filter((b) => Math.abs(b.top - top) <= 1);
+            const L = Math.min(...line.map((b) => b.left));
+            const R = Math.max(...line.map((b) => b.right));
+            const to = (v) => round1((v - base) / z - (parseFloat(getComputedStyle(page).paddingLeft) || 0));
+            return { left: to(L), right: to(R), mid: to((L + R) / 2) };
+          };
+          // 修订得按回关着：开着落这一击会顺带写一枚 w:pPrChange，那是修订那一族的形状，这一族不问它（量完按回原样）。
+          const tsTrackBtn = () => [...document.querySelectorAll("#ribbon button.rb")].find((b) => b.textContent === "修订");
+          const tsTrackOn = () => (tsTrackBtn()?.classList.contains("on") ? 1 : 0);
+          const tsTrack0 = tsTrackOn();
+          const dOnEntry = tsDirty();
+          if (tsTrack0) { tsTrackBtn().click(); await wait(320); }
+          const dAfterTrack = tsDirty();
+          // 进这一条时纸已经脏了：这一趟在它前面的腿（docPart 打字、画者拖动）各自验的正是「改了字节要报脏」，
+          // 所以「取消/原样确定不许报脏」在这一格里没法按绝对口径问。先存一次把脏清零，后面每一格读数才都是绝对口径
+          // （存下来的字节本来就是那些腿改过的，这一族最后仍按同一份盘子比对，不影响盘上那两条账）。
+          let dBaseline = dAfterTrack;
+          if (dAfterTrack) { fire("solo:save"); await wait(1400); dBaseline = tsDirty(); }
+          const btn = tsBtn();
+          const groupKids = btn ? [...(btn.parentElement?.children ?? [])] : [];
+          const opened = [];
+          // —— 1) 起手摆的是件里那一句：清单、三栏、默认格、那行小字，外加打包件的那一段样式 ——
+          opened.push(tsPut("甲起"));
+          btn?.click();
+          await wait(260);
+          const dStyle = tsDlg() ? getComputedStyle(tsDlg()) : null;
+          const aStyle = tsField("ts-pos") ? getComputedStyle(tsDlg()?.querySelector(".solo-ts-apply") ?? document.body) : null;
+          const read0 = {
+            put: opened[0],
+            rows: tsRows().map((o) => o.value).join(","),
+            texts: tsRows().map((o) => String(o.textContent)).join("|"),
+            pos: String(tsField("ts-pos")?.value ?? ""),
+            val: String(tsDlg()?.querySelector("input[name='ts-val']:checked")?.value ?? ""),
+            leader: String(tsField("ts-leader")?.value ?? ""),
+            def: String(tsField("ts-default")?.value ?? ""),
+            defTwips: tsTwips(String(tsField("ts-default")?.value ?? "")),
+            unit: tsUnit(),
+            hint: tsHint("ts-list"),
+            boxW: dStyle ? round1(parseFloat(dStyle.width)) : 0,
+            boxBorder: dStyle ? String(dStyle.borderTopWidth) + "/" + String(dStyle.borderTopColor) : "",
+            applyBg: aStyle ? String(aStyle.backgroundColor) : "",
+            btnTitle: String(btn?.title ?? "").slice(0, 8),
+            btnIndex: groupKids.indexOf(btn ?? undefined) + 1,
+            btnCount: groupKids.length,
+          };
+          tsCancel();
+          await wait(200);
+          const segJiaCancel = tsSeg("甲起", 0);
+          const dAfterCancel = tsDirty();
+          // —— 2) 填错的那一格：那行红字说出来、「确定」按下不落笔 ——
+          btn?.click();
+          await wait(240);
+          const dAfterReopen = tsDirty();
+          tsType("ts-pos", "不是一格数");
+          await wait(200);
+          const dAfterBadType = tsDirty();
+          const badErr = tsErr();
+          const badDisabled = tsDlg()?.querySelector(".solo-ts-apply")?.disabled === true;
+          const segBeforeBad = tsSeg("甲起", 0);
+          tsApply();
+          await wait(240);
+          const segAfterBad = tsSeg("甲起", 0);
+          const badStillOpen = !!tsDlg();
+          const dAfterBadApply = tsDirty();
+          if (tsDlg()) tsCancel();
+          await wait(200);
+          const dAfterBadCancel = tsDirty();
+          // —— 3) 原样确定：一字不动、不进撤销栈、不报脏 ——
+          const dirtyPre = tsDirty();
+          btn?.click();
+          await wait(240);
+          const segPreApply = tsSeg("甲起", 0);
+          tsApply();
+          await wait(260);
+          const segPostApply = tsSeg("甲起", 0);
+          const dirtyAfterNoop = tsDirty();
+          // —— 4) 第一趟才落笔：加一枚 2880 居中、清掉 720 那一枚 ——
+          const firstPass = read0.rows === "720,8306";
+          let rowsAfterEdit = "";
+          let segEdited = null;
+          let segUndone = null;
+          let segRedone = null;
+          let cDef = null;
+          let cDefAfter = null;
+          let defEcho = "";
+          let dAfterEdit = -1;
+          let dAfterUndo = -1;
+          let dAfterDef = -1;
+          if (firstPass) {
+            btn?.click();
+            await wait(240);
+            tsType("ts-pos", tsText(2880));
+            tsMark("center");
+            tsClick("ts-set");
+            await wait(200);
+            tsPickRow(0);
+            tsClick("ts-del");
+            await wait(200);
+            rowsAfterEdit = tsRows().map((o) => o.value).join(",");
+            tsApply();
+            await wait(300);
+            segEdited = tsSeg("甲起", 0);
+            dAfterEdit = tsDirty();
+            tsRb("↶")?.click();
+            await wait(300);
+            segUndone = tsSeg("甲起", 0);
+            dAfterUndo = tsDirty();
+            tsRb("↷")?.click();
+            await wait(300);
+            segRedone = tsSeg("甲起", 0);
+            // 默认制表位：件级那一句改成 720（丙段整段没写位，纸上那一枚走的正是这一格）。
+            btn?.click();
+            await wait(240);
+            cDef = tsSeg("丙起", 0);
+            defEcho = String(tsField("ts-default")?.value ?? "");
+            tsType("ts-default", tsText(720));
+            tsApply();
+            await wait(300);
+            cDefAfter = tsSeg("丙起", 0);
+            dAfterDef = tsDirty();
+          }
+          const paper = { jia: tsSeg("甲起", 0), yi: tsSeg("乙起", 0), bing: tsSeg("丙起", 0), ding: tsSeg("丁起", 0), wu: tsSeg("戊起", 0) };
+          btn?.click();
+          await wait(240);
+          const readEnd = { rows: tsRows().map((o) => o.value).join(","), def: String(tsField("ts-default")?.value ?? ""), defTwips: tsTwips(String(tsField("ts-default")?.value ?? "")), hint: tsHint("ts-list") };
+          if (tsDlg()) tsCancel();
+          await wait(200);
+          if (tsTrack0) { tsTrackBtn()?.click(); await wait(300); }
+          fire("solo:save");
+          await wait(1400);
+          tabStopsLeg = {
+            firstPass: firstPass ? 1 : 0,
+            read0,
+            cancel: { gone: tsDlg() ? 1 : 0, segLeft: segJiaCancel ? segJiaCancel.left : null, dirty: dAfterCancel },
+            bad: { errChars: badErr.length, disabled: badDisabled ? 1 : 0, moved: segBeforeBad && segAfterBad ? round1(segAfterBad.left - segBeforeBad.left) : null, open: badStillOpen ? 1 : 0 },
+            dirty: { onEntry: dOnEntry, afterTrack: dAfterTrack, baseline: dBaseline, afterCancel: dAfterCancel, afterReopen: dAfterReopen, afterBadType: dAfterBadType, afterBadApply: dAfterBadApply, afterBadCancel: dAfterBadCancel, afterEdit: dAfterEdit, afterUndo: dAfterUndo, afterDef: dAfterDef },
+            noop: { dirtyPre, dirtyAfterNoop, moved: segPreApply && segPostApply ? round1(segPostApply.left - segPreApply.left) : null, dialogsLeft: document.querySelectorAll(".solo-ts-dialog").length },
+            edit: { rowsAfterEdit, segEdited, segUndone, segRedone, defEcho, cDef, cDefAfter },
+            paper,
+            readEnd,
+            ribbonButtons: document.querySelectorAll("#ribbon button").length,
+            trackBefore: tsTrack0,
+            trackBack: tsTrackOn(),
+            savedDirty: tsDirty(),
+          };
+        }
+
         // #224：「显示原文」那一档纸面穿的是每条属性改动记录里的 prev（render.ts 走 doc.originalView()），
         // 所以读数的框也得说同一句。这一腿问三处同源：段落对话框里段前那一格、行距那一档、开始页对齐那四枚
         // 亮的是哪一枚；切回「显示修订」再问一遍，两档各自与纸面 text-align 对齐。
@@ -4392,7 +4611,7 @@ function smoke(): void {
         const recovered = { cells: document.querySelectorAll(".sheet-wrap td").length, title: document.getElementById("title")?.textContent };
         // The run ends on a modified document, so quitting goes through the unsaved prompt.
         // A PDF the export asked for shows up in saveAsWrites, next to the pptx/xlsx saves.
-        return { docPart, bandLeg, rulerLeg, painterLeg, leaderLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, clearLeg, styleLeg, vertLeg, caseLeg, origLeg, origTableLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
+        return { docPart, bandLeg, rulerLeg, painterLeg, leaderLeg, tabStopsLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, clearLeg, styleLeg, vertLeg, caseLeg, origLeg, origTableLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
       })()`;
       void last?.webContents
         .executeJavaScript(probe)

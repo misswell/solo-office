@@ -116,6 +116,7 @@ export class DocStatusBar {
   private lastPage = 1;
   /** 节与页码同一口径：光标不在纸面上时保留上一次的读数。 */
   private lastSection = 1;
+  private lastSections = 1;
   /** 纵向位置与页码同一口径：光标不在纸面上、或光标行量不出矩形时保留上一次的读数。 */
   private lastPos: number | undefined;
   /** 行/列 与页码同一口径：光标不在纸面上、或数不出列（表格/只读容器）时保留上一次的读数。 */
@@ -202,8 +203,13 @@ export class DocStatusBar {
     this.pageItem.textContent = total === undefined ? "" : `第 ${this.lastPage} 页`;
     this.pagesItem.textContent = total === undefined ? "" : `共 ${total} 页`;
     const cs = this.editor.caretSection();
-    if (cs) this.lastSection = cs.section;
-    this.sectionItem.textContent = total === undefined ? "" : `第 ${this.lastSection} 节`;
+    if (cs) {
+      this.lastSection = cs.section;
+      this.lastSections = cs.sections;
+    }
+    // 节那格报「节 X/Y」（#239）：WPS 状态栏同格（`KxWpsStatusSectionInfoCommand`）显「节: 1/3」——
+    // 光标在第几节、件里一共几节，`caretSection()` 本来就交这一对，状态栏此前只报了前一半。
+    this.sectionItem.textContent = total === undefined ? "" : `节 ${this.lastSection}/${this.lastSections}`;
     const pp = st.positionPx;
     if (pp !== undefined) this.lastPos = pp;
     this.posItem.textContent =

@@ -40,6 +40,24 @@ const cssName = (face: string): string => face.replace(/["\\\n\r]/g, "").replace
 /** The family this page invents for one East Asian face. */
 const faceKey = (face: string): string => `solo-ea-${cssName(face)}`;
 
+/**
+ * `local()` 只认本机的字体**全名**，而 macOS 的中文字体不叫中文：`local("宋体")` 在这台机器上查不到，
+ * 整条 @font-face 落空，字面回退成默认黑体——目录截图对比量到的就是这一格（标题页该是衬线的宋体，
+ * 画成了无衬线）。别名按授权 46 份实际声明过的字面给（`.scratch` 语料普查：宋体 14,976 / 黑体 728 /
+ * 微软雅黑 284 / 新宋体 32 / 仿宋_GB2312 16 / 楷体_GB2312 6，theme 里同样这三样），全名取 Apple 自带的
+ * 几套中文体；本机真的叫"宋体"的字体（Windows 装来的）排在最前，优先吃它。
+ */
+const FACE_ALIASES: Record<string, string[]> = {
+  宋体: ["Songti SC", "STSong"],
+  新宋体: ["Songti SC", "STSong"],
+  黑体: ["Heiti SC", "STHeiti"],
+  微软雅黑: ["PingFang SC"],
+  仿宋: ["STFangsong"],
+  仿宋_GB2312: ["STFangsong"],
+  楷体: ["Kaiti SC", "STKaiti"],
+  楷体_GB2312: ["Kaiti SC", "STKaiti"],
+};
+
 /** The `@font-face` rules holding these faces to the East Asian ranges. Empty for an empty list. */
 export function eastAsiaFaceRules(faces: string[]): string {
   const out: string[] = [];
@@ -48,7 +66,10 @@ export function eastAsiaFaceRules(faces: string[]): string {
     const key = faceKey(face);
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push(`@font-face{font-family:"${key}";src:local("${cssName(face)}");unicode-range:${EAST_RANGES};}`);
+    const aliases = FACE_ALIASES[cssName(face)]
+      ?.map((a) => `local("${cssName(a)}")`)
+      .join(",");
+    out.push(`@font-face{font-family:"${key}";src:local("${cssName(face)}")${aliases ? `,${aliases}` : ""};unicode-range:${EAST_RANGES};}`);
   }
   return out.join("");
 }
@@ -1119,10 +1140,44 @@ export const TBL_HEADER_ATTR = "data-tbl-header";
  * read-only — the caret cannot enter, and a save writes the bytes back rather than what the page drew. The
  * box is drawn with inline style because the page's own stylesheet is not this module's to change; `data-tag`
  * names what was kept, and nothing else about the element is read back as formatting.
+ *
+ * 容器的孩子**枚枚是段**时（`Carried.paras`，目录是量到的受众）逐行画：每段一枚 `.carry-p`，行内样式只上
+ * 对齐与缩进（`paraPlace` 那份裁判合过的），`data-tab-stops` 交给 `applyTabStops` 落每一枚制表符——目录条目
+ * 的「点线到右沿的页码」就是这一格管的。run 的加粗/字号/字色/字体按 `w:rPr` 的字面上；域机器件读侧就没收，
+ * 缓存的页码原样在文字里。整体仍是一个只带盒子（WPS 自己的目录控件同样带一圈框），文字颜色不再压灰。
  */
 function renderCarried(b: Carried): string {
-  const body = esc(b.text) || "（此处内容暂不可编辑）";
-  return `<div class="${CARRY_CLASS}" contenteditable="false" data-tag="${esc(b.tag)}" style="${CARRY_STYLE}">${body}</div>`;
+  if (!b.paras?.length) {
+    const body = esc(b.text) || "（此处内容暂不可编辑）";
+    return `<div class="${CARRY_CLASS}" contenteditable="false" data-tag="${esc(b.tag)}" style="${CARRY_STYLE}">${body}</div>`;
+  }
+  const inner = b.paras
+    .map((p) => {
+      const css = [
+        ...(p.align && ALIGN[p.align] ? [`text-align:${ALIGN[p.align]}`] : []),
+        ...indentCss(p.ind ?? {}),
+      ].join(";");
+      const stops = tabStopsAttr(p.tabStops);
+      const body = p.runs?.length
+        ? p.runs
+            .map((r) => {
+              const text = esc(r.text).split("\t").join('<span class="tab"></span>');
+              const st: string[] = [];
+              if (r.bold) st.push("font-weight:bold");
+              if (r.szHalf) st.push(`font-size:${r.szHalf / 2}pt`);
+              if (r.color && /^[0-9A-Fa-f]{6}$/.test(r.color)) st.push(`color:#${r.color}`);
+              if (r.eastAsia || r.latin) st.push(`font-family:${fontStack({ font: r.latin, fontEastAsia: r.eastAsia })}`);
+              return st.length ? `<span style="${st.join(";")}">${text}</span>` : text;
+            })
+            .join("")
+        : esc(p.text);
+      return `<div class="carry-p"${stops}${css ? ` style="${css}"` : ""}>${body || "<br>"}</div>`;
+    })
+    .join("");
+  // 盒子贴着正文栏画（左右 margin -1 把 1px 的框推到栏边界之外，padding 归零）：目录条目的右停位
+  // 是栏右沿（8306 缇＝栏宽），文字区若被 padding/border 收窄，页码就折到下一行——装机腿量到过
+  // 恰好差这 8px。WPS 的目录控件同样贴栏。
+  return `<div class="${CARRY_CLASS}" contenteditable="false" data-tag="${esc(b.tag)}" style="border:1px dashed #b3b3b3;border-radius:2px;margin:2px -1px">${inner}</div>`;
 }
 
 /** The class a page border's element wears: drawn inside the paper box, and never a block of text. */

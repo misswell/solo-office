@@ -951,6 +951,39 @@ export interface Table {
 }
 
 /**
+ * One run of a carried paragraph's display, read straight off its `w:rPr`. Field machinery (`w:fldChar`,
+ * `w:instrText`) is not a run — a field's cached result is ordinary `w:t` and shows as itself.
+ */
+export interface CarriedRun {
+  text: string;
+  /** `w:b` present and not switched off. */
+  bold?: boolean;
+  /** `w:sz`, half-points. */
+  szHalf?: number;
+  /** `w:color` six-digit hex as the file wrote it. */
+  color?: string;
+  /** `w:rFonts/w:eastAsia` — the face the East Asian codepoints ask for. */
+  eastAsia?: string;
+  /** `w:rFonts/w:ascii` — the Latin face. */
+  latin?: string;
+}
+
+/**
+ * One `w:p` inside a carried container, as the page should draw it: the text a reader sees (field caches
+ * included, `w:instrText` excluded, each literal `w:tab` a `\t`) with the paragraph's own place resolved by
+ * the same referee the body and the bands answer to (`paraPlace`: `w:jc`/`w:ind` over the style chain,
+ * `w:tabs` merged one position at a time). Display only — the container's bytes travel back as they came,
+ * so nothing here is ever written.
+ */
+export interface CarriedPara {
+  text: string;
+  align?: string;
+  ind?: IndentFields;
+  tabStops?: TabStop[];
+  runs?: CarriedRun[];
+}
+
+/**
  * A child of the body, or of a table cell, that the model has no fields for: a `w:sdt` content control, a
  * `w:customXml` island, anything a producer wrote between the paragraphs. The page shows the text inside it
  * and edits none of it, and a save writes back the source text it came in with, in the place it held.
@@ -966,6 +999,14 @@ export interface Carried {
   xml: string;
   /** What a reader would see inside it, for the page only. Never written back. */
   text: string;
+  /**
+   * Per-paragraph display for a container whose content is nothing but `w:p` — a table of contents is the
+   * measured audience (46 份里带目录的 3 份：business/event/project plan.dotm，`w:docPartGallery` 说
+   * "Table of Contents"，条目段带 pStyle "toc 1/2" 的链、自己那句 `w:tabs` 右 8306 点线，页码是 PAGEREF 域
+   * 的缓存结果）。有这一份，页面画的是一行一条、点线到页码；没有（容器里混着表或其他孩子）就退回整块
+   * 一段的旧画法。只上行内样式与 `data-tab-stops`，不动盒子的可编辑性。
+   */
+  paras?: CarriedPara[];
 }
 
 export type Block = Paragraph | Table | Carried;
@@ -2679,7 +2720,7 @@ export class WordDocument {
         const child = queues.get(span.tag)?.shift();
         if (span.tag === "p") out.push(this.paragraph(child, rels, span.xml));
         else if (span.tag === "tbl") out.push(this.table(child, rels, span.xml));
-        else out.push(carriedOf(span));
+        else out.push(carriedOf(span, this));
       }
       return out;
     }
@@ -4463,7 +4504,7 @@ export class WordDocument {
     const editable = walked !== null && parsed.every((p) => p.ok);
     const segments = editable ? parsed.map((p) => p.segs) : undefined;
     const paragraphs = segments ? segments.map(hfSegmentsText) : paraSpans.map(hfParagraphText);
-    const place = paraSpans.map((s) => this.bandPlace(s));
+    const place = paraSpans.map((s) => this.paraPlace(s));
     const hf: HeaderFooter = {
       part,
       id,
@@ -4480,7 +4521,8 @@ export class WordDocument {
   }
 
   /**
-   * One band paragraph's own sentence about where it sits, with the alignment its style chain lends beneath it.
+   * One paragraph's own sentence about where it sits, with the alignment its style chain lends beneath it.
+   * 带子的段与只带容器（目录）里的段是同一问，答案也只有这一份。
    *
    * Read off the same span scan a save splices into, so paragraph i of the page is paragraph i of the bytes —
    * pairing a parsed tree against these spans would let the two count paragraphs differently.
@@ -4490,7 +4532,7 @@ export class WordDocument {
    * is the number the chain really lends and not a guess). `w:framePr` is the paragraph's alone: 授权 46 份的
    * `word/styles.xml` writes it 0 times, so there is no chain to walk for it (`.scratch/layout-families-audience.py`).
    */
-  private bandPlace(span: { xml: string }): BandPlace | undefined {
+  private paraPlace(span: { xml: string }): BandPlace | undefined {
     const pr = childSpans(elementContent(span.xml)).find((k) => k.tag === "pPr");
     if (!pr) return undefined;
     const inner = childSpans(elementContent(pr.xml));
@@ -4548,6 +4590,80 @@ export class WordDocument {
     return out.align === undefined && out.frame === undefined && out.ind === undefined && out.tabStops === undefined
       ? undefined
       : out;
+  }
+
+  /**
+   * 一个只带容器里的段落，页面该怎么逐行画：sdtContent 的直接孩子**枚枚都是 `w:p`** 才接（目录就是这一形状：
+   * 46 份里带目录的 3 份，`w:docPartGallery val="Table of Contents"`，段带 toc 1/2 的样式链、自己那句
+   * `w:tabs` 右 8306 点线，页码住在 PAGEREF 域的缓存结果里）；混着表或其他孩子的容器不接，退回整块一段的
+   * 旧画法。落点问的是 `paraPlace` 那一份裁判（与正文、带子同一句映射），run 的字面按序收——域机器件
+   * （`w:fldChar`/`w:instrText`）不是文字，缓存结果本来就是 `w:t`，留在原位。展示专用：容器的字节原样回写，
+   * 这一份永远不会被写出去。
+   */
+  carriedParas(span: { tag: string; xml: string }): CarriedPara[] | undefined {
+    if (span.tag !== "sdt") return undefined;
+    const parts = childSpans(elementContent(span.xml));
+    const content = parts.find((s) => s.tag === "sdtContent");
+    if (!content) return undefined;
+    const kids = childSpans(elementContent(content.xml));
+    if (!kids.length || !kids.every((k) => k.tag === "p")) return undefined;
+    const out: CarriedPara[] = [];
+    for (const k of kids) {
+      const place = this.paraPlace(k);
+      const runs = this.carriedRuns(k.xml);
+      out.push({
+        text: runs.map((r) => r.text).join(""),
+        ...(place?.align ? { align: place.align } : {}),
+        ...(place?.ind ? { ind: place.ind } : {}),
+        ...(place?.tabStops ? { tabStops: place.tabStops } : {}),
+        ...(runs.length ? { runs } : {}),
+      });
+    }
+    return out;
+  }
+
+  /**
+   * 一段只带文字的展示 run，按文件的顺序：`w:r` 的 `w:t` 逐枚收（`hfRunText` 把字面 `w:tab` 收成 `\t`），
+   * `w:rPr` 只取页面上画得出来的那几样（加粗、字号、字色、中西文字体）；域机器件整枚跳过——跳的是
+   * 边界与指令，不是缓存的结果。`w:hyperlink`（与 `w:fldSimple` 的结果半边）当透明容器穿过去：目录条目
+   * 的字与页码就住在里面。
+   */
+  private carriedRuns(xml: string): CarriedRun[] {
+    const out: CarriedRun[] = [];
+    const walk = (chunk: string): void => {
+      for (const k of childSpans(elementContent(chunk))) {
+        if (k.tag === "p") continue;
+        if (k.tag === "hyperlink" || k.tag === "fldSimple") {
+          walk(k.xml);
+          continue;
+        }
+        if (k.tag !== "r") continue;
+        if (/<(?:[\w.-]+:)?(?:fldChar|instrText)\b/.test(k.xml)) continue;
+        const text = hfRunText(k.xml);
+        if (text === "") continue;
+        const kids = childSpans(elementContent(k.xml));
+        const rPr = kids.find((s) => s.tag === "rPr");
+        const a = (tag: string): Record<string, string> | undefined => {
+          const e = rPr ? childSpans(elementContent(rPr.xml)).find((s) => s.tag === tag) : undefined;
+          return e ? attrsOf(e.xml) : undefined;
+        };
+        const b = a("b");
+        const bold = b !== undefined && b.val !== "0" && b.val !== "false";
+        const sz = Number(a("sz")?.val ?? NaN);
+        const color = a("color")?.val;
+        const fonts = a("rFonts");
+        out.push({
+          text,
+          ...(bold ? { bold: true } : {}),
+          ...(Number.isFinite(sz) && sz > 0 ? { szHalf: sz } : {}),
+          ...(color ? { color } : {}),
+          ...(fonts?.eastAsia ? { eastAsia: fonts.eastAsia } : {}),
+          ...(fonts?.ascii ? { latin: fonts.ascii } : {}),
+        });
+      }
+    };
+    walk(xml);
+    return out;
   }
 
   /**
@@ -7101,9 +7217,12 @@ function sameTags(parsed: { name: string }[], spans: { tag: string }[]): boolean
   return [...counts.values()].every((n) => n === 0);
 }
 
-/** A body or cell child the model has no fields for, kept as the text it came in with. */
-function carriedOf(span: { tag: string; xml: string }): Carried {
-  return { kind: "carried", tag: span.tag, xml: span.xml, text: carriedText(span.xml) };
+/** A body or cell child the model has no fields for, kept as the text it came in with. An sdt whose content
+ *  is nothing but paragraphs also gets its per-line display plan (`doc.carriedParas`); anything else keeps
+ *  the flat text view. */
+function carriedOf(span: { tag: string; xml: string }, doc?: WordDocument): Carried {
+  const paras = doc?.carriedParas(span);
+  return { kind: "carried", tag: span.tag, xml: span.xml, text: carriedText(span.xml), ...(paras ? { paras } : {}) };
 }
 
 /**

@@ -1705,7 +1705,9 @@ export function applyTabStops(page: HTMLElement, doc: WordDocument): void {
   // 它们该按 `w:defaultTabStop` 的步长走，而不是留在 CSS 那枚发明的 32px 上。
   // `.hf-p`（页眉页脚带）同一趟（#235）：纸里的原件与画出来的复件都在 `page` 里，母本在纸盒外、
   // `querySelector` 碰不到它，也本来量不了（`display:none` 的矩形全是 0）。
-  const hosts = [...page.querySelectorAll<HTMLElement>(".para, .hf-p")].filter(
+  // `.carry-p`（只带容器的逐行显示，#236）同一趟：目录条目那句「右 8306 点线」就是从这里落的——
+  // 盒子坐在正文栏里，原点与正文同一格；表格里的容器照旧挡掉（落点基准该是格沿）。
+  const hosts = [...page.querySelectorAll<HTMLElement>(".para, .hf-p, .carry-p")].filter(
     (el) => !el.closest("table") && el.querySelector("span.tab"),
   );
   if (!hosts.length) return;

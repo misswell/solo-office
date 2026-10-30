@@ -75,7 +75,9 @@ describe("docx body containers", () => {
     const html = renderWord(WordDocument.openBytes(makeContainersDocx()));
     expect(html).toContain('class="doc-carry"');
     expect(html).toContain('contenteditable="false"');
-    expect(html).toContain("第一章 概览 第二章 细节");
+    // 盒子的孩子枚枚是段（#236），逐行画成两枚 .carry-p；字不变，只是从「一整段流文」换成了「一行一条」。
+    expect(html).toContain('<div class="carry-p">第一章 概览</div>');
+    expect(html).toContain('<div class="carry-p">第二章 细节</div>');
   });
 
   it("adds nothing to a document that has no containers in it", () => {

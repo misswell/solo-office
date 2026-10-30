@@ -454,7 +454,8 @@ describe("那颗符号的脸回退：级没点脸就用段落标记自己解析�
     const doc = open(makeNumberingDocx([{ pPr: numPr(11, 0) + markFaces(`w:eastAsia="黑体"`), text: "方块" }]));
     const html = renderWord(doc);
     expect((html.match(/solo-ea-黑体/g) ?? []).length).toBe(2); // 规则里的族名 + 那颗符号的栈
-    expect(html).toContain(`@font-face{font-family:"solo-ea-黑体";src:local("黑体");`);
+    // local() 只认本机字体全名，中文脸带 macOS 别名（#236：宋体那批的同一张表）
+    expect(html).toContain(`@font-face{font-family:"solo-ea-黑体";src:local("黑体"),local("Heiti SC"),local("STHeiti");`);
   });
 
   it("画它不写它：w:pPr 里的 w:rFonts 按原件带回，numbering.xml 逐字节照旧", () => {

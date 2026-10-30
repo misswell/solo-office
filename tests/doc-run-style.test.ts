@@ -222,7 +222,7 @@ describe("docx run 格式从样式借：w:style 的 w:rPr 进阶梯", () => {
     );
     const page = renderWord(doc);
     expect(page.match(/@font-face/g)).toHaveLength(1);
-    expect(page).toContain('@font-face{font-family:"solo-ea-楷体";src:local("楷体");unicode-range:U+2E80-9FFF');
+    expect(page).toContain('@font-face{font-family:"solo-ea-楷体";src:local("楷体"),local("Kaiti SC"),local("STKaiti");unicode-range:U+2E80-9FFF');
     // Outside the paper box: the editor addresses a block by its position among `.page`'s children, and a rule
     // inside it would move every one of those positions.
     expect(page.indexOf("<style>")).toBeLessThan(page.indexOf('<div class="page"'));

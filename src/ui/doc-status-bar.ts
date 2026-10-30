@@ -209,9 +209,9 @@ export class DocStatusBar {
       this.lastSection = cs.section;
       this.lastSections = cs.sections;
     }
-    // 节那格报「节 X/Y」（#239）：WPS 状态栏同格（`KxWpsStatusSectionInfoCommand`）显「节: 1/3」——
+    // 节那格报「节: X/Y」（#239 起口径、#241 补冒号）：WPS 状态栏同格（`KxWpsStatusSectionInfoCommand`）显「节: 1/3」——
     // 光标在第几节、件里一共几节，`caretSection()` 本来就交这一对，状态栏此前只报了前一半。
-    this.sectionItem.textContent = total === undefined ? "" : `节 ${this.lastSection}/${this.lastSections}`;
+    this.sectionItem.textContent = total === undefined ? "" : `节: ${this.lastSection}/${this.lastSections}`;
     const pp = st.positionPx;
     if (pp !== undefined) this.lastPos = pp;
     this.posItem.textContent =
@@ -221,10 +221,11 @@ export class DocStatusBar {
       this.lastRow = rc.row;
       if (rc.column !== undefined) this.lastCol = rc.column;
     }
-    this.lineItem.textContent = total === undefined || this.lastRow === undefined ? "" : `行 ${this.lastRow}`;
-    this.colItem.textContent = total === undefined || this.lastCol === undefined ? "" : `列 ${this.lastCol}`;
+    // 行/列两格的字面照 WPS（#241）：「行: 1」「列: 4」——冒号那一对，与 页码:/页面:/节 同一家族。
+    this.lineItem.textContent = total === undefined || this.lastRow === undefined ? "" : `行: ${this.lastRow}`;
+    this.colItem.textContent = total === undefined || this.lastCol === undefined ? "" : `列: ${this.lastCol}`;
     const c = this.editor.counts();
-    this.wordItem.textContent = `字数：${c.cjk + c.words}`;
+    this.wordItem.textContent = `字数: ${c.cjk + c.words}`;
     this.unitItem.textContent = unitDef(currentUnit()).name;
   }
 

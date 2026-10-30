@@ -5668,9 +5668,16 @@ export function syncParaSlots(p: Paragraph): void {
   // 制表位那一枚认领的粒度是**位置**而不是整块，理由与 `w:pBdr` 逐边同一句：`p.tabStops` 是合并过样式链的那一份，
   // 整枚抄上去就是把样式的话算在段落头上。被去掉的那一格写成 `w:val="clear"`（§17.3.2.155），件里那一块本来
   // 没有的位置按升序插进去，没被点名的孩子连件自己的写法一起留着。
-  const tabChanges = moved("tabStops") ? paraTabStopChanges(p) : undefined;
-  if (tabChanges) {
-    wanted.push({ tag: "tabs", xml: tabsSlotXml(slots.find((s) => s.tag === "tabs")?.xml, tabChanges, prefix) });
+  // 认领与否**不按「字段动过」**（`moved("tabStops")`）而按 `paraTabStopEdits` 自己那一句：这里落的正是
+  // 段自己的字节（这一趟末尾把 `pPrSlots` 整个换掉），同一趟里改回去时字段与快照相等、字节却还停在上一击的写法，
+  // 那道门会把这一格挡在比对之外——纸上已经没墨、盘上还说有。
+  const tabsOwn = slots.find((s) => s.tag === "tabs")?.xml;
+  const tabEdits = paraTabStopEdits(p, tabsOwn);
+  if (tabEdits) {
+    // 重拼出来是空串（那一块的孩子全被 `drop` 摘走、又没人新写）时仍要认领这一枚，否则前一击写下的块留在原处；
+    // 但空块不推上去：`<w:tabs></w:tabs>` 是段落没话说时也不会写的写法。
+    const xml = tabsSlotXml(tabsOwn, tabEdits, prefix);
+    if (xml) wanted.push({ tag: "tabs", xml });
   }
   // 断页那一枚也只在这支三态笔说了话时认领：`keep` 对 false 一言不发，若这里照样认领，件自己那句
   // `<w:pageBreakBefore w:val="0"/>`（授权 46 份里 180 枚）会在认领时连同槽位一起消失。
@@ -5678,7 +5685,7 @@ export function syncParaSlots(p: Paragraph): void {
     ...(indMoved ? ["ind"] : []), ...(spacingMoved ? ["spacing"] : []),
     ...(wrapMoved ? ["wordWrap"] : []),
     ...(snapMoved ? ["snapToGrid"] : []), ...(box ? ["pBdr"] : []), ...(shdMoved ? ["shd"] : []),
-    ...(tabChanges ? ["tabs"] : [])]);
+    ...(tabEdits ? ["tabs"] : [])]);
   let next = slots.filter((s) => !owned.has(s.tag));
   for (const w of wanted) {
     const at = next.findIndex((s) => pprRank(s.tag) > pprRank(w.tag));
@@ -5782,23 +5789,81 @@ function shadingSlotXml(own: string | undefined, fill: string, prefix: string): 
 const TAB_ATTR_ORDER = ["val", "leader", "pos"];
 
 /**
- * 这一段这一击**动过的制表位**，逐位置对着入件时画着的那一份比（`asRead.tabStops` 里含样式链借来的）：
- * 说法变了的与新增的报成陈述，被去掉的那一格报成 `w:val="clear"`——§17.3.2.155 让一段作废样式给的那一格用的
- * 正是这一枚孩子，授权口径的 `w:tabs` 里本来就有（clear 2 枚 / 462 枚，`.scratch/tabs-slot-shape.py`）。
- * 没动过的位置一句不说，所以「原样确定」不落笔；样式借来的那几格也一样留着不抄到段身上。没有快照的段
- * （编辑器自己拆出来的）每一格都算动过。
+ * 槽位里那一枚 `w:tab` 孩子此刻说的话。`hold` 说的是这一枚的档**模型收不收得下**：件写 `decimal`/`bar`
+ * 或别的 token 时，读取那头（`tabStopsOf`）把它收成 `left`，对话框里也点不出它——那一枚不按字节比，
+ * 免得「用户一句没说」反被判成「说法变了」。
  */
-export function paraTabStopChanges(p: Paragraph): TabStop[] | undefined {
+function tabChildSaid(xml: string): { val: string; leader?: string; hold: boolean } {
+  const raw = /(?:[A-Za-z_][\w.-]*:)?val="([^"]*)"/.exec(xml)?.[1];
+  const leader = /(?:[A-Za-z_][\w.-]*:)?leader="([^"]*)"/.exec(xml)?.[1];
+  return {
+    val: raw ?? "left",
+    ...(leader ? { leader } : {}),
+    hold: raw === undefined || raw === "left" || raw === "center" || raw === "right" || raw === "clear",
+  };
+}
+
+/** 制表位这一击交回的两笔：`write` 是由字段重拼的那几格，`drop` 是要从块里摘掉、一句都不再说的那几格。 */
+export type TabStopEdits = { write: TabStop[]; drop: number[] };
+
+/**
+ * 这一段这一击**动过的制表位**：每一格对着**此刻那几枚孩子写的字节**比（槽位没有那一格时才退回入件时画着的
+ * 那一份，`asRead.tabStops` 里含样式链借来的）。判据是「字节与字段说的是不是同一件事」，不是「字段动过」——
+ * 与上面 `slotSwitch` 同一支笔，为的是同一趟里改了再改回来也看得见：`syncParaSlots` 每次落笔都会把槽位换成
+ * 新字节，只比入件那一份的话，「加上前导符再去掉」这一趟净变化为零、字节却停在加过的那一句上（纸上已经没墨了）。
+ * 说法变了的与新增的报成陈述，被去掉的那一格报成 `w:val="clear"`——§17.3.2.155 让一段作废样式给的那一格用的
+ * 正是这一枚孩子，授权口径的 `w:tabs` 里本来就有（clear 2 枚 / 462 枚，`.scratch/tabs-slot-shape.py`）；
+ * 字节已经说了 `clear` 的那一格不再说第二遍。没动过的位置一句不说，所以「原样确定」不落笔；样式借来的那几格
+ * 也一样留着不抄到段身上。没有快照的段（编辑器自己拆出来的）每一格都算动过。
+ *
+ * 「被去掉」分两种，只有那一种该说 `clear`：入件时这一格确实有话（段自己的字节，或样式链借来的，总之下在
+ * `asRead.tabStops` 里），段落这一击把它作废——这才需要一枚明说的孩子。反过来，那一格是**同一趟里前一击**
+ * 由段落自己添上的（快照里没有它，只有槽位的字节里有），用户随后又删掉：段落不是在作废谁的话，是在收回自己
+ * 刚才那句。那时候该写的是「这一段对这一格一句没说」，于是那一枚孩子从块里摘掉（`drop`），而不是留下
+ * `<w:tab w:val="clear" w:pos="…"/>`——替一句没人说过的话立案，与「原样确定不落笔」是同一条纪律的反面。
+ */
+export function paraTabStopEdits(p: Paragraph, own?: string): TabStopEdits | undefined {
   const now = p.tabStops ?? [];
   const was = p.asRead?.tabStops ?? [];
-  const out: TabStop[] = [];
+  const kids = own ? [...childSpans(elementContent(own))] : [];
+  /** 这一格此刻的说法：先看段自己那几枚孩子的字节，没有这一枚（或那一枚的档模型收不下）才看入件时画着的那一份。 */
+  const saidAt = (pos: number): TabStop | undefined => {
+    const kid = kids.find((k) => tabStopPos(k.xml) === pos);
+    if (kid) {
+      const c = tabChildSaid(kid.xml);
+      // 件的这一枚写着模型收不下的档（`decimal`/`bar`）：不按字节比，退回快照那一份——用户没说改时它连写法一起
+      // 留着（`tabStopsOf` 本来把它读成 `left`，按字节比就成了「说法变了」，顺手把件那句改掉），说了改才由字段重拼。
+      if (c.hold) return { posTwips: pos, val: c.val as TabStop["val"], ...(c.leader ? { leader: c.leader } : {}) };
+    }
+    return was.find((x) => x.posTwips === pos);
+  };
+  const same = (a: TabStop | undefined, b: TabStop): boolean =>
+    !!a && a.val === b.val && (a.leader ?? "") === (b.leader ?? "");
+  const write: TabStop[] = [];
   for (const s of now) {
-    const before = was.find((x) => x.posTwips === s.posTwips);
-    if (before && before.val === s.val && (before.leader ?? "") === (s.leader ?? "")) continue;
-    out.push(s);
+    if (same(saidAt(s.posTwips), s)) continue;
+    write.push(s);
   }
-  for (const s of was) if (!now.some((x) => x.posTwips === s.posTwips)) out.push({ posTwips: s.posTwips, val: "clear" });
-  return out.length ? out.sort((a, b) => a.posTwips - b.posTwips) : undefined;
+  // 被去掉的那一格：入件时画着的、与槽位里已经写下的那些格都算数（后者是这一趟里前一击加上的，
+  // 只比快照就会把「加上又删掉」的那一枚留在盘上）。
+  const gone = new Set<number>(was.map((s) => s.posTwips));
+  for (const k of kids) {
+    const pos = tabStopPos(k.xml);
+    if (Number.isFinite(pos) && tabChildSaid(k.xml).hold) gone.add(pos);
+  }
+  const drop: number[] = [];
+  for (const pos of gone) {
+    if (now.some((x) => x.posTwips === pos)) continue;
+    if (saidAt(pos)?.val === "clear") continue;
+    // 快照里没有这一格 ⇒ 它是这一趟前一击由段自己添的，删掉只是收回那句，不作废谁的话。
+    if (!was.some((x) => x.posTwips === pos)) {
+      drop.push(pos);
+      continue;
+    }
+    write.push({ posTwips: pos, val: "clear" });
+  }
+  if (!write.length && !drop.length) return undefined;
+  return { write: write.sort((a, b) => a.posTwips - b.posTwips), drop };
 }
 
 /** 一格的字面：件在这一格写过的属性留着，模型认得的那三枚跟着字段走（与 `borderSideXml` 同一支笔）。 */
@@ -5817,14 +5882,17 @@ function tabStopPos(xml: string): number {
 }
 
 /**
- * 重建那一枚 `w:tabs`：`changes` 点名的位置由字段重写，其余的孩子按件的字节带着走（含模型不收的
- * `decimal`/`bar` 那些写法）。件里本来没有那一格的，插在第一枚位置比它大的孩子前面——授权口径 320 枚块里
+ * 重建那一枚 `w:tabs`：`write` 点名的位置由字段重写，`drop` 点名的孩子从块里摘掉（这一趟里添上又收回的那几格，
+ * 段落对它们一句不再说），其余的孩子按件的字节带着走（含模型不收的 `decimal`/`bar` 那些写法）。件里本来没有
+ * 那一格的，插在第一枚位置比它大的孩子前面——授权口径 320 枚块里
  * **318 枚的孩子按 `w:pos` 升序**（另有 2 枚既非升序也非降序，`.scratch/tabs-slot-shape.py`）：升序是件的说法，
  * 而那两枚原有的顺序一个字不改，比替文件把整块重排更诚实。
  */
-function tabsSlotXml(own: string | undefined, changes: readonly TabStop[], prefix: string): string {
-  const kids = own ? [...childSpans(elementContent(own))] : [];
-  for (const c of changes) {
+function tabsSlotXml(own: string | undefined, edits: TabStopEdits, prefix: string): string {
+  const kids = own
+    ? [...childSpans(elementContent(own))].filter((k) => !edits.drop.includes(tabStopPos(k.xml)))
+    : [];
+  for (const c of edits.write) {
     const at = kids.findIndex((k) => tabStopPos(k.xml) === c.posTwips);
     const xml = tabStopXml(c, at >= 0 ? kids[at]!.xml : undefined, prefix);
     if (at >= 0) kids[at] = { tag: "tab", xml };

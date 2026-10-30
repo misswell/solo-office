@@ -3908,7 +3908,7 @@ export class DocEditor {
    * 「制表位」对话框的落笔处。两句各走各的：清单是**整份替换**（对话框交回的就是那一段要认的全部位置），
    * 空清单落回 `undefined`——读取那头 `mergeTabStops` 说的就是「一枚没有 = 这一族没说」，字段与件里的形状
    * 得是同一个，不然撤销与修订记录会看见一次没人改过的改动。被从清单里去掉的位置由写手逐位置补
-   * `w:val="clear"`（`paraTabStopChanges`），这一段不替它写。
+   * `w:val="clear"`（`paraTabStopEdits`），这一段不替它写。
    *
    * 逐段先比再落：**说法没变的段整段不动**——跨段不一致（`mixed`）时把同一份清单写给每一段，只有真变了的那几段
    * 认领这一笔、也只有那几段签 `w:pPrChange`。每一段落的是**新数组**而不是 `patch.stops` 本体：`mergeTabStops`

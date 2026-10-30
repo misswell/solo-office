@@ -216,6 +216,18 @@ describe("docx 制表位写回", () => {
     return writeDocx(doc);
   };
 
+  /** 同一趟里按两次「确定」：`syncParaSlots` 每次都把段自己那几枚孩子的字节换下来，第二击比的该是**刚落下的
+   * 那一串**，不是入件那一份——装机腿步骤 5（无→点线→无）走的正是这一条，只在盘上看得到。 */
+  const setStopsTwice = (bytes: Uint8Array, needle: string, a: TabStop[], b: TabStop[] | undefined): Uint8Array => {
+    const doc = open(bytes);
+    const p = paragraphs(doc).find((x) => x.inlines.map((i) => ("text" in i ? i.text : "")).join("").includes(needle))!;
+    p.tabStops = a;
+    syncParaSlots(p);
+    p.tabStops = b;
+    syncParaSlots(p);
+    return writeDocx(doc);
+  };
+
   // 两枚孩子用的是量出来的那两种写法之一（`w:val w:pos`）与另一种（`w:val w:leader w:pos`）：462 枚里没有第三种序。
   const TWO = '<w:tabs><w:tab w:val="left" w:pos="720"/><w:tab w:val="right" w:pos="8306" w:leader="dot"/></w:tabs>';
   const twoStopDocx = (label: string) => makeChainDocx([], [{ pPr: TWO, text: label }]);
@@ -286,6 +298,55 @@ describe("docx 制表位写回", () => {
     expect(paraOf(part(out), "借两格没改")).not.toContain("<w:tabs>");
   });
 
+  it("同一趟里加了前导符又撤掉：字节回到件原本那一串，纸上没墨盘上也不说有", () => {
+    // 装机腿步骤 5 的那一击（无→点线→无）。第二击时字段与快照相等，判据若按「与入件那一份比」就成了净变化为零，
+    // 第一击落下的 `w:leader="dot"` 会一直停在盘上——纸早就不画了。
+    const out = setStopsTwice(twoStopDocx("加了点线又撤"), "加了点线又撤", [
+      { posTwips: 720, val: "left", leader: "dot" },
+      { posTwips: 8306, val: "right", leader: "dot" },
+    ], [
+      { posTwips: 720, val: "left" },
+      { posTwips: 8306, val: "right", leader: "dot" },
+    ]);
+    expect(tabsOf(out, "加了点线又撤")).toBe(TWO);
+  });
+
+  it("同一趟里添的一格又被删掉：段落收回那句，不作废谁的话", () => {
+    // 快照里没有 4153 这一格（件与链都没说过），所以它不该换来一枚 `w:val="clear"`——那是「一段作废样式给的
+    // 那一格」的写法。前一击由段落自己写下、这一击由段落自己摘掉，块回到件原本那两枚孩子。
+    const out = setStopsTwice(twoStopDocx("添一格又删"), "添一格又删", [
+      { posTwips: 720, val: "left" },
+      { posTwips: 4153, val: "center" },
+      { posTwips: 8306, val: "right", leader: "dot" },
+    ], [
+      { posTwips: 720, val: "left" },
+      { posTwips: 8306, val: "right", leader: "dot" },
+    ]);
+    expect(tabsOf(out, "添一格又删")).toBe(TWO);
+    expect(paraOf(part(out), "添一格又删")).not.toContain('w:val="clear"');
+  });
+
+  it("件里本来那一格被删仍写 clear，同一趟里另一格的说法改动一起落", () => {
+    // `drop` 与 `clear` 的分界是「入件时这一格有没有话」，不是「这一趟里有没有被碰过」：8306 是件自己写的，
+    // 删掉它就得明说作废；720 那一枚是这一趟改的说法，由字段重拼。
+    const out = setStopsTwice(twoStopDocx("改一枚删一枚"), "改一枚删一枚", [
+      { posTwips: 720, val: "left", leader: "dot" },
+      { posTwips: 4153, val: "center" },
+      { posTwips: 8306, val: "right", leader: "dot" },
+    ], [
+      { posTwips: 720, val: "left", leader: "dot" },
+    ]);
+    expect(tabsOf(out, "改一枚删一枚")).toBe('<w:tabs><w:tab w:val="left" w:leader="dot" w:pos="720"/><w:tab w:val="clear" w:pos="8306"/></w:tabs>');
+  });
+
+  it("段本来一句没说：添上去又全部清除之后，块整个从段身上摘掉", () => {
+    // 「全部清除」那一击落回 `undefined`。既不能留下 `clear`，也不能留下空的 `<w:tabs></w:tabs>`——
+    // 段落对这一族又回到一句没说，与入件时同一个形状。
+    const out = setStopsTwice(makeChainDocx([], [{ text: "添了再全清" }]), "添了再全清", [{ posTwips: 720, val: "left" }], undefined);
+    expect(paraOf(part(out), "添了再全清")).not.toContain("<w:tabs>");
+    expect(paraOf(part(out), "添了再全清")).not.toContain('w:val="clear"');
+  });
+
   it("模型不收的 w:val=\"decimal\" 原样留在块里：位置对得上就不替件改说法", () => {
     // 读端把不在 ST_TabVal 四档里的那一枚按默认值 `left` 画（授权 46 份 decimal/bar 各 0 枚，模型没有它们的字段）；
     // 写端不能因此把件那句改掉，也不能把它丢掉。
@@ -297,7 +358,7 @@ describe("docx 制表位写回", () => {
   });
 
   it("没有 w:pPr 的段（编辑器拆出来的那一段）从字段那条路写出同一句", () => {
-    // 两条路共用 `paraTabStopChanges`，所以「槽位带着原件字节」与「只剩字段」不会说成两件事。
+    // 两条路共用 `paraTabStopEdits`，所以「槽位带着原件字节」与「只剩字段」不会说成两件事。
     const doc = open(makeChainDocx([], [{ text: "没有 pPr 的段" }]));
     const p = paragraphs(doc)[0]!;
     p.tabStops = [{ posTwips: 8306, val: "right", leader: "dot" }];

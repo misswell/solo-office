@@ -1,7 +1,7 @@
 import { strToU8, zipSync } from "fflate";
 import type { Block, BorderSet, CellStyle, Inline, ListAddition, MarginTwips, ParaStyle, Paragraph, ParagraphFormatRevision, PropSlot, RunStyle, RowInfo, RowStyle, Table, TableBorder, TableCell, TableStyle, WordDocument } from "./docx.js";
 import { bytesOfDataUrl } from "./media.js";
-import { BORDER_ORDER, PBDR_ORDER, ROW_REVISION_TAGS, ownParaStyle, ownRunStyle, paraBorderChanges, paraStyleOf, paraTabStopChanges, preserve, revisionTag, runStyleOf, samePropValue, shadingFillToken, tabStopXml } from "./docx.js";
+import { BORDER_ORDER, PBDR_ORDER, ROW_REVISION_TAGS, ownParaStyle, ownRunStyle, paraBorderChanges, paraStyleOf, paraTabStopEdits, preserve, revisionTag, runStyleOf, samePropValue, shadingFillToken, tabStopXml } from "./docx.js";
 import { childSpans, elementContent } from "./opc.js";
 import { changeRecordXml, placeRecordXml, setChildren } from "./doc-table-revisions.js";
 import { commentDirty, commentElement, commentParaIds, commentsRootInfo, type DocComment } from "./comments.js";
@@ -185,8 +185,10 @@ function paragraphProps(p: Paragraph): string {
   // 属性序 val→leader→pos（授权口径 320 枚块的 462 枚孩子只有 `w:val w:pos` 368 与 `w:val w:leader w:pos` 94
   // 两种写法，枚枚自闭合、0 枚成对，`.scratch/tabs-slot-shape.py`），位置升序（318/320 枚块如此）。`CT_PPr`
   // 把 `w:tabs` 排在 `w:shd` 之后、`w:wordWrap` 之前。
-  const tabs = paraTabStopChanges(p);
-  if (tabs) parts.push(`<w:tabs>${tabs.map((t) => tabStopXml(t, undefined, "w")).join("")}</w:tabs>`);
+  // 这一条路没有槽位，所以 `paraTabStopEdits` 的 `drop` 恒为空——「收回段落自己前一击那句话」要有前一击写下
+  // 的字节可摘，只剩字段的这一段本就一句都没写下。
+  const tabs = paraTabStopEdits(p);
+  if (tabs?.write.length) parts.push(`<w:tabs>${tabs.write.map((t) => tabStopXml(t, undefined, "w")).join("")}</w:tabs>`);
   // 「对齐到网格」不在 `PARA_STYLE_KEYS` 里——带 `w:pPr` 的段落由 `syncParaSlots` 按件的原字节带着走，这一段
   // 却可能一个 slot 也没有（编辑器自己拆出来的段、或那 159 段没写 `w:pPr` 的），那时候勾选框只剩字段可说。
   // 拼法照件：说开裸写、说关 `w:val="0"`。只说**这一击动过的**，与 `ownParaStyle` 对着读快照同一条口径——

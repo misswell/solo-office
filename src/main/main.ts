@@ -3453,6 +3453,10 @@ function smoke(): void {
         // ⑤ 「改了才报脏」的反面：取消、填错、原样确定三条都不许动那一枚 ●，真落笔的那一条必须动。
         //   进这一条时纸已经脏着——在它前面的腿（docPart 打字、画者拖动）各自验的正是「改了字节要报脏」，
         //   所以起手先存一次把 ● 清零（dirty.baseline），后面每一格读数才是绝对口径，不是两笔脏的差。
+        // ⑥ 「前导符」那一格在盒子里真按一下，两个方向都按：无→点线要纸上铺出墨、点线→无要把墨撤干净，
+        //   而盘上那一句跟着重拼。按一下的对象挑的是**那一枚 Tab 真停进去的格**（丁段自己的 left 720）：
+        //   甲段 8306 那枚虽然带着 dot，甲这一枚 Tab 却停在 720/2880，从没落进 8306——墨只跟停进去的那一格，
+        //   拿甲的 8306 按「纸上有没有墨」永远问不出答案（清单与字节仍按原样带走，那是另一条账）。
         // 字面全按对话框自己那格的单位换算（壳的测量单位不落进文件，写死的期望会随档位漂）。
         const tsDoc = (document.getElementById("title")?.textContent ?? "").includes("制表位这一击");
         let tabStopsLeg = null;
@@ -3479,6 +3483,22 @@ function smoke(): void {
           const tsRb = (label) => [...document.querySelectorAll("#ribbon button.rb")].find((b) => b.textContent === label);
           const tsHint = (n) => String(tsDlg()?.querySelector("[data-hint='" + n + "']")?.textContent ?? "");
           const tsErr = () => String(tsDlg()?.querySelector(".solo-ts-error")?.textContent ?? "");
+          // 那一枚制表符身上的墨（口径同 leaderLeg 的 ldTab）：data-leader 的 token 加 ::after 到底画没画。
+          const tsTabEl = (needle, i) => {
+            const el = tsPara(needle);
+            if (!el) return null;
+            const ts = [...el.querySelectorAll("span.tab")];
+            return ts[i ?? 0] ?? null;
+          };
+          const tsInk = (needle, i) => {
+            const t = tsTabEl(needle, i);
+            if (!t) return null;
+            const cs = getComputedStyle(t, "::after");
+            const painted = (cs.backgroundImage && cs.backgroundImage !== "none") ||
+              (cs.backgroundColor && cs.backgroundColor !== "rgba(0, 0, 0, 0)" && cs.backgroundColor !== "transparent");
+            return { attr: String(t.dataset.leader ?? ""), ink: painted ? 1 : 0, span: round1(t.getBoundingClientRect().width) };
+          };
+          const tsPick = (n, v) => { const el = tsField(n); if (el) { el.value = v; el.dispatchEvent(new Event("change", { bubbles: true })); } };
           const tsPut = (needle) => {
             const el = tsPara(needle);
             if (!el) return 0;
@@ -3602,6 +3622,18 @@ function smoke(): void {
           let dAfterEdit = -1;
           let dAfterUndo = -1;
           let dAfterDef = -1;
+          let rowsDing = "";
+          let rowsDing2 = "";
+          let leadEcho0 = "";
+          let leadEcho1 = "";
+          let leadEchoBack = "";
+          let leadRow0 = "";
+          let leadRowSet = "";
+          let inkDingA = null;
+          let inkDingB = null;
+          let inkDingC = null;
+          let dAfterLeader = -1;
+          let dAfterLeaderBack = -1;
           if (firstPass) {
             btn?.click();
             await wait(240);
@@ -3634,6 +3666,44 @@ function smoke(): void {
             await wait(300);
             cDefAfter = tsSeg("丙起", 0);
             dAfterDef = tsDirty();
+            // —— 5) 前导符那一档在装机壳里真按一下：丁段自己那枚 left 720 说的是「无」，而丁那一枚 Tab 正好停进这一格
+            // （甲的 8306 带 dot，但甲那枚 Tab 停在 720/2880，从没落进 8306 那一格——墨只跟真正停进去的那一格，
+            // 所以这一击的纸上证据必须落在丁身上，不能拿甲凑）。点上「点线」要铺墨，点回「无」要把墨撤干净。
+            tsPut("丁起");
+            btn?.click();
+            await wait(240);
+            rowsDing = tsRows().map((o) => o.value).join(",");
+            leadEcho0 = String(tsField("ts-leader")?.value ?? "");
+            leadRow0 = String(tsRows()[0]?.textContent ?? "");
+            inkDingA = tsInk("丁起", 0);
+            tsPick("ts-leader", "dot");
+            await wait(140);
+            tsClick("ts-set");
+            await wait(220);
+            leadEcho1 = String(tsField("ts-leader")?.value ?? "");
+            leadRowSet = String(tsRows()[0]?.textContent ?? "");
+            tsApply();
+            await wait(320);
+            inkDingB = tsInk("丁起", 0);
+            dAfterLeader = tsDirty();
+            // 反方向：重开一张，清单那一行回显的得是刚落盘的那一枚（dot），点回「无」后墨要归零。
+            // 选区每次重画后都得重新按回丁那一格：落笔会换掉纸上的节点，指错了段就成了「清掉丁的制表位」。
+            tsPut("丁起");
+            btn?.click();
+            await wait(240);
+            rowsDing2 = tsRows().map((o) => o.value).join(",");
+            leadEchoBack = String(tsField("ts-leader")?.value ?? "");
+            tsPick("ts-leader", "");
+            await wait(140);
+            tsClick("ts-set");
+            await wait(220);
+            tsApply();
+            await wait(320);
+            inkDingC = tsInk("丁起", 0);
+            dAfterLeaderBack = tsDirty();
+            // 选区挪回甲：下面 readEnd 问的仍是甲那一份清单，别把这一族的读数换成丁的。
+            tsPut("甲起");
+            await wait(120);
           }
           const paper = { jia: tsSeg("甲起", 0), yi: tsSeg("乙起", 0), bing: tsSeg("丙起", 0), ding: tsSeg("丁起", 0), wu: tsSeg("戊起", 0) };
           btn?.click();
@@ -3649,9 +3719,10 @@ function smoke(): void {
             read0,
             cancel: { gone: tsDlg() ? 1 : 0, segLeft: segJiaCancel ? segJiaCancel.left : null, dirty: dAfterCancel },
             bad: { errChars: badErr.length, disabled: badDisabled ? 1 : 0, moved: segBeforeBad && segAfterBad ? round1(segAfterBad.left - segBeforeBad.left) : null, open: badStillOpen ? 1 : 0 },
-            dirty: { onEntry: dOnEntry, afterTrack: dAfterTrack, baseline: dBaseline, afterCancel: dAfterCancel, afterReopen: dAfterReopen, afterBadType: dAfterBadType, afterBadApply: dAfterBadApply, afterBadCancel: dAfterBadCancel, afterEdit: dAfterEdit, afterUndo: dAfterUndo, afterDef: dAfterDef },
+            dirty: { onEntry: dOnEntry, afterTrack: dAfterTrack, baseline: dBaseline, afterCancel: dAfterCancel, afterReopen: dAfterReopen, afterBadType: dAfterBadType, afterBadApply: dAfterBadApply, afterBadCancel: dAfterBadCancel, afterEdit: dAfterEdit, afterUndo: dAfterUndo, afterDef: dAfterDef, afterLeader: dAfterLeader, afterLeaderBack: dAfterLeaderBack },
             noop: { dirtyPre, dirtyAfterNoop, moved: segPreApply && segPostApply ? round1(segPostApply.left - segPreApply.left) : null, dialogsLeft: document.querySelectorAll(".solo-ts-dialog").length },
             edit: { rowsAfterEdit, segEdited, segUndone, segRedone, defEcho, cDef, cDefAfter },
+            leader: { rowsDing, rowsDing2, echo0: leadEcho0, echo1: leadEcho1, echoBack: leadEchoBack, row0: leadRow0, rowSet: leadRowSet, inkA: inkDingA, inkB: inkDingB, inkC: inkDingC },
             paper,
             readEnd,
             ribbonButtons: document.querySelectorAll("#ribbon button").length,

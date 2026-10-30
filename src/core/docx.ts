@@ -6307,14 +6307,27 @@ function mergeParaBorders(own?: ParaBorderSet, lent?: ParaBorderSet): ParaBorder
 /**
  * `w:pPr/w:tabs/w:tab` (§17.4.19) as one stop. `posTwips` is measured from the **left edge of the text area** —
  * the page's left margin plus `w:gutter`, which is what `render.ts` puts in `--pad-l` — not from the paragraph's
- * own indent. `leader` keeps the file's `w:leader` token; the page does not draw it yet.
+ * own indent. `leader` keeps the file's `w:leader` token, verbatim; `render.ts` carries it on the same string as
+ * the position and `index.html` paints it — the six tokens it may be are `TAB_LEADER_TOKENS`.
  *
  * 受众（授权 46 份，`.scratch/tabs-audience.py`）：370 块 `w:tabs` 全在 `w:pPr` 底下——`word/document.xml` 230、
  * `word/styles.xml` 90、带子 12，其中 106 块一次写两枚以上；520 枚 `w:tab` 枚枚写 `w:pos`（0 枚漏），
  * 档只拼了四种——`left` 304、`right` 152、`center` 58、`clear` 6，`decimal`/`bar` 各 0 枚，所以模型不收它们；
- * 带 `w:leader` 的 94 枚。正文里真正走这些位的制表符（`w:r/w:tab`）116 枚、带子 2 枚。
+ * 带 `w:leader` 的 94 枚，枚枚说 `dot`（正文 92 枚，`.scratch/tabs-leader-roundtrip.ts`）。
+ * 正文里真正走这些位的制表符（`w:r/w:tab`）116 枚、带子 2 枚。
  */
 export type TabStop = { posTwips: number; val: "left" | "center" | "right" | "clear"; leader?: string };
+
+/**
+ * `w:leader` 认的六个档（§17.3.2.27 ST_LeaderType）。这张表只有一个主人：页面上那串
+ * `data-tab-stops`（写方 `render.ts`、读方 `doc-layout.ts`）和画不画都得从这儿取，免得两边各拼一套对不上；
+ * 文件写了个不在表里的档，就当作没说——照着猜一种点线，比空着更容易骗人。
+ * 墨由 `index.html` 那几条 `[data-leader=…]` 规则上：这六个词在 CSS 里各有一档（`spaces` 有意留白），
+ * 两边改一边就得改另一边——CSS 抄不了这个常量，所以这一句就是那本账。
+ *
+ * 受众（授权 46 份，`.scratch/tabs-leader-roundtrip.ts`）：**92 枚全说 `dot`**，其余五档 0 枚。
+ */
+export const TAB_LEADER_TOKENS: readonly string[] = ["spaces", "dot", "dash", "line", "heavy", "middleDot"];
 
 /** The `w:tabs` block as written, `w:val="clear"` included. A block that names no stop says nothing. */
 function tabStopsOf(tabs: any): TabStop[] | undefined {

@@ -504,6 +504,42 @@
       #view.doc-grid .page .doc-table td { box-shadow: var(--gl, none); }
       .page .bullet { display: inline-block; min-width: 22px; color: #4a5160; }
       .page .tab { display: inline-block; width: 32px; }
+      /* 制表位前导符（`w:tab/@w:leader`，§17.3.2.27）。授权 46 份里 94 枚位说了前导符、枚枚 `dot`（正文 92 枚，
+         `.scratch/tabs-leader-roundtrip.ts`）。这一句是**显示层**的：`doc-layout.ts` 把文件那个 token 挂在这一枚
+         真正停进去的制表符的 `data-leader` 上，这里照着铺墨——**不往 span 里塞点字符**，因为编辑从纸面读回模型，
+         好几条路把 `.tab` 当成恰好一枚标记来数（`doc-edit.ts:1697`/`:6077`/`:6122`），多进去的字面会把偏移、
+         run 边界与修订范围一起带歪。
+         墨挂在 `::after` 上并让它出流（宿主 `position: relative`，伪元素 `position: absolute`）：空的 inline-block
+         本身 0 高，给它自己加高度会把行盒顶起来、把铺排改掉；出流的伪元素只碰墨、不碰尺寸（`.scratch/tab-leader-dom.ts`
+         逐条量两档的 rect 与行数）。`spaces` 有意留白：文件说「空格」就是「没有线」。点距、粗细、这一条离基线多高
+         全是自定——家里量不出 WPS 的点阵，它那一头画成什么样**未取证**。 */
+      .page .tab[data-leader] { position: relative; }
+      .page .tab[data-leader]::after {
+        content: "";
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-repeat: repeat-x;
+      }
+      .page .tab[data-leader="dot"]::after {
+        height: 2px;
+        background-size: 4px 2px;
+        background-image: radial-gradient(circle at 2px 1px, currentColor 0 0.75px, transparent 1px);
+      }
+      .page .tab[data-leader="middleDot"]::after {
+        height: 6px;
+        bottom: -1px;
+        background-size: 5px 6px;
+        background-image: radial-gradient(circle at 2.5px 3px, currentColor 0 1.1px, transparent 1.35px);
+      }
+      .page .tab[data-leader="dash"]::after {
+        height: 1px;
+        background-size: 6px 1px;
+        background-image: linear-gradient(to right, currentColor 0 3px, transparent 3px 6px);
+      }
+      .page .tab[data-leader="line"]::after { height: 1px; background-color: currentColor; }
+      .page .tab[data-leader="heavy"]::after { height: 2.5px; background-color: currentColor; }
       .page a { color: #2b62a8; }
 
       /* ---- header / footer areas ---- */

@@ -1,5 +1,5 @@
 import type { Block, BandPlace, Carried, CarriedInline, HeaderFooter, IndentFields, Inline, NumberLevel, PageBorder, Paragraph, PropSlot, RowInfo, Section, Table, TableBorder, TableCell, WordDocument } from "./docx.js";
-import { DEFAULT_SECTION, hasLine, LINE_ONE, MARGIN_SIDES, PAGE_BORDER_SIDES, PBDR_ORDER, headingLevel, lineGridPitchTwips, twipsToPx } from "./docx.js";
+import { DEFAULT_SECTION, TAB_LEADER_TOKENS, hasLine, LINE_ONE, MARGIN_SIDES, PAGE_BORDER_SIDES, PBDR_ORDER, headingLevel, lineGridPitchTwips, twipsToPx } from "./docx.js";
 import type { CommentAnchor } from "./comments.js";
 import type { Presentation, Shape, SlideParagraph } from "./pptx.js";
 
@@ -625,10 +625,19 @@ function renderParagraph(p: Paragraph, doc: WordDocument, counters: Map<string, 
   const fmt = p.revFormat;
   const classes = `para${p.styleName ? " s-" + esc(p.styleName.replace(/\s+/g, "-")) : ""}${mark ? ` rev-mark-${mark.kind}` : ""}${fmt ? " para-rev" : ""}`;
   const carried =
-    // 段落自己算好的制表位（缇、档），由 `doc-layout.ts` 的 `applyTabStops` 拿去量每一枚制表符该走多宽。
+    // 段落自己算好的制表位（缇、档、前导符），由 `doc-layout.ts` 的 `applyTabStops` 拿去量每一枚制表符该走多宽、
+    // 该不该把那一截空隙铺成点线。前导符这一段是 `w:leader` 的原词，不在 ST_LeaderType 六个档里的不写——
+    // 页面猜一种点线，比空着更容易骗人。
     // 写在 data 上而不是 style 上：编辑读回的是格式，不该把这些数当成段落自己新说的一句话。
     (p.tabStops?.length
-      ? ` data-tab-stops="${p.tabStops.map((s) => `${s.posTwips}:${s.val === "right" ? "r" : s.val === "center" ? "c" : "l"}`).join(",")}"`
+      ? ` data-tab-stops="${p.tabStops
+          .map(
+            (s) =>
+              `${s.posTwips}:${s.val === "right" ? "r" : s.val === "center" ? "c" : "l"}${
+                s.leader && TAB_LEADER_TOKENS.includes(s.leader) ? `:${s.leader}` : ""
+              }`,
+          )
+          .join(",")}"`
       : "") +
     (mark
       ? ` data-rev-mark="${mark.kind}" data-rev-mark-id="${mark.id}" data-rev-mark-author="${esc(mark.author)}"${mark.date ? ` data-rev-mark-date="${esc(mark.date)}"` : ""}${mark.move ? ` data-rev-mark-move="${mark.move}"` : ""}`

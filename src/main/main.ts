@@ -3342,6 +3342,106 @@ function smoke(): void {
             savedDirty: csDirty(),
           };
         }
+        // #232：制表位前导符 w:leader 在装机这只壳里走一趟。家里那 22 例（.scratch/tab-leader-dom.ts）已经把
+        // 「token 只跟着这一枚真正停进去的那一格」与「有墨/无墨两胞胎的几何一字不变」量完了；这一腿问的是
+        // **这只壳**：打包进 renderer.js 的那 27 行 [data-leader] 规则、真铺排、真 w:defaultTabStop 之下，
+        // 五段各枚制表符挂的 token、::after 上没上墨、宽度与落点各是什么形状；再在甲线尾上打一次字，问那一截
+        // 点线跟不跟着走（盘上的 w:leader 由 .scratch/tab-leader-install-check.sh 独立读回）。
+        const ldDoc = (document.getElementById("title")?.textContent ?? "").includes("前导符");
+        let leaderLeg = null;
+        if (ldDoc) {
+          // 每问一次都重新查：落笔那一趟 render() 换的是 host.innerHTML，上一趟拿到的节点已经不在树上。
+          const ldPara = (needle) =>
+            [...document.querySelectorAll("#view .page .para")].find((x) => (x.textContent ?? "").includes(needle));
+          const ldTab = (t, baseLeft) => {
+            const cs = getComputedStyle(t, "::after");
+            const bg = cs.backgroundImage;
+            const bgc = cs.backgroundColor;
+            const painted = (bg && bg !== "none") || (bgc && bgc !== "rgba(0, 0, 0, 0)" && bgc !== "transparent");
+            const r = t.getBoundingClientRect();
+            return {
+              token: t.dataset.leader ?? "",
+              ink: painted ? 1 : 0,
+              after: cs.height + "@" + cs.bottom + " " + cs.position,
+              w: round1(r.width),
+              left: round1(r.left - baseLeft),
+              h: round1(r.height),
+              text: t.textContent,
+            };
+          };
+          const ldRead = (needle) => {
+            const el = ldPara(needle);
+            if (!el) return null;
+            const page = el.closest(".page");
+            const base = page ? page.getBoundingClientRect().left : 0;
+            return {
+              attr: el.getAttribute("data-tab-stops") ?? "",
+              tabs: [...el.querySelectorAll("span.tab")].map((t) => ldTab(t, base)),
+            };
+          };
+          const ldDirty = () => ((document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0);
+          const ldTrackBtn = () => [...document.querySelectorAll("#ribbon button.rb")].find((b) => b.textContent === "修订");
+          const ldTrack0 = ldTrackBtn()?.classList.contains("on") ? 1 : 0;
+          if (ldTrack0) {
+            ldTrackBtn().click();
+            await wait(320);
+          }
+          const ldJia = ldRead("甲线");
+          const ldYi = ldRead("乙线");
+          const ldBing = ldRead("丙线");
+          const ldDing = ldRead("丁线");
+          const ldWu = ldRead("戊线");
+          const ldTail = ldRead("尾段");
+          const ldCount = () => ({
+            spans: document.querySelectorAll("#view .page span.tab").length,
+            tokens: document.querySelectorAll("#view .page span.tab[data-leader]").length,
+            zero: [...document.querySelectorAll("#view .page span.tab")].filter((t) => round1(t.getBoundingClientRect().height) !== 0).length,
+          });
+          const ldBefore = ldCount();
+          // 甲线尾上打一次字：右对齐那枚位得把制表符垫出来的宽让给新长的字面，而那一截点线得跟着这枚制表符
+          // 一起短——短到还在（不是撤掉），token 也一个字节不改。
+          const ldEl = ldPara("甲线");
+          if (ldEl) {
+            const walk = document.createTreeWalker(ldEl, NodeFilter.SHOW_TEXT);
+            let last = null;
+            for (let n = walk.nextNode(); n; n = walk.nextNode()) last = n;
+            if (last) {
+              const r = document.createRange();
+              r.setStart(last, (last.textContent ?? "").length);
+              r.collapse(true);
+              const s = document.getSelection();
+              s.removeAllRanges();
+              s.addRange(r);
+              ldEl.closest(".page").focus();
+              document.execCommand("insertText", false, "打字");
+              await wait(320);
+            }
+          }
+          const ldJiaAfter = ldRead("甲线");
+          const ldAfter = ldCount();
+          if (ldTrack0) {
+            const back = [...document.querySelectorAll("#ribbon button.rb")].find((b) => b.textContent === "修订");
+            back?.click();
+            await wait(320);
+          }
+          fire("solo:save");
+          await wait(1400);
+          leaderLeg = {
+            jia: ldJia,
+            yi: ldYi,
+            bing: ldBing,
+            ding: ldDing,
+            wu: ldWu,
+            tail: ldTail,
+            before: ldBefore,
+            jiaAfter: ldJiaAfter,
+            after: ldAfter,
+            text: (ldPara("甲线")?.textContent ?? "").split(String.fromCharCode(8203)).join(""),
+            trackBefore: ldTrack0,
+            trackBack: ldTrackBtn()?.classList.contains("on") ? 1 : 0,
+            savedDirty: ldDirty(),
+          };
+        }
         // #224：「显示原文」那一档纸面穿的是每条属性改动记录里的 prev（render.ts 走 doc.originalView()），
         // 所以读数的框也得说同一句。这一腿问三处同源：段落对话框里段前那一格、行距那一档、开始页对齐那四枚
         // 亮的是哪一枚；切回「显示修订」再问一遍，两档各自与纸面 text-align 对齐。
@@ -4292,7 +4392,7 @@ function smoke(): void {
         const recovered = { cells: document.querySelectorAll(".sheet-wrap td").length, title: document.getElementById("title")?.textContent };
         // The run ends on a modified document, so quitting goes through the unsaved prompt.
         // A PDF the export asked for shows up in saveAsWrites, next to the pptx/xlsx saves.
-        return { docPart, bandLeg, rulerLeg, painterLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, clearLeg, styleLeg, vertLeg, caseLeg, origLeg, origTableLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
+        return { docPart, bandLeg, rulerLeg, painterLeg, leaderLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, clearLeg, styleLeg, vertLeg, caseLeg, origLeg, origTableLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
       })()`;
       void last?.webContents
         .executeJavaScript(probe)

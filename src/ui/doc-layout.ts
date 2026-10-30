@@ -95,7 +95,7 @@
  * 因此这两行报的是「**本程序按画出来的行盒量出来的**页数/行数」。它与 WPS 自己的排版引擎不会逐页相同
  * （字体度量、行盒取整、页眉占位、孤行控制都不一样，这些也都**未取证**），所以这里不写「与 WPS 一致」。
  */
-import { DEFAULT_SECTION, sectionEndsOf, twipsToPx, type Section, type WordDocument } from "../core/docx.js";
+import { DEFAULT_SECTION, TAB_LEADER_TOKENS, sectionEndsOf, twipsToPx, type Section, type WordDocument } from "../core/docx.js";
 import { BAND_MASTER_CLASS, BAND_SOURCE_CLASS, CARRY_CLASS, PAGE_BORDER_CLASS, TBL_HEADER_ATTR, TBLP_HORZ_ATTR, TBLP_VERT_ATTR, TBLP_X_ATTR, TBLP_Y_ATTR } from "../core/render.js";
 
 /**
@@ -1575,20 +1575,32 @@ function firstPositionOfUnit(el: HTMLElement, unit: PlacedUnit): { node: Node; o
  * 条带什么颜色，WPS 真机**未取证**（`SHEET_GAP_PX` 是自定的）。
  */
 /**
- * 段落元素上带的那一串制表位（`render.ts` 从 `p.tabStops` 写的）：`缇:档` 逗号分隔，档 `l`/`c`/`r`。
+ * 段落元素上带的那一串制表位（`render.ts` 从 `p.tabStops` 写的）：`缇:档` 逗号分隔，档 `l`/`c`/`r`，
+ * 文件还说了前导符时再跟一截 `:原词`（`dot` 那六个档之一，见 `docx.ts` 的 `TAB_LEADER_TOKENS`）。
  * 数写在 `data-` 上而不是 `style` 上：编辑读回模型时看的是格式，不该把这些位置当成段落新说的一句话。
  */
 export const TAB_STOPS_ATTR = "data-tab-stops";
 
-/** `data-tab-stops` 的字面读回来：按缇排好序，认不出的那一节直接丢（半枚画歪的位置不如没有）。 */
-export function parseTabStops(raw: string): { posTwips: number; val: "left" | "center" | "right" }[] {
-  const out: { posTwips: number; val: "left" | "center" | "right" }[] = [];
+/**
+ * `data-tab-stops` 的字面读回来：按缇排好序，认不出的那一节直接丢（半枚画歪的位置不如没有）。
+ * 每一节是 `缇:档[:前导符]`，档 `l`/`c`/`r`，前导符是 `w:leader` 的原词（只认 ST_LeaderType 那六个档）。
+ */
+export function parseTabStops(
+  raw: string,
+): { posTwips: number; val: "left" | "center" | "right"; leader?: string }[] {
+  const out: { posTwips: number; val: "left" | "center" | "right"; leader?: string }[] = [];
   for (const part of raw.split(",")) {
-    const at = part.lastIndexOf(":");
-    if (at <= 0) continue;
-    const pos = Number(part.slice(0, at));
+    const fields = part.split(":");
+    // 位置那一段空着就不算「第几缇」：`Number("")` 是 0，会让 `:x` 这一节冒充 0 缇那一格。
+    if (fields.length < 2 || fields[0].trim() === "") continue;
+    const pos = Number(fields[0]);
     if (!Number.isFinite(pos)) continue;
-    out.push({ posTwips: pos, val: part.slice(at + 1) === "r" ? "right" : part.slice(at + 1) === "c" ? "center" : "left" });
+    const leader = fields[2] && TAB_LEADER_TOKENS.includes(fields[2]) ? fields[2] : undefined;
+    out.push({
+      posTwips: pos,
+      val: fields[1] === "r" ? "right" : fields[1] === "c" ? "center" : "left",
+      ...(leader ? { leader } : {}),
+    });
   }
   return out.sort((a, b) => a.posTwips - b.posTwips);
 }
@@ -1602,7 +1614,9 @@ const TAB_MIN_PX = 0.5;
  * 而纸把每一枚都停在 32px 上——这一段与那一格对齐的说法整个丢了。这一趟按 §17.4.19/§17.3.2.9 的摆位算：
  * 位置从**正文区左沿**（`--pad-l` = 左边距加 `w:gutter`）起算，越过最后一枚明写的位之后按
  * `w:defaultTabStop` 一步步走（授权 46 份：43 份 420、3 份 720，全写了）；
- * `left` 让后头的文字起在位上，`right` 让那一截的**末沿**贴在位上，`center` 把它骑在位上。
+ * `left` 让后头的文字起在位上，`right` 让那一截的**末沿**贴在位上，`center` 把它骑在位上。停进去的那一格若还说了
+ * `w:leader`，这一趟只把那枚 token 挂在这枚制表符的 `data-leader` 上，点线由 `index.html` 那几条规则画——量的人
+ * 只管落点，墨不归它管，这样宽度那一本账不会因为这层画多出任何一笔。
  *
  * 318 与 116 这两个数是同一个口径下对出来的账（`.scratch/tabs-roundtrip-46.ts` 与拼法切片）：正文部件里
  * `<w:tab` 起头的标签 434 枚 = 带属性的位定义 318 + 自闭的制表符 116；这 434 枚隔一次真实编辑（43 份可编辑，
@@ -1618,15 +1632,19 @@ const TAB_MIN_PX = 0.5;
  * 所以下一枚量到的起点已经带上前一枚垫出来的宽度——这与 Word 的行内推进是同一个方向。那一截的宽按**第一行**
  * 算（跨行的段落里，制表位管的是它这一行的那一截）。都不够用时给一步默认格，而不是硬挤到 0。
  *
- * 两档写在明面上没接：① `w:leader` 只画位置不画点线（94 枚全说 `dot`：正文 92、样式 2）——点线是 WPS 画出来的
- * 东西，手上没有它的实据，按「未取证的不猜」留着；② 格子里那一段（`w:tc` 里的 `w:p`）挡掉不做，它的基准该是
+ * 两档写在明面上没接：① 格子里那一段（`w:tc` 里的 `w:p`）挡掉不做，它的基准该是
  * 格沿而不是正文区左沿——授权 46 份里这样的 `w:tabs` **0 块**（`.scratch/tabs-inside-table.py`），所以这一挡
- * 眼下没有受众，只是不让将来落进格子里的制表位按纸的边距画。③ 带子里的 12 枚位与 2 枚制表符仍按 `pre-wrap`
+ * 眼下没有受众，只是不让将来落进格子里的制表位按纸的边距画。② 带子里的 12 枚位与 2 枚制表符仍按 `pre-wrap`
  * 的浏览器默认走，不带这一趟的账（带子的字面字号那一档本就未取证）。
  *
- * 落点由 `.scratch/tab-place-dom.ts` 在真 DOM 里量（17 例：三档各贴自己的位、走过第一格找下一格、清单乱序按缇
- * 排、没写位的走 `w:defaultTabStop` 整步、借位与 `clear`、无 settings 时的兜底那一步、zoom 与重跑不改答案）；
- * 反向对照（摘掉下面那一调用）13 条红。
+ * 落点由 `.scratch/tab-place-dom.ts` 在真 DOM 里量（18 例：三档各贴自己的位、走过第一格找下一格、清单乱序按缇
+ * 排、没写位的走 `w:defaultTabStop` 整步、借位与 `clear`、无 settings 时的兜底那一步、zoom 与重跑不改答案，
+ * 外加「夹具没说 `w:leader` ⇒ 一枚也不挂 `data-leader`」）；反向对照（摘掉下面那一调用）13 条红。
+ * 墨那一本账由 `.scratch/tab-leader-dom.ts` 量（22 例：token 只跟着**这一枚真正停进去的那一格**、认不出的档
+ * 不进 `data-tab-stops`、`spaces` 挂着不铺墨、样式被 `clear` 掉的那格不留墨、按默认步长走的那格也不留墨、
+ * 以及有墨与无墨两胞胎的**逐段逐枚矩形、行盒数、纸数一字不变**）；反向对照两趟分开跑：摘掉 `dataset.leader`
+ * 那一句红 9 条，摘掉 `index.html` 那 27 行 `[data-leader]` 规则红 4 条——剩下绿的正是落点，说明这层画
+ * 只动墨，不动几何。
  */
 /**
  * `w:rPr/w:fitText`（调整宽度）：同一段里 `data-fit` 相同的 span 是一组，文件说这一组合起来占 `data-fit-tw` 缇
@@ -1679,7 +1697,7 @@ export function applyFitText(page: HTMLElement): number {
 }
 
 export function applyTabStops(page: HTMLElement, doc: WordDocument): void {
-  // 凡是画了制表符的正文段都要走这一趟，**没有** `data-tab-stops` 的那一类也算：授权 46 份里带制表符的正文段，**没有** `data-tab-stops` 的那一类也算：授权 46 份里带制表符的正文段
+  // 凡是画了制表符的正文段都要走这一趟，**没有** `data-tab-stops` 的那一类也算：授权 46 份里带制表符的正文段
   // 14 段共 30 枚，其中 10 段 / 26 枚的样式链上一枚位都没写（`.scratch/tabs-default-audience.ts`），
   // 它们该按 `w:defaultTabStop` 的步长走，而不是留在 CSS 那枚发明的 32px 上。
   const hosts = [...page.querySelectorAll<HTMLElement>(".para")].filter(
@@ -1699,25 +1717,33 @@ export function applyTabStops(page: HTMLElement, doc: WordDocument): void {
     const stops = parseTabStops(el.getAttribute(TAB_STOPS_ATTR) ?? "");
     const tabs = [...el.querySelectorAll<HTMLElement>("span.tab")];
     // 候选位：明写的每一枚，加上从正文区左沿按默认步长排开、且排在最后一枚明写的位之后的那些格子。
-    const cands = stops.map((s) => ({ x: padL + twipsToPx(s.posTwips), val: s.val }));
+    const cands = stops.map((s) => ({ x: padL + twipsToPx(s.posTwips), val: s.val, leader: s.leader }));
     const lastX = cands.length ? cands.reduce((a, b) => Math.max(a, b.x), 0) : padL;
-    for (let x = padL + dtsPx; x <= areaRight; x += dtsPx) if (x > lastX + TAB_MIN_PX) cands.push({ x, val: "left" });
+    for (let x = padL + dtsPx; x <= areaRight; x += dtsPx) if (x > lastX + TAB_MIN_PX) cands.push({ x, val: "left", leader: undefined });
     cands.sort((a, b) => a.x - b.x || 0);
     if (!cands.length) continue;
-    for (const t of tabs) t.style.width = "";
+    for (const t of tabs) {
+      t.style.width = "";
+      t.removeAttribute("data-leader");
+    }
     for (let i = 0; i < tabs.length; i++) {
       const t = tabs[i]!;
       const x0 = localLeft(t.getBoundingClientRect().left);
       const segPx = firstLineWidthPx(t, tabs[i + 1] ?? null, el, zoom);
       let width = 0;
+      let picked: (typeof cands)[number] | undefined;
       for (const s of cands) {
         if (s.x <= x0 + TAB_MIN_PX) continue;
         const need = s.val === "left" ? s.x - x0 : s.val === "right" ? s.x - segPx - x0 : s.x - segPx / 2 - x0;
         if (need < TAB_MIN_PX) continue;
         width = need;
+        picked = s;
         break;
       }
       t.style.width = `${(width > 0 ? width : dtsPx).toFixed(2)}px`;
+      // 前导符只跟着**这一枚真正停进去的那一格**：后面的格子说了点线，管不着这一截空隙；按默认步长走的那一格
+      // 文件本就没说前导符，铺点等于替它说。
+      if (picked?.leader) t.dataset.leader = picked.leader;
     }
   }
 }

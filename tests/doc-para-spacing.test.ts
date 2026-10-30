@@ -3,7 +3,7 @@ import type { Paragraph } from "../src/core/docx.js";
 import { LINE_ONE, carriedShape, lineGridPitchTwips, linePitchTwips, paraSpacingPitch, paraStyleOf, syncParaSlots, WordDocument } from "../src/core/docx.js";
 import { writeDocx } from "../src/core/write-docx.js";
 import { childSpans, elementContent, OpcPackage, text } from "../src/core/opc.js";
-import { makeChainDocx, makeGridRevisionDocx, makeKeepRevisionDocx, makeSpacingDocx, makeWrapRevisionDocx } from "./helpers/make-paragraph.js";
+import { makeChainDocx, makeGridRevisionDocx, makeKeepRevisionDocx, makeOriginalReadDocx, makeSpacingDocx, makeWrapRevisionDocx } from "./helpers/make-paragraph.js";
 import { renderWord } from "../src/core/render.js";
 
 const part = (bytes: Uint8Array): string => text(OpcPackage.from(bytes).bytes("word/document.xml")!);
@@ -673,5 +673,32 @@ describe("docx 段落「换行和分页」四颗勾", () => {
     pbb.pageBreakBefore = false;
     syncParaSlots(pbb);
     expect(para(renderWord(doc), "段前分页的")).not.toContain("page-break-before:always");
+  });
+});
+
+/**
+ * 「显示原文」那一档纸面穿的是记录里的 `prev`（`render.ts` 走 `doc.originalView()`，它本身复用「拒绝」那一支），
+ * 所以「段落」对话框读数也得问那一份（#224）。这条钉的是读数底下那一层：克隆把改前那一句摆回对齐与段距，
+ * 而模型自己一个字段不动——读数是看，不是落笔。
+ */
+describe("「显示原文」的读数底：originalView 摆回对齐与段距", () => {
+  it("有记录那一段：原文说改前那一句，模型照旧说现值", () => {
+    const doc = open(makeOriginalReadDocx());
+    const p = findPara(doc, "被改过段距的一段");
+    expect(p).toMatchObject({ align: "right", spacingBefore: 480, lineSpacing: 480, lineSpacingRule: "auto" });
+    expect(p.revFormat?.id).toBe(77);
+    const shown = doc.originalView([p])[0] as Paragraph;
+    expect(shown).not.toBe(p);
+    expect(shown).toMatchObject({ align: "center", spacingBefore: 240, lineSpacing: 360, lineSpacingRule: "auto" });
+    // 看不是改：模型那一句还是现值。
+    expect(p).toMatchObject({ align: "right", spacingBefore: 480, lineSpacing: 480 });
+  });
+
+  it("没记录那一段两档同脸：`originalView` 不会给每一段都翻面", () => {
+    const doc = open(makeOriginalReadDocx());
+    const q = findPara(doc, "没被改过的一段");
+    const shown = doc.originalView([q])[0] as Paragraph;
+    expect(shown).toMatchObject({ align: "both", spacingBefore: 240, lineSpacing: 360 });
+    expect(q).toMatchObject({ align: "both", spacingBefore: 240, lineSpacing: 360 });
   });
 });

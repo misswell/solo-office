@@ -1759,6 +1759,20 @@ export class DocEditor {
     return out;
   }
 
+  /**
+   * 同一批段落，但按**纸上正在画的那一份**交：「显示原文」那一档纸面穿的是每条属性改动记录里的 `prev`
+   * （`render.ts` 走 `doc.originalView()`），而段落对话框与 ribbon 的读数从前问的是模型现值——于是纸上居中、
+   * 框里说右对齐。这里走的就是渲染器同一条 `originalView`（它本身又复用「拒绝」那一支 `restoreParaStyle`），
+   * 视图这边不再拼一遍 prev→字段：两份说法迟早各说各话。
+   *
+   * 只给**读数**用。落笔那几条命令（`setParagraphSpacing` 等）仍要拿真身改模型，克隆写回去就是一场空。
+   */
+  private shownParagraphs(): Paragraph[] {
+    const targets = this.selectionParagraphs();
+    if (this.revisionView !== "original") return targets;
+    return targets.map((p) => (p.revFormat ? this.doc.originalView([p])[0] ?? p : p));
+  }
+
   setCaret(caret: DocPath): void {
     const el = this.elementAt(caret.path);
     const spot = this.spotOf(caret);
@@ -3201,10 +3215,14 @@ export class DocEditor {
       if (scan.classList.contains("para")) break;
     }
     const path = this.caretPath()?.path;
+    // 段落那几项（对齐、列表、行距）与「显示原文」的纸面同源：那一档纸上摆的是记录里的 `prev`，框里也得说同一句。
     const paragraph = path ? this.paragraphAt(path) : undefined;
+    const shown = paragraph?.revFormat && this.revisionView === "original"
+      ? this.doc.originalView([paragraph])[0] ?? paragraph
+      : paragraph;
     // A paragraph whose numbering the file cancelled with `w:numId w:val="0"` is not in a list, and one that
     // only borrows the list from its style is — the button follows what the page draws.
-    const list = paragraph?.numPr && paragraph.numPr.numId !== 0 ? listKind(this.doc, paragraph.numPr.numId) : undefined;
+    const list = shown?.numPr && shown.numPr.numId !== 0 ? listKind(this.doc, shown.numPr.numId) : undefined;
     return {
       bold: carried.bold ?? false,
       italic: carried.italic ?? false,
@@ -3220,10 +3238,10 @@ export class DocEditor {
       highlight: carried.highlight,
       // 待用的那一张脸还没进模型（占位 span 上才算数），它得盖在回显上，否则工具栏说的是光标原来穿的脸。
       font: this.pendingFormatPatch.font ?? faceShown(this.caretRun()),
-      align: paragraph?.align,
+      align: shown?.align,
       list,
-      line: paragraph?.lineSpacing,
-      lineRule: paragraph?.lineSpacingRule,
+      line: shown?.lineSpacing,
+      lineRule: shown?.lineSpacingRule,
     };
   }
 
@@ -3446,7 +3464,7 @@ export class DocEditor {
    * `lineGridPitchTwips`。节号按状态栏 节 那一格的同一条算法（块 `b` 属于第 `#{e < b}` 节）。
    */
   paraSpacingState(): ParaSpacingState | undefined {
-    const targets = this.selectionParagraphs();
+    const targets = this.shownParagraphs();
     if (!targets.length) return undefined;
     const agree = <K extends "spacingBefore" | "spacingAfter" | "lineSpacing" | "lineSpacingRule" | "snapToGrid" | "wordWrap" | "widowControl" | "keepNext" | "keepLines" | "pageBreakBefore">(key: K): Paragraph[K] | undefined => {
       const first = targets[0]![key];
@@ -3472,7 +3490,9 @@ export class DocEditor {
     state.keepMixed =
       targets.length > 1 &&
       (["widowControl", "keepNext", "keepLines", "pageBreakBefore"] as const).some((key) => targets.some((p) => p[key] !== targets[0]![key]));
-    const at = this.doc.blocks.indexOf(targets[0]);
+    // 段所在那一节按**真身**在 blocks 里的位置数：上面那批在「显示原文」里是克隆，`indexOf` 认不出来。
+    const anchor = this.selectionParagraphs()[0];
+    const at = anchor ? this.doc.blocks.indexOf(anchor) : -1;
     const block = at < 0 ? this.caretPath()?.path[0] ?? 0 : at;
     const sections = this.doc.sections.length ? this.doc.sections : [DEFAULT_SECTION];
     const passed = sectionEndsOf(this.doc.blocks).filter((e) => e < block).length;
@@ -3539,7 +3559,7 @@ export class DocEditor {
    * 不一致的留空，所以「原样确定」在任何选区下都不改内容；「不一致」由那行小字说出来。
    */
   paraBoxState(): ParaBoxState | undefined {
-    const targets = this.selectionParagraphs();
+    const targets = this.shownParagraphs();
     if (!targets.length) return undefined;
     const projected = targets.map((p) => projectBox(PARA_BOX_SIDES, p.borders));
     const state: ParaBoxState = { sides: agreedBox(PARA_BOX_SIDES, projected) };

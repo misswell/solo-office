@@ -2830,6 +2830,106 @@ function smoke(): void {
             savedDirty: (document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0,
           };
         }
+        // #224：「显示原文」那一档纸面穿的是每条属性改动记录里的 prev（render.ts 走 doc.originalView()），
+        // 所以读数的框也得说同一句。这一腿问三处同源：段落对话框里段前那一格、行距那一档、开始页对齐那四枚
+        // 亮的是哪一枚；切回「显示修订」再问一遍，两档各自与纸面 text-align 对齐。
+        const orDoc = (document.getElementById("title")?.textContent ?? "").includes("原文读数");
+        let origLeg = null;
+        if (orDoc) {
+          const orPara = (needle) => [...document.querySelectorAll("#view .page .para")].find((x) => (x.textContent ?? "").includes(needle));
+          const orPut = (needle) => {
+            const el = orPara(needle);
+            if (!el) return 0;
+            const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+            let node = null;
+            for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+              if ((n.textContent ?? "").includes(needle)) {
+                node = n;
+                break;
+              }
+            }
+            if (!node) return 0;
+            const r = document.createRange();
+            r.setStart(node, 0);
+            r.setEnd(node, (node.textContent ?? "").length);
+            const s = document.getSelection();
+            s?.removeAllRanges();
+            if (s) s.addRange(r);
+            el.closest(".page")?.focus?.();
+            document.dispatchEvent(new Event("selectionchange"));
+            return 1;
+          };
+          const orSelect = (tip) => [...document.querySelectorAll("#ribbon select")].find((x) => x.title === tip);
+          const orView = (v) => {
+            const s = orSelect("显示对文档的修改");
+            if (!s) return 0;
+            s.value = v;
+            s.dispatchEvent(new Event("change", { bubbles: true }));
+            return 1;
+          };
+          // 开始页对齐那四枚此刻亮着哪一枚：markState() 交 align，syncDocRibbon 按它点亮一枚。
+          const orLit = () =>
+            [...document.querySelectorAll("#ribbon .rbar[data-tab='home'] button.rb")]
+              .filter((b) => ["左对齐", "居中", "右对齐", "两端对齐"].includes(b.getAttribute("title") ?? "") && b.classList.contains("on"))
+              .map((b) => (b.textContent ?? "").trim())
+              .join(",");
+          const orDlg = () => document.querySelector(".solo-pg-dialog");
+          const orField = (n) => orDlg()?.querySelector('[name="' + n + '"]') ?? null;
+          const orPaper = (needle) => {
+            const el = orPara(needle);
+            return el ? getComputedStyle(el).textAlign : "?";
+          };
+          const orOpen = async (needle) => {
+            const put = orPut(needle);
+            await wait(320);
+            const lit = orLit();
+            const paper = orPaper(needle);
+            const sel = orSelect("行距");
+            if (sel) {
+              sel.value = "more";
+              sel.dispatchEvent(new Event("change", { bubbles: true }));
+            }
+            await wait(360);
+            const d = orDlg();
+            const box = orField("pg-value");
+            return {
+              put: put,
+              lit: lit,
+              paper: paper,
+              open: d?.open === true ? 1 : 0,
+              before: orField("pg-before")?.value ?? "?",
+              after: orField("pg-after")?.value ?? "?",
+              rule: orField("pg-rule")?.value ?? "?",
+              value: box?.value ?? "?",
+              valueOff: box ? (box.disabled ? 1 : 0) : -1,
+            };
+          };
+          const orClose = async () => {
+            orDlg()?.querySelector(".solo-pg-cancel")?.click();
+            await wait(280);
+            return orDlg() ? 0 : 1;
+          };
+          const orSteps = [];
+          for (const v of ["marks", "original", "marks"]) {
+            const set = orView(v);
+            await wait(460);
+            const o = await orOpen("被改过段距的一段");
+            const c = await orClose();
+            orSteps.push({ view: v, set: set, res: o, closed: c });
+          }
+          // 没记录那一段：两档同脸，读数与纸面都不该跟着档变——证明这不是把每一段都翻个面。
+          const orCtrl = [];
+          for (const v of ["marks", "original"]) {
+            const set = orView(v);
+            await wait(460);
+            const c = await orOpen("没被改过的一段");
+            orCtrl.push({ view: v, set: set, res: c, closed: await orClose() });
+          }
+          // 量完把档放回「显示修订」交给后面的腿。
+          orView("marks");
+          await wait(360);
+          origLeg = { steps: orSteps, ctrl: orCtrl, dialogsLeft: document.querySelectorAll(".solo-pg-dialog").length, savedDirty: (document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0 };
+        }
         // 上面那些落点把光标留在了格里；后面那三条断命令与图片要按这一趟原本的位置落在正文里，所以先放回纸的末尾。
         const pageNow = document.querySelector("#view .page");
         const lastBlock = pageNow?.children[pageNow.children.length - 1];
@@ -3520,7 +3620,7 @@ function smoke(): void {
         const recovered = { cells: document.querySelectorAll(".sheet-wrap td").length, title: document.getElementById("title")?.textContent };
         // The run ends on a modified document, so quitting goes through the unsaved prompt.
         // A PDF the export asked for shows up in saveAsWrites, next to the pptx/xlsx saves.
-        return { docPart, bandLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, clearLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
+        return { docPart, bandLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, clearLeg, origLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
       })()`;
       void last?.webContents
         .executeJavaScript(probe)

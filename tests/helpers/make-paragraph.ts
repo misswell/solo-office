@@ -282,7 +282,24 @@ export function makeKeepRevisionDocx(): Uint8Array {
   return pack(document, STYLES);
 }
 
-/** A style as `word/styles.xml` spells it, for the tests about how far up `w:basedOn` the read walks. */export interface ChainStyle {
+/**
+ * 「显示原文」那一档纸面穿的是记录里的 `prev`，所以读数的框也得说同一句（#224）：第一段现值说右对齐、
+ * 段前 480 缇、两倍行距，记录说改前是居中、段前 240 缇、一点五倍行距；第二段没有任何记录，两档同脸，
+ * 用来证明「原文」不是把每一段都翻个面。
+ */
+export function makeOriginalReadDocx(): Uint8Array {
+  const document =
+    `<w:p><w:pPr><w:jc w:val="right"/><w:spacing w:before="480" w:line="480" w:lineRule="auto"/>` +
+    `<w:pPrChange ${REV(77, "顾峰")}><w:pPr><w:jc w:val="center"/><w:spacing w:before="240" w:line="360" w:lineRule="auto"/></w:pPr></w:pPrChange></w:pPr>` +
+    `<w:r><w:t>被改过段距的一段</w:t></w:r></w:p>` +
+    `<w:p><w:pPr><w:jc w:val="both"/><w:spacing w:before="240" w:line="360" w:lineRule="auto"/></w:pPr>` +
+    `<w:r><w:t>没被改过的一段</w:t></w:r></w:p>` +
+    `<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800"/></w:sectPr>`;
+  return pack(document, STYLES);
+}
+
+/** A style as `word/styles.xml` spells it, for the tests about how far up `w:basedOn` the read walks. */
+export interface ChainStyle {
   id: string;
   name?: string;
   basedOn?: string;

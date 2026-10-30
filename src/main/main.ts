@@ -2835,6 +2835,153 @@ function smoke(): void {
             savedDirty: (document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0,
           };
         }
+        // #226：开始页「样式」画廊在装机这只壳里走一趟。WPS 的 RB_Style 在 RB_Paragraph 之后、RB_Editing
+        // 之前（CT_Home.kuip 的 idQ 序），下拉里列的是**这份文件自己声明的**段落样式，第一格是默认那枚
+        // （选它就是撤掉 w:pStyle）。这一腿问五件事：选项清单与次序、甲组换成「标题 1」后纸上换成 16 磅
+        // Arial 深蓝粗体且段距跟着样式走、乙组自己写的缩进与粗体留着、丙组换回正文后 pStyle 撤掉且回显
+        // 跟着光标回到空值、丁组换成「引用」后字符样式那张脸与那点墨留着而斜体从段落链借来。
+        const galDoc = (document.getElementById("title")?.textContent ?? "").includes("样式画廊");
+        let styleLeg = null;
+        if (galDoc) {
+          const galHome = [...document.querySelectorAll(".rtabs button")].find((b) => b.textContent === "开始");
+          if (galHome && !galHome.classList.contains("on")) {
+            galHome.click();
+            await wait(220);
+          }
+          // 前面几腿量别的族时可能把「修订」开着交过来；开着换样式会多一枚 w:pPrChange，与本族问的
+          // 「落笔只有一句 w:pStyle」混在一起。先按回关着（走产品自己那枚开关），量完按回原样。
+          const galTrackBtn = () => [...document.querySelectorAll("#ribbon button.rb")].find((b) => b.textContent === "修订");
+          const galTrackOn = () => (galTrackBtn()?.classList.contains("on") ? 1 : 0);
+          const galTrack0 = galTrackOn();
+          if (galTrack0) {
+            galTrackBtn()?.click();
+            await wait(320);
+          }
+          const galSel = [...document.querySelectorAll("#ribbon .rbar[data-tab='home'] select")].find((x) => x.title === "样式");
+          const galPara = (needle) => [...document.querySelectorAll("#view .page .para")].find((x) => (x.textContent ?? "").includes(needle));
+          const galPut = (needle) => {
+            const el = galPara(needle);
+            if (!el) return 0;
+            const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+            let node = null;
+            for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+              if ((n.textContent ?? "").includes(needle)) {
+                node = n;
+                break;
+              }
+            }
+            if (!node) return 0;
+            const r = document.createRange();
+            r.setStart(node, 0);
+            r.setEnd(node, (node.textContent ?? "").length);
+            const s = document.getSelection();
+            s?.removeAllRanges();
+            if (s) s.addRange(r);
+            el.closest(".page")?.focus?.();
+            document.dispatchEvent(new Event("selectionchange"));
+            return 1;
+          };
+          const galPick = (value) => {
+            if (!galSel) return 0;
+            galSel.value = value;
+            galSel.dispatchEvent(new Event("change", { bubbles: true }));
+            return 1;
+          };
+          const galLook = (needle) => {
+            const el = galPara(needle);
+            if (!el) return null;
+            const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+            let host = el;
+            for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+              if ((n.textContent ?? "").includes(needle)) {
+                host = n.parentElement ?? el;
+                break;
+              }
+            }
+            while (host.parentElement && host.parentElement !== el) host = host.parentElement;
+            const cs = getComputedStyle(host);
+            const ps = getComputedStyle(el);
+            return {
+              tag: el.tagName,
+              outline: el.getAttribute("data-outline") ?? "",
+              w: cs.fontWeight,
+              style: cs.fontStyle,
+              color: cs.color,
+              size: round1(parseFloat(cs.fontSize)),
+              family: cs.fontFamily,
+              top: round1(parseFloat(ps.marginTop)),
+              left: round1(parseFloat(ps.marginLeft)),
+            };
+          };
+          const galOpts = galSel ? [...galSel.options].map((o) => o.value + "=" + o.textContent) : [];
+          const galListsBtn = [...document.querySelectorAll("#ribbon .rbar[data-tab='home'] button")].find((b) => (b.getAttribute("title") ?? "").startsWith("变回普通段落"));
+          const galFindBtn = [...document.querySelectorAll("#ribbon .rbar[data-tab='home'] button")].find((b) => (b.getAttribute("title") ?? "").startsWith("查找与替换"));
+          const galOrder = (() => {
+            const sel = galSel?.getBoundingClientRect();
+            const lists = galListsBtn?.getBoundingClientRect();
+            const find = galFindBtn?.getBoundingClientRect();
+            if (!sel || !lists || !find) return null;
+            return { afterLists: sel.left > lists.left ? 1 : 0, beforeFind: sel.left < find.left ? 1 : 0 };
+          })();
+          const galEcho = () => (galSel ? galSel.value : "?");
+          galPut("甲组");
+          await wait(180);
+          const galEcho0 = galEcho();
+          galPick("2");
+          await wait(320);
+          const galJia = galLook("甲组");
+          galPut("戊组");
+          await wait(180);
+          const galEchoQuote = galEcho();
+          galPut("甲组");
+          await wait(180);
+          const galEchoJia = galEcho();
+          galPut("乙组");
+          await wait(160);
+          galPick("2");
+          await wait(320);
+          const galYi = galLook("乙组");
+          galPut("丙组");
+          await wait(180);
+          galPick("");
+          await wait(320);
+          const galBing = galLook("丙组");
+          galPut("丙组");
+          await wait(180);
+          const galEchoBing = galEcho();
+          galPut("丁组");
+          await wait(180);
+          const galEchoDing0 = galEcho();
+          galPick("3");
+          await wait(320);
+          const galDing = galLook("丁组");
+          galPut("丁组");
+          await wait(180);
+          const galEchoDing = galEcho();
+          if (galTrack0) {
+            galTrackBtn()?.click();
+            await wait(320);
+          }
+          fire("solo:save");
+          await wait(1400);
+          styleLeg = {
+            opts: galOpts,
+            order: galOrder,
+            echo0: galEcho0,
+            echoQuote: galEchoQuote,
+            echoJia: galEchoJia,
+            echoBing: galEchoBing,
+            echoDing0: galEchoDing0,
+            echoDing: galEchoDing,
+            jia: galJia,
+            yi: galYi,
+            bing: galBing,
+            ding: galDing,
+            trackBefore: galTrack0,
+            trackBack: galTrackOn(),
+            savedDirty: (document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0,
+          };
+        }
         // #224：「显示原文」那一档纸面穿的是每条属性改动记录里的 prev（render.ts 走 doc.originalView()），
         // 所以读数的框也得说同一句。这一腿问三处同源：段落对话框里段前那一格、行距那一档、开始页对齐那四枚
         // 亮的是哪一枚；切回「显示修订」再问一遍，两档各自与纸面 text-align 对齐。
@@ -3785,7 +3932,7 @@ function smoke(): void {
         const recovered = { cells: document.querySelectorAll(".sheet-wrap td").length, title: document.getElementById("title")?.textContent };
         // The run ends on a modified document, so quitting goes through the unsaved prompt.
         // A PDF the export asked for shows up in saveAsWrites, next to the pptx/xlsx saves.
-        return { docPart, bandLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, clearLeg, origLeg, origTableLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
+        return { docPart, bandLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, clearLeg, styleLeg, origLeg, origTableLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
       })()`;
       void last?.webContents
         .executeJavaScript(probe)

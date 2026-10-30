@@ -939,6 +939,21 @@ function buildDocRibbon(): void {
   button(lists, "number", "1. 编号", "编号列表", () => editor?.setParagraph({ list: "number" }));
   button(lists, "nolist", "取消列表", "变回普通段落", () => editor?.setParagraph({ list: "none" }));
 
+  // 开始页「样式」：`RB_Style` 那一组，位置照 `CT_Home.kuip` 那份 idQ 序——在 `RB_Paragraph` 之后、`RB_Editing`
+  // 之前（见下一条注释）。列的是**这份文件自己声明的**段落样式（`WordDocument.paragraphStyles`），不替它编名字：
+  // 授权 46 份共 112 枚段落样式，每份 6～27 枚（`.scratch/para-style-gallery-audience.py`）。第一格是默认段落样式，
+  // 选它就是撤掉 `w:pStyle`（「正文」）；清单在 `syncDocRibbon` 里按内容签名重建，换文档那一趟（`force`）一定刷。
+  const styleGroup = group("home");
+  const stylePick = document.createElement("select");
+  stylePick.className = "pick";
+  stylePick.title = "样式";
+  stylePick.onchange = () => {
+    editor?.setParagraphStyle(stylePick.value === "" ? undefined : stylePick.value);
+    syncDocRibbon();
+  };
+  ctl.style = stylePick;
+  styleGroup.append(stylePick);
+
   // 开始页最后一组是 `RB_Editing`（`CT_Home.kuip:441`，`groupTip="FindGroup"` `idMso="GroupEditing"`），
   // 它在 `CT_Home.kuip:585-600` 那条 idQ 序里排在 `RB_Style` 之后——正是「最后一组」这个位置。
   // 组成员里家里有命令的是 `sp_Find`（:415 `hotKey="FD" shortcutHint="Ctrl+F" text="@Find and &#10;Replace"`，
@@ -1362,6 +1377,28 @@ function syncDocRibbon(force = false): void {
   }
   mark("bullet", state?.list === "bullet");
   mark("number", state?.list === "number");
+  // 「样式」那一格既是清单又是回显。清单按**件里的段落样式**刷，签名相同就不重建（同一份文件里每趟选区变化
+  // 都 replaceChildren 一次，会把用户拉开的下拉合上）；换文档时 `force` 一定重建。回显问 `markState().styleId`：
+  // `undefined` 是「不点名」，落在默认样式那一格（空值）——与纸面同一个 `shown`（原文视图读记录里的 prev）。
+  const styleSel = ctl.style as HTMLSelectElement | undefined;
+  if (styleSel) {
+    const list = editor?.paragraphStyles() ?? [];
+    const ordered = [...list.filter((s) => s.isDefault), ...list.filter((s) => !s.isDefault)];
+    const sig = JSON.stringify(ordered);
+    if (force || styleSel.dataset.sig !== sig) {
+      styleSel.dataset.sig = sig;
+      const make = (value: string, label: string): HTMLOptionElement => {
+        const o = document.createElement("option");
+        o.value = value;
+        o.textContent = label;
+        return o;
+      };
+      styleSel.replaceChildren(
+        ...(ordered.length ? ordered.map((s) => make(s.isDefault ? "" : s.id, s.name)) : [make("", "正文")]),
+      );
+    }
+    echoChoice(styleSel, state?.styleId ?? "", ["", ...ordered.filter((s) => !s.isDefault).map((s) => s.id)], 1);
+  }
   // 边框那一格的列子问的是「这一击落在哪一层」：光标在正文、在表上铺满整张、还是只圈了几格。所以它随选区
   // 重建，而不是随选区**回显**——一层的框是逐边的，说不出「现在挂着哪一档」。重建只在换层时发生，同一层里
   // 用户选到一半的那格不动。

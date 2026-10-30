@@ -3214,7 +3214,7 @@ export class DocEditor {
    * 授权 46 份 20 枚）不在它的两档里。名字住在模型字段上，这里只报「这一段有没有穿线」，两页的灯与 `? "none" : "single"`
    * 那一句都问这一个答案；粗线因此在按钮眼里与单线同格，跳下去仍是把线说到「不要」。
    */
-  markState(): { bold: boolean; italic: boolean; underline: boolean; strike: boolean; sizePt?: number; color?: string; highlight?: string; font?: string; align?: string; list?: "bullet" | "number"; line?: number; lineRule?: LineSpacingRule } {
+  markState(): { bold: boolean; italic: boolean; underline: boolean; strike: boolean; sizePt?: number; color?: string; highlight?: string; font?: string; align?: string; list?: "bullet" | "number"; line?: number; lineRule?: LineSpacingRule; styleId?: string } {
     const sel = document.getSelection();
     let el: Element | null = null;
     if (sel?.rangeCount) {
@@ -3258,6 +3258,8 @@ export class DocEditor {
       list,
       line: shown?.lineSpacing,
       lineRule: shown?.lineSpacingRule,
+      // 「显示原文」那一档纸上摆的是记录里的 `prev`，样式那一格也得说同一句（与上面七项同一个 `shown`）。
+      styleId: shown?.styleId,
     };
   }
 
@@ -3368,6 +3370,38 @@ export class DocEditor {
     range.setStart(a.node, a.offset);
     range.setEnd(b.node, b.offset);
     this.select(range, startEl);
+  }
+
+  /** 件里声明的段落样式，按声明顺序——开始页「样式」那一格摆的就是这一份。 */
+  paragraphStyles(): { id: string; name: string; isDefault: boolean }[] {
+    return this.doc.paragraphStyles();
+  }
+
+  /**
+   * 开始页「样式」：把选区盖住的每一段换成件里声明的这个段落样式。`undefined` 是「不点名」——正文/默认样式，
+   * 段落的 `w:pStyle` 撤掉（WPS 画廊第一格「正文」走的就是这个形状）。
+   *
+   * 只落**变了**的那几段（`applyParaStyle` 对同一句返回 false），一次点击一次撤销；与 `setParagraph` 同一条
+   * 留痕：改动前后按 `carriedShape` 比，开着修订就签 `w:pPrChange`（记录里带着旧的 `w:pPr` 字节，拒绝时由
+   * `restoreParaStyle` 把 `w:pStyle` 与那几项直接格式整份放回去）。
+   */
+  setParagraphStyle(styleId: string | undefined): void {
+    const targets = this.selectionParagraphs().filter((p) => p.styleId !== styleId);
+    if (!targets.length) return;
+    this.snapshot(this.caretPath());
+    for (const paragraph of targets) {
+      const was = carriedShape(paragraph);
+      const wasSlots = paragraph.pPrSlots;
+      if (!this.doc.applyParaStyle(paragraph, styleId)) continue;
+      syncParaSlots(paragraph);
+      if (this.trackRevisions && JSON.stringify(was) !== JSON.stringify(carriedShape(paragraph))) {
+        paragraph.revFormat = this.signParagraphRevision(paragraph, was, wasSlots);
+      }
+    }
+    const caret = this.caretPath();
+    this.render();
+    if (caret) this.setCaret(this.clamp(caret));
+    this.hooks.changed();
   }
 
   /** Paragraph-level properties go straight from the toolbar into the model. */

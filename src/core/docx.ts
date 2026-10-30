@@ -1840,6 +1840,8 @@ export const stampNow = (): string => new Date().toISOString().replace(/\.\d{3}Z
  */
 export interface StyleDef {
   name: string;
+  /** `w:type` (§17.7.2.3): absent means paragraph, the only kind the 样式 gallery offers. */
+  type?: string;
   basedOn?: string;
   next?: string;
   rPr?: RunStyle;
@@ -2055,6 +2057,7 @@ export class WordDocument {
       const id = s["@_styleId"];
       this.styles.set(id, {
         name: s.name?.["@_val"] ?? id,
+        ...(s["@_type"] === undefined ? {} : { type: String(s["@_type"]) }),
         basedOn: s.basedOn?.["@_val"],
         next: s.next?.["@_val"],
         rPr: s.rPr ? runStyle(s.rPr, this.theme) : undefined,
@@ -2828,6 +2831,90 @@ export class WordDocument {
    */
   paragraphStyleOf(styleId: string | undefined): Partial<ParaStyle> | undefined {
     return this.paraLent(styleId);
+  }
+
+  /** What a run in a paragraph that names `styleId` borrows, floor included — the same resolution `paragraph` reads. */
+  paraRunStyle(styleId: string | undefined): RunStyle {
+    return { ...this.docDefaultRun, ...this.runLent(styleId) };
+  }
+
+  /**
+   * The paragraph styles this part declares, in the order it declares them: the gallery 开始页 offers.
+   * §17.7.2.3 gives `w:type` the default `paragraph`, so a style that states none is one of these; character,
+   * table and numbering styles are not candidates. The default paragraph style is marked because picking it is
+   * 「不点名样式」 — the paragraph's `w:pStyle` goes away rather than naming the default.
+   *
+   * 授权 46 份共 **112 枚段落样式**（每份 6～27 枚，`.scratch/para-style-gallery-audience.py` 读 `word/styles.xml`
+   * 与 `word/document.xml` 的 `w:pStyle`），其中 103 枚带 `w:qFormat`——WPS 画廊露出来的正是这一批；这一格先摆
+   * **文件自己声明的每一枚段落样式**，不按 `w:qFormat` 筛，也不替它编名字（有的件在正文里只用到其中几枚）。
+   */
+  paragraphStyles(): { id: string; name: string; isDefault: boolean }[] {
+    const out: { id: string; name: string; isDefault: boolean }[] = [];
+    for (const [id, def] of this.styles) {
+      if (def.type !== undefined && def.type !== "paragraph") continue;
+      out.push({ id, name: def.name, isDefault: id === this.defaultParaStyleId });
+    }
+    return out;
+  }
+
+  /**
+   * 把这一段换成 `styleId` 点名的段落样式；`styleId === undefined` 是「不点名」——正文/默认样式，`w:pStyle` 撤掉。
+   *
+   * 换样式不是把新样式的属性抄到段落身上：那会把「这一段只点名了一个样式」变成「这一段自己写了十几句」，
+   * 再换回去也撤不掉。段落自己写下的那一份直接格式留着（槽位看得见的那几项原样认作它的，槽位看不见的就按
+   * 「与旧链不同」认，和 `nextSplit` 同一条判据）；剩下的位置留给新链——字段改成新链的值，`asRead` 也换成新链，
+   * 写出侧对着它一句话都不多写，保存回来就是 `w:pStyle` 换了一句。
+   *
+   * run 与段落标记也一样：腿是画在每枚 run 自己的 `styleOf` 上的（`render.ts` 的段落只带字号），所以新链的
+   * 字号、字体、颜色、粗细得重新落到 run 字段上，否则「换成标题 1」在纸上只挪了段距、字还是正文那么大。
+   * run 自己 `w:rPr` 说过的（槽位里有那一枚孩子）和字符样式借来的(`w:rStyle`)不动——直接格式优先于样式。
+   */
+  applyParaStyle(p: Paragraph, styleId: string | undefined): boolean {
+    if (styleId !== undefined && !this.styles.has(styleId)) return false;
+    if (p.styleId === styleId) return false;
+    const before = this.paragraphStyleOf(p.styleId);
+    const nextRuns = this.paraRunStyle(styleId);
+    const lent: ParaStyle = { ...this.paragraphStyleOf(styleId) };
+    const fields: Record<string, unknown> = { ...lent };
+    const own = ownParaStyle(before, paraStyleOf(p));
+    for (const key of PARA_STYLE_KEYS) {
+      if (key === "styleId") continue;
+      if (own[key] !== undefined || slotStates(p.pPrSlots, PARA_SLOT_STATES[key])) fields[key] = p[key];
+    }
+    // 那八项不在 `PARA_STYLE_KEYS` 里（整枚靠槽位带回），与 `nextSplit` 同一条判据：槽位说过、或与旧链不同，
+    // 都是这一段自己写的；框按引用比，因为链借来的那个物件是原样交回来的。
+    for (const key of MODEL_ONLY_PARA_KEYS) {
+      const stated = p[key];
+      if (stated === undefined) continue;
+      if (slotStates(p.pPrSlots, PARA_SLOT_STATES[key]) || stated !== before?.[key]) fields[key] = stated;
+    }
+    const markSlot = p.pPrSlots?.find((s) => s.tag === "rPr")?.xml ?? "";
+    const markSays = (tag: string): boolean => new RegExp(`<(?:[A-Za-z_][\\w.-]*:)?${tag}[\\s/>]`).test(markSlot);
+    const markFonts = /<(?:[A-Za-z_][\w.-]*:)?rFonts\b[^>]*>/.exec(markSlot)?.[0] ?? "";
+    const markFace = (names: string): boolean => new RegExp(`(?:[A-Za-z_][\\w.-]*:)?(?:${names})\\s*=`).test(markFonts);
+    for (const key of [...PARA_STYLE_KEYS, ...MODEL_ONLY_PARA_KEYS]) delete p[key];
+    Object.assign(p, fields);
+    p.styleId = styleId;
+    p.styleName = styleId === undefined ? undefined : this.styles.get(styleId)?.name;
+    if (!markSays("sz")) p.markSizePt = nextRuns.sizePt;
+    if (!markSays("color")) p.markColor = nextRuns.color;
+    if (!markFace("ascii|hAnsi|asciiTheme|hAnsiTheme")) p.markFont = nextRuns.font;
+    if (!markFace("eastAsia|eastAsiaTheme")) p.markFontEastAsia = nextRuns.fontEastAsia;
+    for (const run of p.inlines) {
+      const charId = runStyleRef(run.rPrSlots);
+      const charLent = charId === undefined ? undefined : this.runLent(charId, false);
+      for (const key of RUN_STYLE_KEYS) {
+        const direct = run.rPrSlots?.length
+          ? slotStates(run.rPrSlots, RUN_SLOT_STATES[key])
+          : !samePropValue(run.asRead?.[key], run[key]);
+        if (direct) continue;
+        const value = charLent?.[key] ?? nextRuns[key];
+        (run as unknown as Record<string, unknown>)[key] = value;
+        run.asRead = { ...run.asRead, [key]: value };
+      }
+    }
+    p.asRead = { ...lent };
+    return true;
   }
 
   /**
@@ -4984,6 +5071,80 @@ export function ownRunStyle(asRead: RunStyle | undefined, s: RunStyle): RunStyle
     out[key] = v;
   }
   return out as RunStyle;
+}
+
+/** One property key and the `w:pPr`/`w:rPr` children that would state it for the paragraph or run itself. */
+interface SlotStates {
+  tags: string[];
+  /** For an element that holds several properties (`w:ind`, `w:spacing`, `w:rFonts`), the attributes that carry this one. */
+  attrs?: string[];
+}
+
+/**
+ * 段落这一族各自住在哪枚 `w:pPr` 孩子里。`w:ind` 与 `w:spacing` 一枚元素托着几个属性，所以要再看属性名；
+ * 其余一枚元素就是一句话。
+ */
+const PARA_SLOT_STATES: Partial<Record<keyof ParaStyle, SlotStates>> = {
+  styleId: { tags: ["pStyle"] },
+  align: { tags: ["jc"] },
+  indentLeft: { tags: ["ind"], attrs: ["left"] },
+  indentLeftChars: { tags: ["ind"], attrs: ["leftChars"] },
+  indentRight: { tags: ["ind"], attrs: ["right"] },
+  indentFirstLine: { tags: ["ind"], attrs: ["firstLine"] },
+  indentFirstLineChars: { tags: ["ind"], attrs: ["firstLineChars"] },
+  indentHanging: { tags: ["ind"], attrs: ["hanging"] },
+  spacingBefore: { tags: ["spacing"], attrs: ["before", "beforeLines", "beforeAutospacing"] },
+  spacingAfter: { tags: ["spacing"], attrs: ["after", "afterLines", "afterAutospacing"] },
+  lineSpacing: { tags: ["spacing"], attrs: ["line"] },
+  lineSpacingRule: { tags: ["spacing"], attrs: ["lineRule"] },
+  pageBreakBefore: { tags: ["pageBreakBefore"] },
+  numPr: { tags: ["numPr"] },
+  outlineLevel: { tags: ["outlineLvl"] },
+  keepNext: { tags: ["keepNext"] },
+  keepLines: { tags: ["keepLines"] },
+  widowControl: { tags: ["widowControl"] },
+  snapToGrid: { tags: ["snapToGrid"] },
+  wordWrap: { tags: ["wordWrap"] },
+  borders: { tags: ["pBdr"] },
+  shading: { tags: ["shd"] },
+  tabStops: { tags: ["tabs"] },
+};
+
+/**
+ * The same question for a run's `w:rPr`. `w:color` 的那句话在 2010 扩展里写作 `w14:textFill`（写出侧同一枚
+ * `RUN_PROPS` 的两个孩子），所以两种拼法都算 run 自己说的；`w:rFonts` 一枚托两张脸，按属性分。
+ */
+const RUN_SLOT_STATES: Partial<Record<keyof RunStyle, SlotStates>> = {
+  bold: { tags: ["b"] },
+  italic: { tags: ["i"] },
+  underline: { tags: ["u"] },
+  strike: { tags: ["strike"] },
+  sizePt: { tags: ["sz"] },
+  color: { tags: ["color", "textFill"] },
+  highlight: { tags: ["highlight"] },
+  font: { tags: ["rFonts"], attrs: ["ascii", "hAnsi", "asciiTheme", "hAnsiTheme"] },
+  fontEastAsia: { tags: ["rFonts"], attrs: ["eastAsia", "eastAsiaTheme"] },
+  vertAlign: { tags: ["vertAlign"] },
+  charSpacingTwips: { tags: ["spacing"] },
+};
+
+/**
+ * Whether the paragraph or run itself wrote this property — 认槽位，不认字段值。槽位是这一段的原件写下的字，
+ * 「自己写的值恰好与旧样式链相同」仍然是它自己写的；`ownParaStyle`/`ownRunStyle` 按值比，认不出那一格。
+ */
+function slotStates(slots: PropSlot[] | undefined, spec: SlotStates | undefined): boolean {
+  if (!slots?.length || spec === undefined) return false;
+  const slot = slots.find((s) => spec.tags.includes(s.tag));
+  if (!slot) return false;
+  if (spec.attrs === undefined) return true;
+  return spec.attrs.some((a) => new RegExp(`(?:[A-Za-z_][\\w.-]*:)?${a}\\s*=`).test(slot.xml));
+}
+
+/** The character style a run names (`w:rPr/w:rStyle w:val`), read off the set the run carries. */
+function runStyleRef(slots: PropSlot[] | undefined): string | undefined {
+  const xml = slots?.find((s) => s.tag === "rStyle")?.xml;
+  const val = xml ? /(?:[A-Za-z_][\w.-]*:)?val="([^"]*)"/.exec(xml)?.[1] : undefined;
+  return val ? val : undefined;
 }
 
 /** An on/off property: present means true unless the file says otherwise (`w:noWrap`, `w:cantSplit`). */

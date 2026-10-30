@@ -385,6 +385,37 @@ function smoke(): void {
             };
           } else rulerLeg = { missing: true };
         }
+        // #230 开始页「格式刷」：这只装机盒子里按钮真有面、按下去举起来（按钮亮、纸上换指针）、Esc 放下，
+        // 两下都不碰件。刷上那一步由 DOM 闸门（painter-dom）在真实 Chrome 里走。
+        let painterLeg = null;
+        {
+          const pb = [...document.querySelectorAll("#ribbon button.rb")].find((b) => b.textContent === "格式刷");
+          const titP = document.getElementById("title")?.textContent ?? "";
+          const fp = view.querySelector(".page .para");
+          if (fp) {
+            const rp = document.createRange();
+            rp.setStart(fp.firstChild ?? fp, 0);
+            rp.collapse(true);
+            const sp = document.getSelection();
+            sp?.removeAllRanges();
+            sp?.addRange(rp);
+            await wait(80);
+          }
+          pb?.click();
+          await wait(120);
+          const armed = {
+            buttonOn: pb ? pb.classList.contains("on") : false,
+            painted: page ? page.classList.contains("fmt-painter") : false,
+            cursor: page ? getComputedStyle(page).cursor : "",
+          };
+          document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+          await wait(120);
+          const released = {
+            buttonOn: pb ? pb.classList.contains("on") : false,
+            painted: page ? page.classList.contains("fmt-painter") : false,
+          };
+          painterLeg = { hasButton: !!pb, armed, released, dirtyKept: (document.getElementById("title")?.textContent ?? "") === titP };
+        }
         const blocks = page.children.length;
         const last = page.children[blocks - 1];
         const range = document.createRange();
@@ -4120,7 +4151,7 @@ function smoke(): void {
         const recovered = { cells: document.querySelectorAll(".sheet-wrap td").length, title: document.getElementById("title")?.textContent };
         // The run ends on a modified document, so quitting goes through the unsaved prompt.
         // A PDF the export asked for shows up in saveAsWrites, next to the pptx/xlsx saves.
-        return { docPart, bandLeg, rulerLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, clearLeg, styleLeg, vertLeg, origLeg, origTableLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
+        return { docPart, bandLeg, rulerLeg, painterLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, clearLeg, styleLeg, vertLeg, origLeg, origTableLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
       })()`;
       void last?.webContents
         .executeJavaScript(probe)

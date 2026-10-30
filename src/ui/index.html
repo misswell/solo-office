@@ -467,6 +467,9 @@
       .page [data-fit] { letter-spacing: calc(var(--fit-char-ls, 0px) + var(--fit-ls, 0px)); }
       .page[contenteditable="true"] { outline: none; }
       .page[contenteditable="true"] .bullet { user-select: none; }
+      /* 格式刷举着的时候纸上是「可以刷」的手型指针（`DocEditor.copyFormat` 挂的这个类）：鼠标经过正文
+         任何一处都该是这个指针，所以子元素也一起换——WPS 真机是不是这个光标未取证，这里只是别让它骗人。 */
+      .page.fmt-painter, .page.fmt-painter * { cursor: copy; }
       /* A heading is a paragraph the *file* put a level on, not a paragraph the App restyles. Where the file's
          ladder answers, `render.ts` says so inline and an inline declaration wins; where it says nothing, the
          heading takes exactly what body text takes. This sheet used to answer instead: `h1` 19pt, `h2` 15.5pt,

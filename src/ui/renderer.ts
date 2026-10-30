@@ -775,6 +775,13 @@ function buildDocRibbon(): void {
   };
 
   const nav = group("home");
+  // WPS 开始页第一组是 `RB_Clipboard`（`CT_Home.kuip:23-30`：粘贴/剪切/复制/格式刷），格式刷就挂在这一组里
+  // （`:25` 的 `<command idQ="FormatPainter"/>`，`wpsentries.kuip` 的 `CT_Home.RB_ClipboardWrapper.FormatPainter`）。
+  // 家里这一组是「常用」的替身，把格式刷摆在撤销前面；粘贴/剪切/复制在右键菜单里已有入口。
+  button(nav, "painter", "格式刷", "把光标处的字符格式刷到下一段选中的文字（Esc 放下）", () => {
+    editor?.copyFormat();
+    syncDocRibbon();
+  });
   button(nav, "undo", "↶", "撤销 ⌘Z", () => undo());
   button(nav, "redo", "↷", "重做 ⌘⇧Z", () => redo());
   button(nav, "", "全选", "选中整篇", () => selectAllDoc());
@@ -1372,6 +1379,8 @@ function syncDocRibbon(force = false): void {
   // （`DocEditor.setRulerShown` 同值不动，所以每趟 `syncDocRibbon` 都可以走这一句）。
   mark("ruler", showRuler);
   editor?.setRulerShown(showRuler);
+  // 格式刷亮着＝还举着一趟没用完（按下后到刷上之前，按钮亮着，纸上的指针也换成 `copy`）。
+  mark("painter", editor?.painterArmed() ?? false);
   // 「没说」与「明说 left」画的是一件事（§17.3.1.13 默认左；授权 46 份里 88 段明说 left，
   // `.scratch/authorized-jc-echo.ts`），两档都该亮「左」——只亮 `undefined` 那一档，停在那 88 段上时
   // 纸面靠左、按钮上一枚都不亮，说的是谎话。

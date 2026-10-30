@@ -712,6 +712,8 @@ export class DocEditor {
    * span 是它的投影，`settlePending` 一收就清空。
    */
   private pendingFormatPatch: WidePatch = {};
+  /** 格式刷举着的那一份字符格式；`null` = 没举。下一次纸上非空选区抬起时用它，见 `copyFormat`。 */
+  private painterPatch: StylePatch | null = null;
   private panel: CommentPanel | null = null;
   /** 审阅窗格: the list of every change still waiting, docked beside the page. */
   private review: ReviewPanel | null = null;
@@ -763,6 +765,11 @@ export class DocEditor {
     this.review = new ReviewPanel(this.host, this);
     this.outline = new OutlinePanel(this.host, this);
     document.addEventListener("selectionchange", () => this.trackSelection());
+    // 格式刷等的是「纸上这一笔抬起来」：拖出非空选区才算刷；点一下只是挪光标，格式还举着。
+    document.addEventListener("pointerup", (e) => this.finishPainter(e.target as Node | null));
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") this.clearPainter();
+    });
     this.render();
   }
 
@@ -787,6 +794,8 @@ export class DocEditor {
     this.wire();
     this.applyRevisionView();
     this.applySheets();
+    // 纸盒每一趟都是新元素：格式刷还举着，就把那副「可以刷」的指针重新挂到新纸上。
+    if (this.painterPatch) this.page.classList.add("fmt-painter");
     // 标尺挂在纸盒前面、跟着纸走；`innerHTML` 那一句把上一趟那枚一起换掉了，所以每次重铺都得再挂回去。
     this.paintRuler();
   }
@@ -3299,6 +3308,31 @@ export class DocEditor {
     return [...out].sort((a, b) => a.localeCompare(b, "zh-Hans-CN"));
   }
 
+  /** 选区起点落在哪枚元素里（文本节点交给它的父元素）。 */
+  private selectionElement(): Element | null {
+    const sel = document.getSelection();
+    if (!sel?.rangeCount) return null;
+    const node = sel.getRangeAt(0).startContainer;
+    return node instanceof Element ? node : node.parentElement;
+  }
+
+  /**
+   * 光标那一段字**穿着**的字符格式：从最里那枚元素一路往上把 `styleOf` 叠起来，标签本身的语义（`<b>`/`<i>`/`<u>`）
+   * 也一并认，走到段落盒为止。ribbon 的回显与格式刷问的是同一句「这段字现在长什么样」，所以共用这一趟。
+   */
+  private carriedRunStyle(): RunStyle {
+    let carried: RunStyle = {};
+    for (let scan = this.selectionElement(); scan; scan = scan.parentElement) {
+      carried = { ...styleOf(scan), ...carried };
+      const tag = scan.tagName.toLowerCase();
+      if (tag === "b" || tag === "strong") carried.bold = true;
+      if (tag === "i" || tag === "em") carried.italic = true;
+      if (tag === "u") carried.underline = "single";
+      if (scan.classList.contains("para")) break;
+    }
+    return carried;
+  }
+
   /**
    * What the caret's run and paragraph currently look like, so the toolbar can show its state.
    *
@@ -3312,21 +3346,8 @@ export class DocEditor {
    * 那一句都问这一个答案；粗线因此在按钮眼里与单线同格，跳下去仍是把线说到「不要」。
    */
   markState(): { bold: boolean; italic: boolean; underline: boolean; strike: boolean; sizePt?: number; color?: string; highlight?: string; font?: string; vertAlign?: "baseline" | "superscript" | "subscript"; align?: string; list?: "bullet" | "number"; line?: number; lineRule?: LineSpacingRule; styleId?: string } {
-    const sel = document.getSelection();
-    let el: Element | null = null;
-    if (sel?.rangeCount) {
-      const node = sel.getRangeAt(0).startContainer;
-      el = node instanceof Element ? node : node.parentElement;
-    }
-    let carried: RunStyle = {};
-    for (let scan = el; scan; scan = scan.parentElement) {
-      carried = { ...styleOf(scan), ...carried };
-      const tag = scan.tagName.toLowerCase();
-      if (tag === "b" || tag === "strong") carried.bold = true;
-      if (tag === "i" || tag === "em") carried.italic = true;
-      if (tag === "u") carried.underline = "single";
-      if (scan.classList.contains("para")) break;
-    }
+    const el = this.selectionElement();
+    const carried = this.carriedRunStyle();
     const path = this.caretPath()?.path;
     // 段落那几项（对齐、列表、行距）与「显示原文」的纸面同源：那一档纸上摆的是记录里的 `prev`，框里也得说同一句。
     const paragraph = path ? this.paragraphAt(path) : undefined;
@@ -3361,6 +3382,65 @@ export class DocEditor {
       // 「显示原文」那一档纸上摆的是记录里的 `prev`，样式那一格也得说同一句（与上面七项同一个 `shown`）。
       styleId: shown?.styleId,
     };
+  }
+
+  /**
+   * 格式刷：把光标这段字穿着的那套**字符格式**举起来，下一笔在纸上拖出的选区落到哪儿就刷到哪儿。
+   *
+   * 入口是 WPS 开始页 `CT_Home.kuip:25` 里 `RB_Clipboard` 组声明的那枚 `FormatPainter`
+   * （`wpsentries.kuip` 的 idPath `CT_Home.RB_ClipboardWrapper.FormatPainter`）。真机是「刷一次就用完」还是
+   * 「双击一直举着」**未取证**（`wpsentries.kuip` 里那一串 `rightFormatPainterDoubleClickPopup` 只说明右键菜单
+   * 里另有一项，没说按钮的手感），这里按一次用完：按住不放再按一次就是重新举。
+   *
+   * 只带字符格式（粗/斜/线名/删除线/颜色/高亮/字号/字脸/上下标）。段落那边的对齐、缩进、行距各是另一条命令，
+   * WPS 刷一段时带不带它们**未取证**，所以不替它捎带。字距、字符缩放、主题字体也不在这一片里。
+   */
+  copyFormat(): void {
+    // 与 `applyStyle` 同一条回放：焦点在 ribbon 的文本框里时，页面里最后一次选区才是「光标处」。回放之后仍不在
+    // 纸上（新文档、焦点压根没进过正文），就没有「光标处」可举——举一份空的上去，下一刷会把目标段整组抹平。
+    if (!this.rangeEnds() && this.pageSelection) this.selectRange(this.pageSelection.start, this.pageSelection.end);
+    const at = this.selectionElement();
+    if (!at || !this.page?.contains(at)) return;
+    const carried = this.carriedRunStyle();
+    const patch: StylePatch = {
+      // 画面上「不是粗体」就是这一趟要刷成的样子：`false` 在这份模型里就是「说了关」，与工具栏按回那一跳同一句。
+      bold: carried.bold === true,
+      italic: carried.italic === true,
+      underline: carried.underline ?? "none",
+      strike: carried.strike === true,
+      highlight: carried.highlight ?? "none",
+      vertAlign: carried.vertAlign ?? "",
+    };
+    if (carried.sizePt !== undefined) patch.sizePt = carried.sizePt;
+    if (carried.color !== undefined) patch.color = carried.color;
+    const font = faceShown(this.caretRun());
+    if (font) patch.font = font;
+    this.painterPatch = patch;
+    this.page?.classList.add("fmt-painter");
+  }
+
+  /** 格式刷是否还举着一趟没用（ribbon 的提示与探针问的都是这一句）。 */
+  painterArmed(): boolean {
+    return this.painterPatch !== null;
+  }
+
+  /** 放下举着的格式刷：Esc 或刷完一趟，只收状态，不碰件。 */
+  clearPainter(): void {
+    if (!this.painterPatch) return;
+    this.painterPatch = null;
+    this.page?.classList.remove("fmt-painter");
+    this.hooks.moved?.();
+  }
+
+  /** 纸上一笔抬起来：有非空选区就把举着的格式刷上去；点一下、或点的是纸外的按钮，都还继续举着。 */
+  private finishPainter(target: Node | null): void {
+    const patch = this.painterPatch;
+    if (!patch || !target || !this.page?.contains(target)) return;
+    const sel = document.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.getRangeAt(0).collapsed) return;
+    if (!this.rangeEnds()) return;
+    this.clearPainter();
+    this.applyStyle(patch);
   }
 
   applyStyle(patch: StylePatch): void {

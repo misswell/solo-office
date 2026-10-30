@@ -1182,6 +1182,13 @@ function renderCarried(b: Carried): string {
 
 /** The class a page border's element wears: drawn inside the paper box, and never a block of text. */
 export const PAGE_BORDER_CLASS = "doc-page-border";
+/**
+ * 页边距角标（#242）：纸上四角的 L 形灰线，贴**边距交点**、两臂沿边距线朝纸边伸出。这是视图层的版式
+ * 标记（WPS 打印视图默认就画），不是文件说的一句话——`w:pgBorders` 说的边框归 {@link PAGE_BORDER_CLASS}，
+ * 两层各画各的：语料里的件没有页边框时 WPS 也画角标（`event plan.dotm` 装机截图对拍），角标不进块计数、
+ * 不进读回、不报脏，与页面边框同一条先例。
+ */
+export const PAGE_CORNER_CLASS = "doc-page-corner";
 
 /**
  * 后面那些节自己的带子的**母本**（#157）：可点可改的只有纸盒外那两份原件（首张的页眉、末张的页脚），

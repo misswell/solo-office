@@ -5,7 +5,7 @@ import { DEFAULT_SECTION, EAST_ASIAN_TEXT, MARGIN_SIDES, RUN_STYLE_KEYS, applyFa
 import type { CellWhere, TableEdit } from "../core/doc-table-ops.js";
 import { allCells, applyRowHeights, cellOuterSides, cellRangeFor, cellRect, columnCells, cellsInRect, cellsInSweep, deleteCellHere, deleteColumnHere, deleteRowHere, deleteTableBlock, distributeColumns, distributeRows, gridColumns, gridWidths, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, setColumnWidth, splitHere, splitTableAt, tableToText, type RowHeightMove, type TableTextSeparator } from "../core/doc-table-ops.js";
 import { IMAGE_EXT_BY_MIME } from "../core/media.js";
-import { BAND_SOURCE_CLASS, CARRY_CLASS, CARRY_STYLE, BAND_MASTER_CLASS, PAGE_BORDER_CLASS, RUN_CARRY_CLASS, type RevisionView, fontStack, highlightColor, renderWord } from "../core/render.js";
+import { BAND_SOURCE_CLASS, CARRY_CLASS, CARRY_STYLE, BAND_MASTER_CLASS, PAGE_BORDER_CLASS, PAGE_CORNER_CLASS, RUN_CARRY_CLASS, type RevisionView, fontStack, highlightColor, renderWord } from "../core/render.js";
 import { flatOf, inlineLength, isMark, keepRunIdentity, restampRunText } from "../core/run-identity.js";
 import { caseText, changedRanges, type CaseMode } from "../core/doc-case.js";
 import { CommentPanel } from "./doc-comments.js";
@@ -815,7 +815,7 @@ export class DocEditor {
   private applySheets(): void {
     const page = this.page;
     if (!page) return;
-    for (const el of [...page.querySelectorAll<HTMLElement>(`.${SHEET_STRIP_CLASS}, .${BAND_CLONE_CLASS}`)]) el.remove();
+    for (const el of [...page.querySelectorAll<HTMLElement>(`.${SHEET_STRIP_CLASS}, .${BAND_CLONE_CLASS}, .${PAGE_CORNER_CLASS}`)]) el.remove();
     // 调整宽度（`w:fitText`）改的是字距，也就是每一行推进多少——它得排在下面每一处「量」之前：带子让位、制表位
     // 落位与切纸读的都是画出来的行盒，晚一步就是按没摊开的宽度量出来的页界。
     applyFitText(page);
@@ -853,6 +853,64 @@ export class DocEditor {
     // 还不存在；母本又躲在纸盒外，那一趟天生量不了它。这一趟落的是复件与原件——同一份 DOM 重跑一遍结果不变
     // （先撤宽再逐枚量），页码域的数也已在位，带子里跟着制表符的那截文字按填完数的宽量。
     applyTabStops(page, this.doc);
+    this.paintPageCorners(page, laid);
+  }
+
+  /**
+   * 页边距角标（#242）：每一页四角的 L 形灰线，交点贴**边距交点**、两臂沿边距线朝纸边伸出——WPS 打印
+   * 视图默认就画（`event plan.dotm` 截图取证）。装饰，与页面边框（`PAGE_BORDER_CLASS`）同一先例：
+   * 不进块计数、不进读回、不报脏。
+   *
+   * 画法是 `.page` 的**多层 background**（每角两条 1px 线 = 8 层/页），一行 DOM 都不加——`.page` 的
+   * 孩子序列被一批探针按形状钉死（正文块之后紧跟边框与条带），角标做成孩子会把这些下标全顶偏；
+   * background 层改的是纸盒自己的绘制，块下标、读回、可编辑性零变化。位置写在**纸的像素**上
+   * （zoom 缩放的是整张纸，背景跟着走）。页界：单页整纸，多页由条带推（每页页顶 = 上一道缝的下沿），
+   * 每页的边距按**它所在那一节**取。臂长 16px 与颜色取自 WPS 截图目测，装机并排对拍再校。
+   */
+  private paintPageCorners(page: HTMLElement, laid: { strips: SheetStrip[]; pages: number }): void {
+    if (laid.pages <= 0) {
+      page.style.backgroundImage = "";
+      return;
+    }
+    const strips = laid.strips;
+    const sections = this.doc.sections.length ? this.doc.sections : [DEFAULT_SECTION];
+    // clientWidth 是布局像素（.page 坐标系本身），CSS 层画在同一个坐标系里，不随 zoom 再除一次。
+    const paperW = page.clientWidth;
+    const ARM = 16;
+    const tops: number[] = [0];
+    for (const st of strips) tops.push(st.top + st.height);
+    const imgs: string[] = [];
+    const pos: string[] = [];
+    const siz: string[] = [];
+    const line = (x: number, y: number, w: number, h: number): void => {
+      imgs.push("linear-gradient(#b9b9b9, #b9b9b9)");
+      pos.push(`${Math.round(x * 10) / 10}px ${Math.round(y * 10) / 10}px`);
+      siz.push(`${Math.round(w * 10) / 10}px ${Math.round(h * 10) / 10}px`);
+    };
+    for (let i = 0; i < laid.pages; i++) {
+      const idx = i === 0 ? 0 : strips[i - 1]!.nextSection;
+      const sec = sections[Math.min(idx, sections.length - 1)] ?? DEFAULT_SECTION;
+      const top = tops[i] ?? 0;
+      const paperH = twipsToPx(sec.pageHeightTwips);
+      const gutter = sec.margins.gutter ?? 0;
+      const xL = twipsToPx(sec.margins.left + gutter);
+      const xR = paperW - twipsToPx(sec.margins.right);
+      const yT = top + twipsToPx(sec.margins.top);
+      const yB = top + paperH - twipsToPx(sec.margins.bottom);
+      // 左上：竖臂 (xL, yT−ARM..yT)、横臂 (xL−ARM..xL, yT)；右上/左下/右下镜像。
+      line(xL, yT - ARM, 1, ARM);
+      line(xL - ARM, yT, ARM, 1);
+      line(xR, yT - ARM, 1, ARM);
+      line(xR, yT, ARM, 1);
+      line(xL, yB - ARM, 1, ARM);
+      line(xL - ARM, yB, ARM, 1);
+      line(xR, yB - ARM, 1, ARM);
+      line(xR, yB, ARM, 1);
+    }
+    page.style.backgroundImage = imgs.join(",");
+    page.style.backgroundPosition = pos.join(",");
+    page.style.backgroundSize = siz.join(",");
+    page.style.backgroundRepeat = "no-repeat";
   }
 
   /**
@@ -1566,7 +1624,7 @@ export class DocEditor {
     for (const el of [...this.page.children]) {
       // A page border is drawn into the paper box rather than written on it. It holds no text and is not a
       // block, so reading it back would turn the file's `w:pgBorders` into an empty paragraph in the body.
-      if (el.classList.contains(PAGE_BORDER_CLASS)) continue;
+      if (el.classList.contains(PAGE_BORDER_CLASS) || el.classList.contains(PAGE_CORNER_CLASS)) continue;
       // Same for a sheet strip and for a header/footer band copy: decorations over the paper, not blocks.
       // The two clickable band originals (`render.ts` 的 `.solo-hf-master`) 现在也排在纸盒**里面**（#157：
       // 带子要贴上纸），它们的字是带子的正文，不是正文的一块——漏掉这一条，保存回来就多两段没写过的段落。

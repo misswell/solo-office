@@ -96,7 +96,7 @@
  * （字体度量、行盒取整、页眉占位、孤行控制都不一样，这些也都**未取证**），所以这里不写「与 WPS 一致」。
  */
 import { DEFAULT_SECTION, TAB_LEADER_TOKENS, sectionEndsOf, twipsToPx, type Section, type WordDocument } from "../core/docx.js";
-import { BAND_MASTER_CLASS, BAND_SOURCE_CLASS, CARRY_CLASS, PAGE_BORDER_CLASS, TBL_HEADER_ATTR, TBLP_HORZ_ATTR, TBLP_VERT_ATTR, TBLP_X_ATTR, TBLP_Y_ATTR } from "../core/render.js";
+import { BAND_MASTER_CLASS, BAND_SOURCE_CLASS, CARRY_CLASS, PAGE_BORDER_CLASS, PAGE_CORNER_CLASS, TBL_HEADER_ATTR, TBLP_HORZ_ATTR, TBLP_VERT_ATTR, TBLP_X_ATTR, TBLP_Y_ATTR } from "../core/render.js";
 
 /**
  * 铺在纸上的一枚单位：一个行盒，或一枚不能拆的东西（表格的一行、一个只读容器）。
@@ -500,7 +500,7 @@ function unitBlocksOf(page: HTMLElement): { el: HTMLElement; units: PlacedUnit[]
   let cursor = contentTopOf(page);
   for (const child of [...page.children]) {
     const el = child as HTMLElement;
-    if (el.classList.contains(PAGE_BORDER_CLASS) || el.classList.contains(SHEET_STRIP_CLASS) || el.classList.contains(BAND_CLONE_CLASS) || el.classList.contains(BAND_MASTER_CLASS)) continue;
+    if (el.classList.contains(PAGE_BORDER_CLASS) || el.classList.contains(PAGE_CORNER_CLASS) || el.classList.contains(SHEET_STRIP_CLASS) || el.classList.contains(BAND_CLONE_CLASS) || el.classList.contains(BAND_MASTER_CLASS)) continue;
     // 浮在纸上的表不是流里的一员（`w:tblpPr`，见 `floatingTablesOf`）：它不产单位，也不该把它的高算成
     // 下一块之前的空白——`applySheetGaps` 已经让它离开流，量纸高的每一条路读的都是同一份。
     if (el.tagName === "TABLE" && el.hasAttribute(TBLP_X_ATTR) && el.hasAttribute(TBLP_Y_ATTR)) continue;

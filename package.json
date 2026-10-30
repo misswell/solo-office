@@ -1,6 +1,6 @@
 {
   "name": "solo-office",
-  "version": "0.1.21",
+  "version": "0.1.22",
   "private": true,
   "type": "module",
   "description": "OOXML office suite (spreadsheet / document / presentation) implemented independently from ECMA-376; desktop shell on Electron.",

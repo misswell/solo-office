@@ -1,5 +1,5 @@
 import { Spreadsheet } from "../core/xlsx.js";
-import { LINE_ONE, parseSizePt, WordDocument, type PageSetup, type Section } from "../core/docx.js";
+import { LINE_ONE, parseSizePt, sizeNameOf, WordDocument, type PageSetup, type Section } from "../core/docx.js";
 import { Presentation } from "../core/pptx.js";
 import { OpcPackage } from "../core/opc.js";
 import { writeXlsx } from "../core/write.js";
@@ -838,8 +838,9 @@ function buildDocRibbon(): void {
         box.value = sizeEcho();
         return;
       }
-      box.value = String(pt);
       style({ sizePt: pt });
+      // 落完笔回显按同一句号数制（打得进「12」也显示「小四」），与光标回显一个口径。
+      box.value = sizeNameOf(pt) ?? String(pt);
     };
     ctl[key] = box;
     return box;
@@ -1494,11 +1495,13 @@ function syncDocRibbon(force = false): void {
     if (box && (force || document.activeElement !== box)) box.value = state?.font ?? "";
   }
   // 字号框是可打字的 `input`，不是 `<select>`：说不出就打空（「没提过」），说得出来就摆文件那个数——
-  // 摆 13.5 还是 13.5，不摆最近的一档预设（那会给这段字安一个它没写过的尺寸）。`undefined` 与「空框」同一句话。
-  // 正在打字的那一格不刷（与字体框同一条礼节）：刷了就吃掉用户打到一半的数。
+  // 号数制里的磅数用中文名（五号/小四/小初……，WPS 同一显示法：`event plan.dotm` 主标题 36 磅显「小初」、
+  // 目录题 18 磅显「小二」），不在号数制里的照旧显数字；不摆最近的一档预设（那会给这段字安一个它没写过的
+  // 尺寸）。`undefined` 与「空框」同一句话。正在打字的那一格不刷（与字体框同一条礼节）：刷了就吃掉用户
+  // 打到一半的数。打名字也认（`parseSizePt` 按同一张表换回磅数）。
   for (const key of ["size", "tblSize"]) {
     const box = ctl[key] as HTMLInputElement | undefined;
-    if (box && (force || document.activeElement !== box)) box.value = state?.sizePt === undefined ? "" : String(state.sizePt);
+    if (box && (force || document.activeElement !== box)) box.value = state?.sizePt === undefined ? "" : sizeNameOf(state.sizePt) ?? String(state.sizePt);
   }
   // Three sentences the file could have written — 没提过底色 / 提了「没有」 / 提了某个颜色名 — three readings of
   // the box. Leaving it blank is the first, and only the `none` option spells the second.
@@ -1571,10 +1574,11 @@ function echoSpin(box: HTMLInputElement, twips: number | undefined): void {
   box.dataset.echo = want;
 }
 
-/** 字号框此刻该显示的那一句：光标所在那枚 run 说的磅数；说不出就是空（「没提过」），不替它编一个数。 */
+/** 字号框此刻该显示的那一句：光标所在那枚 run 说的磅数，号数制里的数用中文名（五号/小四……，WPS 同一显示法，
+ *  `event plan.dotm` 两处实测对上），不在号数制里的照旧显数字；说不出就是空（「没提过」），不替它编一个数。 */
 function sizeEcho(): string {
   const pt = editor?.markState().sizePt;
-  return pt === undefined ? "" : String(pt);
+  return pt === undefined ? "" : sizeNameOf(pt) ?? String(pt);
 }
 
 /**
@@ -2361,6 +2365,9 @@ function mountDoc(app: Extract<Opened, { kind: "docx" }>): void {
   buildRibbon("docx");
   // `force`：这一趟是换了一份文件，上一份里打了还没落笔的那串字（字体框、四格页边距）不搬过来。
   syncDocRibbon(true);
+  // 光标放到文首（WPS 同款）：字体/字号两格的回显问的是光标，没有光标两格只能空着；状态栏的行列
+  // 也是跟着光标走的。放光标走 `moved`，sync 自己会再来一趟，不必在这里补一句。
+  editor.caretToDocumentStart();
 }
 
 // -------------------------------------------------------------------- pptx

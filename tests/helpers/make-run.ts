@@ -225,6 +225,7 @@ export function makeRibbonEchoDocx(): Uint8Array {
 <w:p><w:r><w:rPr><w:highlight w:val="none"/></w:rPr><w:t>说了没有的一句</w:t></w:r></w:p>
 <w:p><w:r><w:rPr><w:highlight w:val="darkRed"/></w:rPr><w:t>控件列不出的一句</w:t></w:r></w:p>
 <w:p><w:r><w:t>什么都没点的一句</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:rFonts w:ascii="宋体" w:hAnsi="宋体" w:eastAsia="宋体"/><w:b/><w:sz w:val="72"/><w:szCs w:val="72"/></w:rPr><w:t>宋体三十六磅</w:t></w:r></w:p>
 <w:p><w:r><w:rPr><w:sz w:val="42"/><w:szCs w:val="42"/></w:rPr><w:t>二十一磅的一句</w:t></w:r></w:p>
 <w:p><w:r><w:rPr><w:b/><w:sz w:val="24"/><w:kern w:val="28"/></w:rPr><w:t>粗而十二磅</w:t></w:r></w:p>
 <w:p><w:r><w:rPr><w:color w:val="C00000"/><w:u w:val="single"/></w:rPr><w:t>红而带线</w:t></w:r></w:p>

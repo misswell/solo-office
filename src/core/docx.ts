@@ -4788,12 +4788,34 @@ const entryType = (rev: Revision): "insert" | "delete" | "move-from" | "move-to"
 export const hasLine = (underline?: string): boolean => underline !== undefined && underline !== "none";
 
 /**
- * 字号框里打进来的那个数：`w:sz` 数的是**半点**（`ST_HpsMeasure`，§17.18.60），所以落笔前先取到半点上——
- * 13.7 在件里只能说成 13.5，框里也就不该留着 13.7。只认十进制数（`10.5`、`12`）；不是数、不到半个点、
- * 或超过 1638 磅（Word 界面那一格的上限；WPS 的上限未取证）一律不认，交回 `undefined`，调用方据此不落笔。
+ * 中文号数制：公开的排印常识（初号到八号那一套），不是从 WPS 资源里抄的字面——号数是行业词汇，
+ * 谁家的界面都用。两处实测对上了这一张表：`event plan.dotm` 的主标题 `w:sz 72`（36 磅）在 WPS 字号框
+ * 显示「小初」、目录题 `w:sz 36`（18 磅）显示「小二」。框的**回显**用名字（WPS 就这么显示），**下拉**
+ * 仍列 `fontSizeList` 那 21 档数字（`CT_TableTools.kuip` 逐字写的就是数字）；不在表里的磅数（8/10/11/20/
+ * 28/48/56/72 那些档）照旧显数字。
+ */
+export const CHINESE_SIZE_NAMES: [number, string][] = [
+  [42, "初号"], [36, "小初"], [26, "一号"], [24, "小一"], [22, "二号"], [18, "小二"],
+  [16, "三号"], [15, "小三"], [14, "四号"], [12, "小四"], [10.5, "五号"], [9, "小五"],
+  [7.5, "六号"], [6.5, "小六"], [5.5, "七号"], [5, "八号"],
+];
+
+const SIZE_NAME_BY_PT = new Map<number, string>(CHINESE_SIZE_NAMES);
+const SIZE_PT_BY_NAME = new Map<string, number>(CHINESE_SIZE_NAMES.map(([pt, name]) => [name, pt]));
+
+/** 一个磅数的中文号名；不在号数制里的磅数（`fontSizeList` 那 21 档里的大半）没有名字，交回 undefined。 */
+export const sizeNameOf = (pt: number): string | undefined => SIZE_NAME_BY_PT.get(pt);
+
+/**
+ * 字号框里打进来的那一句：十进制数按半点取整（`w:sz` 数的是**半点**，`ST_HpsMeasure`，§17.18.60——13.7
+ * 在件里只能说成 13.5），中文号名（小四/五号……）按上表换回磅数——框的回显既然用名字，打名字也得认。
+ * 不是数也不是名、不到半个点、或超过 1638 磅（Word 界面那一格的上限；WPS 的上限未取证）一律不认，
+ * 交回 `undefined`，调用方据此不落笔。
  */
 export function parseSizePt(text: string): number | undefined {
   const t = text.trim();
+  const named = SIZE_PT_BY_NAME.get(t);
+  if (named !== undefined) return named;
   if (!/^\d+(?:\.\d+)?$/.test(t)) return undefined;
   const pt = Math.round(Number(t) * 2) / 2;
   return pt >= 0.5 && pt <= 1638 ? pt : undefined;

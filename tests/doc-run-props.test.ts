@@ -148,6 +148,14 @@ describe("docx run property fidelity", () => {
     expect(parseSizePt("-1")).toBeUndefined();
     expect(parseSizePt("1639")).toBeUndefined();
     expect(parseSizePt("1e3")).toBeUndefined();
+    // 号数制（#237）：框的回显用中文名，打名字也得认——同一张表换回磅数；表外的名字不认。
+    expect(parseSizePt("小四")).toBe(12);
+    expect(parseSizePt(" 五号 ")).toBe(10.5);
+    expect(parseSizePt("初号")).toBe(42);
+    expect(parseSizePt("小初")).toBe(36);
+    expect(parseSizePt("二号")).toBe(22);
+    // 表外的名字不认（没有「特大」这一号），照旧交回 undefined 不落笔。
+    expect(parseSizePt("特大")).toBeUndefined();
 
     const doc = open(makeRunPropsDocx());
     const typed = parseSizePt("13.7")!;

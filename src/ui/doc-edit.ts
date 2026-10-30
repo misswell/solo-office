@@ -3375,6 +3375,32 @@ export class DocEditor {
    * 授权 46 份 20 枚）不在它的两档里。名字住在模型字段上，这里只报「这一段有没有穿线」，两页的灯与 `? "none" : "single"`
    * 那一句都问这一个答案；粗线因此在按钮眼里与单线同格，跳下去仍是把线说到「不要」。
    */
+  /**
+   * 打开文件时把光标放到文首（WPS 同款：状态栏「行:1 列:1」，字体/字号两格当场就有话可说——
+   * #237 的回显问的就是光标，没有光标两格只能空着）。文首取第一枚进流的段落：没有（理论上的空场面）
+   * 就不做。只放光标与焦点，不报脏——选区不是编辑。
+   */
+  caretToDocumentStart(): void {
+    const page = this.page;
+    if (!page) return;
+    const first = page.querySelector<HTMLElement>(".para");
+    if (!first) return;
+    const host = first.querySelector("span") ?? first;
+    const node = host.firstChild ?? host;
+    const sel = document.getSelection();
+    if (!sel) return;
+    const r = document.createRange();
+    try {
+      r.setStart(node, 0);
+      r.setEnd(node, 0);
+    } catch {
+      return;
+    }
+    sel.removeAllRanges();
+    sel.addRange(r);
+    page.focus();
+  }
+
   markState(): { bold: boolean; italic: boolean; underline: boolean; strike: boolean; sizePt?: number; color?: string; highlight?: string; font?: string; vertAlign?: "baseline" | "superscript" | "subscript"; align?: string; list?: "bullet" | "number"; line?: number; lineRule?: LineSpacingRule; styleId?: string } {
     const el = this.selectionElement();
     const carried = this.carriedRunStyle();
@@ -3392,7 +3418,11 @@ export class DocEditor {
       italic: carried.italic ?? false,
       underline: hasLine(carried.underline),
       strike: carried.strike ?? false,
-      sizePt: carried.sizePt,
+      // 光标底下没有 run（空段、或停在段落最前）时退到**段落标记**自己那一份：`w:pPr/w:rPr` 说的字与号
+      // （模型 `markFont/markFontEastAsia/markSizePt`，样式链同阶梯）。WPS 打开一份件、光标坐在文首空段上时
+      // 字体/字号两格报的正是这一句——`event plan.dotm` 首段标记账解析出 宋体/36 磅，装机壳显示「宋体」「小初」
+      // （#237 装机截图对拍）。打字落下的新字也穿这一套，所以它不是编的。
+      sizePt: carried.sizePt ?? shown?.markSizePt,
       // 「字体颜色」那一格答的是光标这段字**穿着**的颜色，不是「件里那句 `w:color` 说没说」：run 自己说过、
       // 或样式阶梯借来一张色（渲染器把解析后的值原样画进 `style="color:…"`，`styleOf` 就读回来），都算穿着。
       // 这段字什么都没说时（`w:color val="auto"` 与「没提过」在纸上画的是同一个墨），交回页面**实际画出来**的那层墨：
@@ -3404,7 +3434,9 @@ export class DocEditor {
       // 处那枚占位 span 也在这条链上：按了上标还没打字时，回显已经说是上标，与 WPS 的开关钮同一眼。
       vertAlign: carried.vertAlign,
       // 待用的那一张脸还没进模型（占位 span 上才算数），它得盖在回显上，否则工具栏说的是光标原来穿的脸。
-      font: this.pendingFormatPatch.font ?? faceShown(this.caretRun()),
+      // 光标底下没有 run 时退到段落标记的那一对脸：中文文档先报中文脸（`faceShown` 同一条偏好，
+      // `event plan.dotm` 文首空段的标记账是 eastAsia=宋体 / ascii=Calibri，WPS 那两格报「宋体 (正文)」）。
+      font: this.pendingFormatPatch.font ?? faceShown(this.caretRun()) ?? shown?.markFontEastAsia ?? shown?.markFont,
       align: shown?.align,
       list,
       line: shown?.lineSpacing,

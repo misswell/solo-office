@@ -224,7 +224,7 @@ const notify = (message: string): void => {
     noticeEl.setAttribute("role", "status");
     noticeEl.style.cssText =
       "position:fixed;right:18px;bottom:52px;z-index:40;max-width:380px;padding:7px 11px;border-radius:6px;" +
-      'background:#2b3038;color:#e8eaed;font:12px/1.5 -apple-system,"PingFang SC",sans-serif;box-shadow:0 4px 16px #0007;pointer-events:none';
+      'background:#fff;color:#1f2328;border:1px solid #d5dae1;font:12px/1.5 -apple-system,"PingFang SC",sans-serif;box-shadow:0 4px 16px #0002;pointer-events:none';
     document.body.append(noticeEl);
   }
   noticeEl.textContent = message;
@@ -1899,7 +1899,7 @@ function openCondPanel(): void {
   const input = document.createElement("input");
   input.type = "text";
   input.placeholder = "数值";
-  input.style.cssText = "width:76px;font:inherit;font-size:12px;padding:3px 6px;border:1px solid #3a404a;border-radius:5px;background:#262b33;color:var(--ink);";
+  input.style.cssText = "width:76px;font:inherit;font-size:12px;padding:3px 6px;border:1px solid #c9ced6;border-radius:5px;background:#fff;color:var(--ink);";
   const go = document.createElement("button");
   go.className = "rb";
   go.textContent = "应用";
@@ -2186,7 +2186,7 @@ function openCommentInput(v: SheetView, x: number, y: number): void {
   input.type = "text";
   input.placeholder = "批注内容";
   input.value = v.activeComment() ?? "";
-  input.style.cssText = "width:190px;font:inherit;font-size:12px;padding:3px 6px;border:1px solid #3a404a;border-radius:5px;background:#262b33;color:var(--ink);";
+  input.style.cssText = "width:190px;font:inherit;font-size:12px;padding:3px 6px;border:1px solid #c9ced6;border-radius:5px;background:#fff;color:var(--ink);";
   const go = () => {
     panel.remove();
     v.setComment(input.value.trim());

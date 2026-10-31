@@ -6,13 +6,15 @@
     <title>Solo Office</title>
     <style>
       :root {
-        --chrome: #1c1f24;
-        --chrome-2: #24282f;
-        --chrome-line: #33383f;
-        --ink: #e8eaed;
-        --ink-dim: #9aa1ab;
-        --accent: #2f7dd1;
-        --accent-soft: #2f7dd126;
+        /* 壳是浅色：WPS 的默认界面就是白底功能区 + 浅灰窗框，深色壳是我们自己的旧想法，和 WPS 摆在一起就不是一个东西。
+           这一套只换壳与浮层，纸面、格线、状态栏本来就是浅色，不动。 */
+        --chrome: #f3f4f6;
+        --chrome-2: #fafbfc;
+        --chrome-line: #e3e6ea;
+        --ink: #1f2328;
+        --ink-dim: #6b7280;
+        --accent: #2b7de9;
+        --accent-soft: #2b7de91f;
         --paper: #f4f5f7;
         --sheet-head: #f0f1f3;
         --grid-line: #dcdfe4;
@@ -40,8 +42,8 @@
         gap: 14px;
         height: 46px;
         padding: 0 14px 0 82px;
-        background: linear-gradient(180deg, #23272e, #1b1e23);
-        border-bottom: 1px solid #0e1013;
+        background: linear-gradient(180deg, #ffffff, #f6f7f9);
+        border-bottom: 1px solid #e1e4e8;
         flex: none;
         -webkit-app-region: drag;
       }
@@ -59,13 +61,13 @@
         font: inherit;
         font-size: 12.5px;
         color: var(--ink);
-        background: #2c313a;
-        border: 1px solid #3a404a;
+        background: #fff;
+        border: 1px solid #d5dae1;
         border-radius: 6px;
         padding: 5px 11px;
         cursor: pointer;
       }
-      button.tool:hover { background: #353b45; }
+      button.tool:hover { background: #eef3fa; }
       button.tool:disabled { opacity: .4; cursor: default; }
       .title-slot {
         flex: 1;
@@ -84,7 +86,7 @@
         gap: 0;
         height: 34px;
         background: var(--chrome-2);
-        border-bottom: 1px solid #0e1013;
+        border-bottom: 1px solid #e1e4e8;
         flex: none;
       }
       .bar.on { display: flex; }
@@ -112,7 +114,7 @@
         height: 100%;
         border: 0;
         outline: 0;
-        background: #1a1d21;
+        background: #fff;
         color: var(--ink);
         font: inherit;
         font-size: 13px;
@@ -125,8 +127,8 @@
         align-items: center;
         height: 38px;
         padding: 0 4px;
-        background: #20242b;
-        border-bottom: 1px solid #0e1013;
+        background: #fff;
+        border-bottom: 1px solid #e1e4e8;
         flex: none;
         overflow-x: auto;
       }
@@ -143,14 +145,14 @@
         align-items: flex-end;
         gap: 2px;
         padding: 2px 4px 0;
-        background: #1b1f25;
-        border-bottom: 1px solid #0e1013;
+        background: #f3f4f6;
+        border-bottom: 1px solid #e1e4e8;
         flex: none;
       }
       .rtabs button {
         font: inherit;
         font-size: 12px;
-        color: #99a3b1;
+        color: #5b636d;
         background: none;
         border: 1px solid transparent;
         border-bottom: 0;
@@ -159,8 +161,8 @@
         cursor: pointer;
       }
       .rtabs button:hover { color: var(--ink); }
-      .rtabs button.on { color: var(--ink); background: #2c313a; border-color: #3a404a; }
-      .rbar { display: flex; align-items: center; height: 38px; padding: 0 4px; overflow-x: auto; flex: none; }
+      .rtabs button.on { color: var(--accent); background: #fff; border-color: #e1e4e8; font-weight: 600; }
+      .rbar { display: flex; align-items: center; height: 38px; padding: 0 4px; overflow-x: auto; flex: none; background: #fff; }
       .rbar[hidden] { display: none; }
       /* 装不下的那一档给一枚看得见的箭头，否则用户看到的是一枚被切一半的按钮，说不出「右边还有、能滚」。
          WPS 那边「单行放不下」确有声明：`res/commands/wps/ongmani/` 里 515 个 `<K*ListCommand>` 组声明有 30 个带
@@ -179,14 +181,15 @@
         width: 22px;
         height: 26px;
         padding: 0;
-        border: 1px solid #3a404a;
+        border: 1px solid #d5dae1;
         border-radius: 3px;
-        background: #2c313a;
-        color: var(--ink);
+        background: #fff;
+        color: #5b636d;
         font-size: 15px;
         line-height: 1;
         cursor: pointer;
       }
+      .rover:hover { background: #eef3fa; }
       .rover[hidden] { display: none; }
       /* `RB_Page_Setup` 那四枚页边距自旋格：WPS 给每枚声明 `fixedSpinBoxWidth="84"`（`CT_PageLayout.kuip:156-159`），
          所以一格连名带框占 84 px、框吃掉剩下的宽度；高度压在行里，不为一格把带子撑高。 */
@@ -203,16 +206,16 @@
         font: inherit;
         font-size: 12px;
         color: var(--ink);
-        background: #2c313a;
-        border: 1px solid #3a404a;
+        background: transparent;
+        border: 1px solid transparent;
         border-radius: 5px;
         padding: 3px 8px;
         cursor: pointer;
         white-space: nowrap;
       }
-      button.rb:hover { background: #353b45; }
+      button.rb:hover { background: #eaf2fd; border-color: #d6e4fb; }
       button.rb:disabled { opacity: .35; cursor: default; }
-      button.rb.on { background: var(--accent); border-color: #5aa0e8; color: #fff; }
+      button.rb.on { background: var(--accent); border-color: var(--accent); color: #fff; }
       /* 字体框与字号框在 WPS 里同挂 `RB_Font` 的 `font_info_pair`（`KxWpsFontComboBoxCommand idMso="Font"` 写
          `minimumWidth="130"`、`layoutOnLeft="true"`，字号紧跟其后），所以这一对必须是同一只盒子：高度在这里写死，
          不靠 `<select>` 的 UA 默认值——`<input>` 自己量出来是 20，两格并排就错开 1px 顶边。宽度才各自说。 */
@@ -222,8 +225,8 @@
         font: inherit;
         font-size: 12px;
         color: var(--ink);
-        background: #262b33;
-        border: 1px solid #3a404a;
+        background: #fff;
+        border: 1px solid #c9ced6;
         border-radius: 5px;
         padding: 2px 4px;
         height: 22px;
@@ -231,7 +234,7 @@
       input.facebox { width: 130px; }
       /* 字号那一格是 WPS 的 ComboBox：`CT_TableTools.kuip` 声明 `fixedWidth="60"`，与同一对里的字体框同高同顶。 */
       input.sizebox { width: 60px; }
-      input.swatch { width: 24px; height: 22px; padding: 0; border: 1px solid #3a404a; border-radius: 5px; background: #262b33; }
+      input.swatch { width: 24px; height: 22px; padding: 0; border: 1px solid #c9ced6; border-radius: 5px; background: #fff; }
 
       /* ---- main split ---- */
       main { flex: 1; display: flex; min-height: 0; background: var(--paper); }
@@ -356,10 +359,10 @@
         z-index: 40;
         min-width: 152px;
         padding: 4px;
-        background: #2a2f37;
-        border: 1px solid #3d434d;
+        background: #fff;
+        border: 1px solid #d5dae1;
         border-radius: 8px;
-        box-shadow: 0 10px 30px #0007;
+        box-shadow: 0 10px 30px #0002;
         display: flex;
         flex-direction: column;
       }
@@ -374,8 +377,8 @@
         padding: 5px 10px;
         cursor: pointer;
       }
-      .menu button:hover { background: var(--accent); color: #fff; }
-      .menu .sep { height: 1px; background: #3d434d; margin: 3px 6px; }
+      .menu button:hover { background: #eaf2fd; color: var(--ink); }
+      .menu .sep { height: 1px; background: #e6e9ee; margin: 3px 6px; }
 
       .find {
         position: absolute;

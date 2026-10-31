@@ -264,6 +264,7 @@ describe("body text inherits the master's nine levels", () => {
     const html = claim(Presentation.blank(), "ppt/slideLayouts/slideLayout2.xml", 0);
     expect(html).toContain('<span class="bullet">●</span>');
     expect(html).toContain("padding-left:24px;text-indent:-24px");
+    expect(html).toContain("font-size:18pt");
   });
 
   it("honours a layout's buNone: 节标题 body text carries no bullet and starts at the box edge", () => {
@@ -272,11 +273,12 @@ describe("body text inherits the master's nine levels", () => {
     expect(html).toContain("padding-left:0px;text-indent:0px");
   });
 
-  it("draws a level-2 paragraph at the master's 16pt, 72px in with the level-2 bullet", () => {
+  it("draws a level-2 paragraph at the master's third level: 16pt, 120px in with its bullet", () => {
     const html = claim(Presentation.blank(), "ppt/slideLayouts/slideLayout2.xml", 2);
-    expect(html).toContain("padding-left:72px;text-indent:-24px");
+    expect(html).toContain("padding-left:120px;text-indent:-24px");
     expect(html).toContain("font-size:16pt");
     expect(html).toContain('<span class="bullet">●</span>');
+    expect(html).toContain('data-lvl="2"');
   });
 
   it("writes the layout lstStyle buNone 节标题/比较/图片与标题 declare", () => {

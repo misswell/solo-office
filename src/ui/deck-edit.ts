@@ -1,7 +1,7 @@
 import type { Inline } from "../core/docx.js";
 import { hasLine } from "../core/docx.js";
 import type { Presentation, Shape, Slide } from "../core/pptx.js";
-import { renderSlideHtml } from "../core/render.js";
+import { bodyLevelStyle, bulletGlyph, isBodyPlaceholder, renderSlideHtml } from "../core/render.js";
 
 /**
  * Editing layer over a presentation: slide rail, stage with selectable shapes,
@@ -565,10 +565,65 @@ export class DeckEditor {
       if (e.key === "Escape") {
         e.preventDefault();
         (e.target as HTMLElement).blur();
+        return;
+      }
+      // Tab / Shift+Tab demote and promote the caret's paragraph, as in WPS. Outside a
+      // body placeholder the key keeps its default (moving focus out of the field).
+      if (e.key === "Tab" && isBodyPlaceholder(shape)) {
+        const pe = this.paragraphAt(body, e.target as Node);
+        if (!pe) return;
+        e.preventDefault();
+        this.shiftLevel(body, pe, shape, e.shiftKey);
       }
     };
     plainPaste(body);
     body.onblur = () => this.commitText();
+  }
+
+  /** The `.sp-p` the caret sits in; the browser may have put the anchor inside a run span. */
+  private paragraphAt(body: HTMLElement, node: Node): HTMLElement | null {
+    let el: Node | null = node;
+    while (el && el.parentElement !== body) el = el.parentElement;
+    return el instanceof HTMLElement && el.classList.contains("sp-p") ? el : null;
+  }
+
+  /** The paragraph's level: its own mark, else the level whose first-line offset it wears. */
+  private levelOf(pe: HTMLElement, shape: Shape): number {
+    if (pe.dataset.lvl !== undefined) return Number(pe.dataset.lvl) || 0;
+    const pad = Math.round(Number(pe.style.paddingLeft.replace("px", "")) || 0);
+    for (let i = 0; i < this.pres.bodyLevels.length; i++) {
+      if (Math.round((bodyLevelStyle(this.slide, shape, i, this.pres).marLEmu ?? 0) / 9525) === pad) return i;
+    }
+    return 0;
+  }
+
+  private shiftLevel(body: HTMLElement, pe: HTMLElement, shape: Shape, promote: boolean): void {
+    const last = Math.max(0, this.pres.bodyLevels.length - 1);
+    const level = Math.max(0, Math.min(last, this.levelOf(pe, shape) + (promote ? -1 : 1)));
+    const style = bodyLevelStyle(this.slide, shape, level, this.pres);
+    pe.dataset.lvl = String(level);
+    pe.style.paddingLeft = `${Math.round((style.marLEmu ?? 0) / 9525)}px`;
+    pe.style.textIndent = `${Math.round((style.indentEmu ?? 0) / 9525)}px`;
+    if (style.sizePt) pe.style.fontSize = `${style.sizePt}pt`;
+    else pe.style.removeProperty("font-size");
+    const bullet = pe.querySelector<HTMLElement>(":scope > .bullet");
+    const ch = style.noBullet ? undefined : style.bullet;
+    if (ch) {
+      const span = bullet ?? document.createElement("span");
+      if (!bullet) {
+        span.className = "bullet";
+        pe.prepend(span);
+      }
+      span.textContent = bulletGlyph(ch);
+    } else bullet?.remove();
+    // Keep the caret in the paragraph after restyling.
+    const range = document.createRange();
+    range.selectNodeContents(pe);
+    range.collapse(false);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+    body.focus();
   }
 
   private editCell(td: HTMLElement, shape: Shape): void {
@@ -645,7 +700,7 @@ export class DeckEditor {
       .map((p) => {
         const pe = p as HTMLElement;
         return {
-          level: Math.round(Number(pe.style.paddingLeft.replace("px", "")) / 18) || 0,
+          level: isBodyPlaceholder(shape) ? this.levelOf(pe, shape) : Math.round(Number(pe.style.paddingLeft.replace("px", "")) / 18) || 0,
           align: pe.style.textAlign === "justify" ? "both" : pe.style.textAlign || undefined,
           runs: this.runsOf(pe),
         };

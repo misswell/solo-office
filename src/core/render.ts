@@ -1466,22 +1466,32 @@ function inheritedTextStyle(slide: Slide | undefined, s: Shape, pres: Presentati
 }
 
 /** Wingdings 0x9F draws a filled square; without that face, ▪ is the nearest honest glyph. */
-const bulletGlyph = (ch: string): string => (ch === "\u009f" ? "▪" : ch);
+export const bulletGlyph = (ch: string): string => (ch === "\u009f" ? "▪" : ch);
+
+/** A body-family placeholder inherits the master's levels; a plain text box does not. */
+export const isBodyPlaceholder = (s: Shape): boolean => !!s.placeholder && placeholderFamily(s.placeholder) === "body";
 
 /**
  * A body paragraph's level: the layout's level 1 where it states one, the master's
- * `p:bodyStyle` level otherwise (deeper levels only exist there).
+ * `p:bodyStyle` level otherwise. `a:pPr@lvl` and the model are both zero-based, so
+ * level 0 is the first `lvl1pPr` and level 2 the third.
  */
 function levelStyle(p: SlideParagraph, inh: InhText | undefined, levels: BodyLevel[]): BodyLevel {
-  if (p.level > 0) return levels[p.level - 1] ?? {};
-  const master = levels[0] ?? {};
+  const level = Math.max(0, Math.min(Math.max(0, levels.length - 1), p.level));
+  const own = levels[level] ?? {};
+  if (level > 0) return own;
   return {
-    sizePt: inh?.sizePt ?? master.sizePt,
-    marLEmu: inh?.marLEmu ?? master.marLEmu,
-    indentEmu: inh?.indentEmu ?? master.indentEmu,
-    bullet: inh?.bullet ?? master.bullet,
-    noBullet: inh?.noBullet ?? master.noBullet,
+    sizePt: inh?.sizePt ?? own.sizePt,
+    marLEmu: inh?.marLEmu ?? own.marLEmu,
+    indentEmu: inh?.indentEmu ?? own.indentEmu,
+    bullet: inh?.bullet ?? own.bullet,
+    noBullet: inh?.noBullet ?? own.noBullet,
   };
+}
+
+/** The paint a paragraph gets at a level; the editor's Tab/Shift+Tab restyles through it. */
+export function bodyLevelStyle(slide: Slide | undefined, s: Shape, level: number, pres: Presentation): BodyLevel {
+  return levelStyle({ level, runs: [] }, inheritedTextStyle(slide, s, pres), pres.bodyLevels);
 }
 
 function renderSlideParagraph(p: SlideParagraph, inh?: InhText, levels?: BodyLevel[], body = false): string {
@@ -1494,14 +1504,16 @@ function renderSlideParagraph(p: SlideParagraph, inh?: InhText, levels?: BodyLev
     const marL = Math.round((style.marLEmu ?? 0) / 9525);
     const indent = Math.round((style.indentEmu ?? 0) / 9525);
     css.push(`padding-left:${marL}px`, `text-indent:${indent}px`);
-    if (p.level > 0 && style.sizePt) css.push(`font-size:${style.sizePt}pt`);
+    // The stylesheet's 14px is a fallback for plain shapes; a body placeholder draws at
+    // the master's size for its level (18pt on the first), never at that fallback.
+    if (style.sizePt) css.push(`font-size:${style.sizePt}pt`);
     // A slide's own `a:buChar` wins; otherwise the inherited bullet, unless `a:buNone` suppresses it.
     if (!bullet && !style.noBullet) bullet = style.bullet;
   } else {
     css.push(`padding-left:${p.level * 18}px`);
   }
   const runs = p.runs.map(renderInline).join("");
-  return `<div class="sp-p" style="${css.join(";")}">${bullet ? `<span class="bullet">${esc(bulletGlyph(bullet))}</span>` : ""}${runs || "<br>"}</div>`;
+  return `<div class="sp-p" data-lvl="${p.level}" style="${css.join(";")}">${bullet ? `<span class="bullet">${esc(bulletGlyph(bullet))}</span>` : ""}${runs || "<br>"}</div>`;
 }
 
 function renderShape(s: Shape, pres: Presentation, idx?: number, slide?: Slide): string {

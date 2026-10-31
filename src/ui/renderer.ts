@@ -390,8 +390,9 @@ function buildRibbon(kind: "xlsx" | "docx" | "pptx"): void {
   if (ribbon.dataset.built === kind) return;
   ribbon.dataset.built = kind;
   ribbon.innerHTML = "";
-  // 只有文字那一页是分 tab 的（见 `buildDocRibbon`）；表与演示仍是一条行。
-  ribbon.classList.toggle("tabbed", kind === "docx");
+  // 文字与表格两页都按 WPS 自己的页签条分页（`wpsongmani.kui` / `etongmani.kui` 的 `KRbTabWidgetCommand`
+  // 各声明一套）；演示那一页还是一条行。
+  ribbon.classList.toggle("tabbed", kind !== "pptx");
   for (const key of Object.keys(ctl)) delete ctl[key];
   if (kind === "xlsx") buildSheetRibbon();
   else if (kind === "docx") buildDocRibbon();
@@ -399,12 +400,8 @@ function buildRibbon(kind: "xlsx" | "docx" | "pptx"): void {
 }
 
 function buildSheetRibbon(): void {
-  const group = (): HTMLElement => {
-    const g = document.createElement("div");
-    g.className = "grp";
-    ribbon.append(g);
-    return g;
-  };
+  const shell = ribbonTabs(SHEET_RIBBON_TABS);
+  const group = shell.group;
   const button = (g: HTMLElement, key: string, label: string, tip: string, run: () => void): void => {
     const b = document.createElement("button");
     b.className = "rb";
@@ -445,21 +442,21 @@ function buildSheetRibbon(): void {
     if (grid) run(grid);
   };
 
-  const nav = group();
-  button(nav, "undo", "↶", "撤销 ⌘Z", undo);
-  button(nav, "redo", "↷", "重做 ⌘⇧Z", redo);
+  const nav = group("home");
+  button(nav, "undo", "撤销", "撤销 ⌘Z", undo);
+  button(nav, "redo", "重做", "重做 ⌘⇧Z", redo);
   button(nav, "", "＋行", "在选区上方插入行", () => use((v) => v.line("row", true)));
   button(nav, "", "－行", "删除选中的行", () => use((v) => v.line("row", false)));
   button(nav, "", "＋列", "在选区左侧插入列", () => use((v) => v.line("col", true)));
   button(nav, "", "－列", "删除选中的列", () => use((v) => v.line("col", false)));
 
-  const numbers = group();
+  const numbers = group("home");
   chooser(numbers, "numfmt", "数字格式", NUMFMTS, (v) => use((g) => g.setNumFmt(v)));
   button(numbers, "", "0.", "减少小数位", () => use((v) => v.stepDecimals(-1)));
   button(numbers, "", "0.0+", "增加小数位", () => use((v) => v.stepDecimals(1)));
   button(numbers, "wrap", "换行", "自动换行", () => use((v) => v.toggle("wrap")));
 
-  const font = group();
+  const font = group("home");
   chooser(
     font,
     "size",
@@ -473,7 +470,7 @@ function buildSheetRibbon(): void {
   picker(font, "color", "字体颜色", (v) => use((g) => g.setFontColor(v)));
   picker(font, "fill", "填充颜色", (v) => use((g) => g.setFill(v)));
 
-  const align = group();
+  const align = group("home");
   button(align, "left", "左", "左对齐", () => use((v) => v.setAlign("left")));
   button(align, "center", "中", "水平居中", () => use((v) => v.setAlign("center")));
   button(align, "right", "右", "右对齐", () => use((v) => v.setAlign("right")));
@@ -481,9 +478,7 @@ function buildSheetRibbon(): void {
   button(align, "vmid", "↕", "垂直居中", () => use((v) => v.setValign("center")));
   button(align, "vbot", "下", "底端对齐", () => use((v) => v.setValign("bottom")));
 
-  const cells = group();
-  button(cells, "filter", "筛选", "为选区或当前数据区域启用/关闭筛选", () => use((v) => v.toggleFilter()));
-  button(cells, "", "清除筛选", "显示全部记录并保留筛选按钮", () => use((v) => v.clearFilters()));
+  const cells = group("home");
   button(cells, "", "无框", "清除边框", () => use((v) => v.setBorder("none")));
   button(cells, "", "外框", "绘制外边框", () => use((v) => v.setBorder("box")));
   button(cells, "", "所有框", "绘制全部边框", () => use((v) => v.setBorder("all")));
@@ -491,10 +486,10 @@ function buildSheetRibbon(): void {
   button(cells, "", "拆分", "取消合并", () => use((v) => v.unmergeSelection()));
   button(cells, "", "清格式", "只保留内容", () => use((v) => v.clear("format")));
 
-  const pic = group();
+  const pic = group("insert");
   button(pic, "", "图片", "在当前单元格插入本地图片", () => void pickPicture((url, name, w, h) => grid?.insertPicture(url, w, h, name)));
 
-  const cf = group();
+  const cf = group("home");
   button(cf, "", "色阶", "对选区应用红黄绿三色阶", () => use((v) => v.setColorScale()));
   button(cf, "", "数据条", "对选区应用蓝色数据条", () => use((v) => v.setDataBar()));
   const cfBtn = document.createElement("button");
@@ -506,21 +501,32 @@ function buildSheetRibbon(): void {
   cf.append(cfBtn);
   button(cf, "", "清条件", "清除选区的条件格式", () => use((v) => v.clearCond()));
 
-  const charts = group();
+  const charts = group("insert");
   button(charts, "", "柱状图", "用选区数据插入柱状图", () => use((v) => v.insertChart("bar")));
   button(charts, "", "折线图", "用选区数据插入折线图", () => use((v) => v.insertChart("line")));
   button(charts, "", "饼图", "用选区数据插入饼图", () => use((v) => v.insertChart("pie")));
 
   button(charts, "", "编辑图表", "选择图表后编辑类型、配色、标题和数据区域；也可双击图表", () => use((v) => v.editSelectedChart()));
 
-  ribbon.append(zoomGroup());
-
-  const data = group();
-  button(data, "", "冻结", "在当前位置冻结窗格", () => use((v) => v.freezeHere()));
-  button(data, "", "解冻", "解除冻结窗格", () => use((v) => v.unfreeze()));
+  // 筛选与排序归数据页（`CT_Data.kuip` 的 `RB_Sort_Filter`）；WPS 在开始页另有一份快捷入口，
+  // 家里只留数据页这一处，不让同一条命令在两个页签上各摆一枚。
+  const data = group("data");
+  button(data, "filter", "筛选", "为选区或当前数据区域启用/关闭筛选", () => use((v) => v.toggleFilter()));
+  button(data, "", "清除筛选", "显示全部记录并保留筛选按钮", () => use((v) => v.clearFilters()));
   button(data, "", "升序", "按当前列升序排列选区", () => use((v) => v.sortSelection(false)));
   button(data, "", "降序", "按当前列降序排列选区", () => use((v) => v.sortSelection(true)));
-  button(data, "", "查找", "查找与替换 ⌘F", openFind);
+
+  // 冻结窗格与缩放归视图页：`CT_View.kuip` 的 `RB_Workbook_View`(FreezePanes…) 与 `RB_Zoom`(Zoom)。
+  const view = group("view");
+  button(view, "", "冻结", "在当前位置冻结窗格", () => use((v) => v.freezeHere()));
+  button(view, "", "解冻", "解除冻结窗格", () => use((v) => v.unfreeze()));
+  shell.bars["view"]!.append(zoomGroup());
+
+  // 查找属开始页的 `RB_Editing`。
+  const editing = group("home");
+  button(editing, "", "查找", "查找与替换 ⌘F", openFind);
+
+  shell.sync();
 }
 
 /** 字体框的下拉数据源。`<datalist>` 挂在 body 上、不占版面；聚焦时才按当前文档刷一遍，因为「这份文件用过哪些脸」
@@ -569,6 +575,22 @@ const DOC_RIBBON_TABS: [string, string][] = [
   ["table", "表格工具"],
 ];
 
+/**
+ * 表格页的页签次序，照 `res/etongmani.kui` 的 `<KRbTabWidgetCommand id="tabwidget">`：
+ * `CT_Home → CT_Insert → CT_Layout → CT_Formulas → CT_Data → CT_Review → CT_View → CT_Tools`（其后是加载项/安全/工作区）。
+ * 组归哪页按 `res/commands/et/ongmani/CT_*.kuip` 的组 id：`RB_Font`/`RB_Number`/`RB_Alignment`/`RB_Border`/
+ * `RB_SheetTool`/`RB_Editing`/`RB_ConditionalFormatting` 在开始页；`RB_Illustrations`（图片、图表）在插入页；
+ * `RB_Sort_Filter` 在数据页；`RB_Workbook_View`（冻结窗格）与 `RB_Zoom` 在视图页。
+ * 只摆有命令的四档：公式/审阅/工具页今天没有命令，摆一张空页只是给人一条按不动的路。
+ * 中文页名与文字页一样是自家措辞——`.kuip` 只给英文 source（`text="@Home"`），界面字面在读不出来的 `.qm` 里。
+ */
+const SHEET_RIBBON_TABS: [string, string][] = [
+  ["home", "开始"],
+  ["insert", "插入"],
+  ["data", "数据"],
+  ["view", "视图"],
+];
+
 /** 表格工具页上的命令控件：光标出表时页签退场，这几枚也一律灰着（键盘走得到，不能留一条能按的命令）。 */
 const TABLE_TOOL_KEYS = [
   "rowAbove", "rowBelow", "colLeft", "colRight", "insertCellKind", "delRow", "delCol", "delTable", "deleteCellKind",
@@ -576,7 +598,7 @@ const TABLE_TOOL_KEYS = [
   "cellHeight", "cellWidth", "distributeRows", "distributeCols",
   "tblFace", "tblSize", "tblBold", "tblItalic", "tblUnder", "tblColor", "tblHl",
   "tblTop", "tblMid", "tblBot", "tblLeft", "tblCenter", "tblRight",
-  "repeatHeader", "convertTable",
+  "repeatHeader", "convertTable", "sortRows",
   "selectCell", "selectCol", "selectRow", "selectTable",
 ] as const;
 
@@ -645,31 +667,34 @@ const pageSetupOf = (s: Section, patch: Partial<PageSetup>): PageSetup => ({
   ...patch,
 });
 
-/** Word-style formatting: run styling over the selection, paragraph shape for the whole paragraph. */
-function buildDocRibbon(): void {
-  // WPS 把文档命令分在几页上：`res/wpsongmani.kui:114-122` 在 `<KRbTabWidgetCommand id="tabwidget">` 里按序声明
-  // CT_Home → CT_Insert → CT_PageLayout → CT_References → CT_Review → CT_View，每支 `CT_*.kuip` 只列自己那页的组。
-  // 自家这 11 组横着排到头，装机件里量到的是内容 2,664 px 对可视 1,280 px——「页面设置」往后的那几枚根本点不到。
-  // 所以同一种分法：一条 tab 条 + 每页一行组。组归哪页按 WPS 那份组清单（`CT_View.kuip` 的 `RB_Show`/`RB_Zoom`
-  // 挂着 `sp_ShowDocumentMap` 与 `ZoomToolBar`，导航窗格和缩放就归视图页）。引用页没挂：家里还没有它的命令。
-  // 页名用自家的话——`.kuip` 只给英文 source（`text="@Home"`），中文界面字面在读不出来的 `.qm` 里，仍**未取证**。
+/**
+ * 分页 ribbon 的壳：一条页签 + 每页一行组，右边一枚溢出箭头。文字页与表格页共用。
+ * 装不下的那一档要给一枚看得见的箭头：不给，用户看到的是一枚被切一半的按钮，说不出「这一行右边还有东西、能滚」。
+ * WPS 那边「单行放不下」确有声明，但形状不同：装机件 `res/commands/wps/ongmani/CT_*.kuip` 量到 515 个
+ * `<K*ListCommand>` 组声明，其中 30 个带 `needsinglerowmorebutton="true"`（如 `CT_Home.kuip:105 RB_Font`、
+ * `:367 RB_Paragraph`）——它声明在**组**上，这一枚挂在**整行**右端，是已知差别，不按同物引用。
+ * `res/wpsongmani.kui:113` 的 tab 条上另有 `idKey="CommonLogicGroupShowArrow"`：名字带 ShowArrow，指的是档名条
+ * 还是组行**未取证**。滚到最右那一枚自己退场——最后一组整个进来了，留着只会挡字。
+ */
+function ribbonTabs(list: readonly [string, string][]): {
+  group: (tab: string) => HTMLElement;
+  showTab: (key: string) => void;
+  bars: Record<string, HTMLElement>;
+  tabs: Record<string, HTMLButtonElement>;
+  shown: () => string;
+  sync: () => void;
+} {
   const strip = document.createElement("div");
   strip.className = "rtabs";
   ribbon.append(strip);
   const bars: Record<string, HTMLElement> = {};
   const tabs: Record<string, HTMLButtonElement> = {};
-  let shown = "home";
-  // 装不下的那一档要给一枚看得见的箭头：不给，用户看到的是一枚被切一半的按钮，说不出「这一行右边还有东西、能滚」。
-  // WPS 那边「单行放不下」确有声明，但形状不同：装机件 `res/commands/wps/ongmani/CT_*.kuip` 量到 515 个
-  // `<K*ListCommand>` 组声明，其中 30 个带 `needsinglerowmorebutton="true"`（如 `CT_Home.kuip:105 RB_Font`、
-  // `:367 RB_Paragraph`）——它声明在**组**上，这一枚挂在**整行**右端，是已知差别，不按同物引用。
-  // `res/wpsongmani.kui:113` 的 tab 条上另有 `idKey="CommonLogicGroupShowArrow"`：名字带 ShowArrow，指的是档名条
-  // 还是组行**未取证**。滚到最右那一枚自己退场——最后一组整个进来了，留着只会挡字。
+  let shown = list[0]![0];
   const more = document.createElement("button");
   more.className = "rover";
   more.textContent = "›";
   more.title = "这一档右边还有命令，点一下滚过去";
-  const syncOverflow = (): void => {
+  const sync = (): void => {
     const bar = bars[shown];
     const room = bar.scrollWidth - bar.clientWidth;
     more.hidden = room <= 1 || bar.scrollLeft >= room - 1;
@@ -677,29 +702,30 @@ function buildDocRibbon(): void {
   more.onclick = () => {
     const bar = bars[shown];
     bar.scrollLeft += Math.max(120, Math.floor(bar.clientWidth * 0.8));
-    syncOverflow();
+    sync();
   };
   // 这一枚是随重建生成的：`buildRibbon()` 每趟先 `innerHTML = ""`，监听不跟着收就会一次切档多留一个。
   overflowAbort?.abort();
   overflowAbort = new AbortController();
-  window.addEventListener("resize", syncOverflow, { signal: overflowAbort.signal });
+  window.addEventListener("resize", sync, { signal: overflowAbort.signal });
   const showTab = (key: string): void => {
     shown = key;
-    for (const [k] of DOC_RIBBON_TABS) {
-      bars[k].hidden = k !== key;
-      tabs[k].classList.toggle("on", k === key);
-      tabs[k].setAttribute("aria-selected", k === key ? "true" : "false");
+    for (const [k] of list) {
+      bars[k]!.hidden = k !== key;
+      tabs[k]!.classList.toggle("on", k === key);
+      tabs[k]!.setAttribute("aria-selected", k === key ? "true" : "false");
     }
-    bars[key].scrollLeft = 0;
-    syncOverflow();
+    bars[key]!.scrollLeft = 0;
+    sync();
   };
-  for (const [key, label] of DOC_RIBBON_TABS) {
+  for (const [key, label] of list) {
     const bar = document.createElement("div");
     bar.className = "rbar";
     bar.dataset.tab = key;
     bar.hidden = true;
     bars[key] = bar;
     ribbon.append(bar);
+    bar.addEventListener("scroll", sync, { passive: true });
     const t = document.createElement("button");
     t.className = "rtab";
     t.textContent = label;
@@ -708,16 +734,31 @@ function buildDocRibbon(): void {
     tabs[key] = t;
     strip.append(t);
   }
-  // 表格工具页是**上下文页**：`syncDocRibbon` 每趟按光标问它该不该露，露着的那一页在光标离开时要退回开始页。
-  // 那个函数在模块那一层，所以开关得从这里交出去。
-  tableTab = { button: tabs.table!, shown: () => shown, show: showTab };
-  showTab(shown);
+  // 箭头排在各档之后（它自己不在 `.rbar` 里，所以不占任何一组的控件数）。
+  ribbon.append(more);
   const group = (tab: string): HTMLElement => {
     const g = document.createElement("div");
     g.className = "grp";
-    bars[tab].append(g);
+    bars[tab]!.append(g);
     return g;
   };
+  showTab(shown);
+  return { group, showTab, bars, tabs, shown: () => shown, sync };
+}
+
+/** Word-style formatting: run styling over the selection, paragraph shape for the whole paragraph. */
+function buildDocRibbon(): void {
+  // WPS 把文档命令分在几页上：`res/wpsongmani.kui:114-122` 在 `<KRbTabWidgetCommand id="tabwidget">` 里按序声明
+  // CT_Home → CT_Insert → CT_PageLayout → CT_References → CT_Review → CT_View，每支 `CT_*.kuip` 只列自己那页的组。
+  // 自家这 11 组横着排到头，装机件里量到的是内容 2,664 px 对可视 1,280 px——「页面设置」往后的那几枚根本点不到。
+  // 所以同一种分法：一条 tab 条 + 每页一行组。组归哪页按 WPS 那份组清单（`CT_View.kuip` 的 `RB_Show`/`RB_Zoom`
+  // 挂着 `sp_ShowDocumentMap` 与 `ZoomToolBar`，导航窗格和缩放就归视图页）。引用页没挂：家里还没有它的命令。
+  // 页名用自家的话——`.kuip` 只给英文 source（`text="@Home"`），中文界面字面在读不出来的 `.qm` 里，仍**未取证**。
+  const shell = ribbonTabs(DOC_RIBBON_TABS);
+  // 表格工具页是**上下文页**：`syncDocRibbon` 每趟按光标问它该不该露，露着的那一页在光标离开时要退回开始页。
+  // 那个函数在模块那一层，所以开关得从这里交出去。
+  tableTab = { button: shell.tabs.table!, shown: shell.shown, show: shell.showTab };
+  const group = shell.group;
   const button = (g: HTMLElement, key: string, label: string, tip: string, run: () => void): void => {
     const b = document.createElement("button");
     b.className = "rb";
@@ -784,8 +825,8 @@ function buildDocRibbon(): void {
     editor?.copyFormat();
     syncDocRibbon();
   });
-  button(nav, "undo", "↶", "撤销 ⌘Z", () => undo());
-  button(nav, "redo", "↷", "重做 ⌘⇧Z", () => redo());
+  button(nav, "undo", "撤销", "撤销 ⌘Z", () => undo());
+  button(nav, "redo", "重做", "重做 ⌘⇧Z", () => redo());
   button(nav, "", "全选", "选中整篇", () => selectAllDoc());
 
   const font = group("home");
@@ -969,13 +1010,14 @@ function buildDocRibbon(): void {
   // dialogHint="1" idMso="Tabs" ksoCmd="Tabs" icon="ruler_format_tabs_kd" text="@Tabs"/>`——`dialogHint="1"` 说明
   // 这一条按下开的是**一张对话框**，不是一个开关。这张页面上没有可回显的「哪一档」：一段的制表位是一列位置，
   // 说不出单选，所以这一枚不认领 `ctl`（同查找替换那两枚）。
-  button(align, "", "制表位", "制表位：这一段那一列位置、对齐与前导符，加件级的默认制表位", () => editor?.openTabStops());
   // WPS 的 `m_ShowHideEditMark`（`CT_Home.kuip:337`，与制表位同一组）声明了三条子项：段落标记、段落布局、小十字。
   // 只接了第一条：段落标记是**视图档**（见 `showEditMarks`），后两条画成什么样未取证，不摆。
+  // 次序照 `CT_Home.kuip:314-315`：`m_ShowHideEditMark` 在前、`Tabs` 在后，所以这一枚要压在制表位之前。
   button(align, "editmarks", "¶", "显示或隐藏编辑标记：段落末尾的 ¶（WPS：显示/隐藏编辑标记 · 段落标记）；只影响屏幕，不改文件", () => {
     showEditMarks = !showEditMarks;
     syncDocRibbon();
   });
+  button(align, "", "制表位", "制表位：这一段那一列位置、对齐与前导符，加件级的默认制表位", () => editor?.openTabStops());
 
   const lists = group("home");
   button(lists, "bullet", "• 符号", "项目符号", () => editor?.setParagraph({ list: "bullet" }));
@@ -1348,12 +1390,10 @@ function buildDocRibbon(): void {
     syncDocRibbon();
   });
   // 缩放另起一组，不塞进导航窗格那一组里：WPS 那一页把 `ZoomToolBar` 单挂在 `RB_Zoom`。
-  bars["view"].append(zoomGroup());
+  shell.bars["view"]!.append(zoomGroup());
 
-  // 箭头排在各档之后（它自己不在 `.rbar` 里，所以不占任何一组的控件数），每一行滚起来都要刷它的隐现。
-  ribbon.append(more);
-  for (const bar of Object.values(bars)) bar.addEventListener("scroll", syncOverflow, { passive: true });
-  syncOverflow();
+  // 各档的组都进来了，这一趟量准箭头的隐现（之后 resize / 滚动会自己刷新）。
+  shell.sync();
   // 测量单位换了，`RB_Page_Setup` 那四格的字面口径就跟着换：回显只有一条路，就是再跑一遍 `syncDocRibbon`。
   // 标尺上那排数字也是一句「按哪个单位读」，所以同一趟把刻度重画一遍（`refreshRuler` 只改视图，不碰件）。
   // 这一枚订阅归本趟重建持有，先收上一趟的，不然每开一个文档就多留一个监听。
@@ -1694,8 +1734,8 @@ function buildDeckRibbon(): void {
   };
 
   const nav = group();
-  button(nav, "undo", "↶", "撤销 ⌘Z", () => undo());
-  button(nav, "redo", "↷", "重做 ⌘⇧Z", () => redo());
+  button(nav, "undo", "撤销", "撤销 ⌘Z", () => undo());
+  button(nav, "redo", "重做", "重做 ⌘⇧Z", () => redo());
 
   const pages = group();
   button(pages, "", "＋新页", "在当前页后新建一页", () => deck?.addSlide());

@@ -876,7 +876,7 @@ function smoke(): void {
         await wait(340);
         const tblReclickSame = ringBottom(ringOf("甲")) === tblAfter ? 1 : 0;
         const ribbonBtn = (label) => [...document.querySelectorAll("#ribbon button")].find((b) => b.textContent === label);
-        const tblUndo = ribbonBtn("↶") ? (ribbonBtn("↶").click(), 1) : 0;
+        const tblUndo = ribbonBtn("撤销") ? (ribbonBtn("撤销").click(), 1) : 0;
         await wait(340);
         const tblAfterUndo = ringBottom(ringOf("甲"));
         // #148：历史里那一条记的是两端，撤销该把那条跨格选区整条铺回来。量此刻页面里那条选区自己的两端
@@ -893,7 +893,7 @@ function smoke(): void {
           const z = inCell(r.endContainer);
           return a && z && a !== z && (a.textContent ?? "").includes("甲") && (z.textContent ?? "").includes("末") ? 1 : 0;
         })();
-        const tblRedo = ribbonBtn("↷") ? (ribbonBtn("↷").click(), 1) : 0;
+        const tblRedo = ribbonBtn("重做") ? (ribbonBtn("重做").click(), 1) : 0;
         await wait(340);
         const tblAfterRedo = ringBottom(ringOf("甲"));
         // 光标退回一格：那一层说的是格（十一档），落点从 table 那一圈换到那一格自己那一圈的顶缝。
@@ -3505,7 +3505,7 @@ function smoke(): void {
           csPick("切换大小写");
           await wait(260);
           const csDingToggled = { text: csText("丁组"), look: csLook("丁组") };
-          [...document.querySelectorAll("#ribbon button.rb")].find((b) => (b.textContent ?? "").trim() === "↶")?.click();
+          [...document.querySelectorAll("#ribbon button.rb")].find((b) => (b.textContent ?? "").trim() === "撤销")?.click();
           await wait(260);
           const csDingUndone = { text: csText("丁组"), look: csLook("丁组") };
           if (csTrack0) {
@@ -3639,7 +3639,7 @@ function smoke(): void {
         // ② 对话框那一段样式跟着打包件上身了没有（.solo-ts-dialog 的宽度、那枚「确定」的底色）；
         // ③ 一次「确定」之后**真铺排**下纸上那一枚的落点，与写回盘上的那两句（w:tabs、settings.xml 的
         //   w:defaultTabStop——纸与盘两条账各管各的，谁也不替谁背书）；
-        // ④ 撤销与重做在打包件的栈上是**一整件事**：↶ 一次纸上退回去，↷ 一次又落回来。
+        // ④ 撤销与重做在打包件的栈上是**一整件事**：「撤销」一次纸上退回去，「重做」一次又落回来。
         // ⑤ 「改了才报脏」的反面：取消、填错、原样确定三条都不许动那一枚 ●，真落笔的那一条必须动。
         //   进这一条时纸已经脏着——在它前面的腿（docPart 打字、画者拖动）各自验的正是「改了字节要报脏」，
         //   所以起手先存一次把 ● 清零（dirty.baseline），后面每一格读数才是绝对口径，不是两笔脏的差。
@@ -3839,11 +3839,11 @@ function smoke(): void {
             await wait(300);
             segEdited = tsSeg("甲起", 0);
             dAfterEdit = tsDirty();
-            tsRb("↶")?.click();
+            tsRb("撤销")?.click();
             await wait(300);
             segUndone = tsSeg("甲起", 0);
             dAfterUndo = tsDirty();
-            tsRb("↷")?.click();
+            tsRb("重做")?.click();
             await wait(300);
             segRedone = tsSeg("甲起", 0);
             // 默认制表位：件级那一句改成 720（丙段整段没写位，纸上那一枚走的正是这一格）。
@@ -4906,10 +4906,10 @@ function smoke(): void {
         document.querySelector(".chart-apply")?.click();
         await wait(180);
         const appliedTitle = document.querySelector(".sheet-chart svg")?.textContent.includes("图表编辑探针");
-        rb("↶")?.click();
+        rb("撤销")?.click();
         await wait(100);
         const undoTitle = !document.querySelector(".sheet-chart svg")?.textContent.includes("图表编辑探针");
-        rb("↷")?.click();
+        rb("重做")?.click();
         await wait(100);
         const redoTitle = document.querySelector(".sheet-chart svg")?.textContent.includes("图表编辑探针");
         // Saved chart caches must follow subsequent cell edits.
@@ -4935,9 +4935,9 @@ function smoke(): void {
         draggedChart?.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, clientX: 544, clientY: 375 }));
         await wait(100);
         const resized = parseFloat(document.querySelector(".sheet-chart")?.style.width || "0") > originalWidth;
-        rb("↶")?.click(); await wait(100);
+        rb("撤销")?.click(); await wait(100);
         const undoSize = Math.abs(parseFloat(document.querySelector(".sheet-chart")?.style.width || "0") - originalWidth) < .01;
-        rb("↷")?.click(); await wait(100);
+        rb("重做")?.click(); await wait(100);
         draggedChart = document.querySelector(".sheet-chart");
         const beforeCancel = draggedChart?.style.left;
         draggedChart?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, clientX: 400, clientY: 200 }));
@@ -4960,6 +4960,59 @@ function smoke(): void {
         await wait(150);
         const zoomLabel = document.querySelector("#ribbon .grp button[title='恢复 100%']")?.textContent;
         const sheetZoom = { zoomLabel };
+        // Cell borders (#237): the ribbon's three presets land on the selection's four sides.
+        // Read computed styles, with the sheet's own grid line counting as "no cell border";
+        // the run then saves with the box applied so an independent reader can see it on disk.
+        tap("D1")?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
+        await wait(60);
+        tap("D3")?.dispatchEvent(new PointerEvent("pointermove", { bubbles: true }));
+        await wait(60);
+        document.querySelector(".sheet-wrap")?.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+        await wait(80);
+        const sheetEdge = (ref) => {
+          const el = tap(ref);
+          if (!el) return "";
+          const cs = getComputedStyle(el);
+          return ["top", "right", "bottom", "left"].map((s) => {
+            const w = cs.getPropertyValue("border-" + s + "-width");
+            const c = cs.getPropertyValue("border-" + s + "-color");
+            return w === "0px" || c === "rgb(220, 223, 228)" ? "0" : w + " " + cs.getPropertyValue("border-" + s + "-style") + " " + c;
+          }).join(" | ");
+        };
+        rb("所有框")?.click();
+        await wait(150);
+        const borderOn = sheetEdge("D2");
+        rb("无框")?.click();
+        await wait(150);
+        const borderOff = sheetEdge("D2");
+        rb("所有框")?.click();
+        await wait(150);
+        const sheetBorder = { on: borderOn, off: borderOff, first: sheetEdge("D1"), last: sheetEdge("D3") };
+        // 页签条（#238）：表格页按 WPS etongmani.kui 的 KRbTabWidgetCommand 分页，四档各自的命令
+        // 要真落在自己那一档里；换档只留一档可见；撤销/重做是字面不是箭头字形（箭头在本机字栈里是豆腐块）。
+        const sheetTabs = [...document.querySelectorAll("#ribbon .rtabs button")];
+        const barHas = (key, labels) => {
+          const bar = document.querySelector("#ribbon .rbar[data-tab='" + key + "']");
+          const own = bar ? [...bar.querySelectorAll("button")].map((b) => b.textContent) : [];
+          return labels.every((t) => own.includes(t));
+        };
+        const dataTabBtn = sheetTabs.find((b) => b.textContent === "数据");
+        dataTabBtn?.click();
+        await wait(60);
+        const sheetRibbon = {
+          tabs: sheetTabs.map((b) => b.textContent).join("/"),
+          home: barHas("home", ["撤销", "重做", "所有框", "色阶", "查找"]),
+          insert: barHas("insert", ["图片", "柱状图", "编辑图表"]),
+          data: barHas("data", ["筛选", "清除筛选", "升序", "降序"]),
+          view: barHas("view", ["冻结", "解冻"]),
+          oneBar: [...document.querySelectorAll("#ribbon .rbar")].filter((el) => el.hidden !== true).length === 1,
+          ariaOnData: dataTabBtn?.getAttribute("aria-selected") === "true",
+          dataBarShown: document.querySelector("#ribbon .rbar[data-tab='data']")?.hidden !== true,
+          tofu: [...document.querySelectorAll("#ribbon button")].some((b) => /[↶↷]/.test(b.textContent || "")),
+          overflow: !!document.querySelector("#ribbon .rover"),
+        };
+        sheetTabs[0]?.click();
+        await wait(60);
         // Persist the fill, the picture and the zoom state, so the saved file can
         // be checked by an independent reader (openpyxl) after the run.
         fire("solo:save");
@@ -4987,7 +5040,7 @@ function smoke(): void {
         const recovered = { cells: document.querySelectorAll(".sheet-wrap td").length, title: document.getElementById("title")?.textContent };
         // The run ends on a modified document, so quitting goes through the unsaved prompt.
         // A PDF the export asked for shows up in saveAsWrites, next to the pptx/xlsx saves.
-        return { docPart, bandLeg, bandTabsLeg, editMarksLeg, sortLeg, rowSplitLeg, rulerLeg, painterLeg, leaderLeg, tabStopsLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, clearLeg, styleLeg, vertLeg, caseLeg, origLeg, origTableLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
+        return { docPart, bandLeg, bandTabsLeg, editMarksLeg, sortLeg, rowSplitLeg, rulerLeg, painterLeg, leaderLeg, tabStopsLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, clearLeg, styleLeg, vertLeg, caseLeg, origLeg, origTableLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, sheetBorder, sheetRibbon, docNewPart, errorState, recovered };
       })()`;
       void last?.webContents
         .executeJavaScript(probe)

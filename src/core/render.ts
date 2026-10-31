@@ -1617,7 +1617,7 @@ function renderShape(s: Shape, pres: Presentation, idx?: number, slide?: Slide):
   }
   if (s.fill) style.push(`background:${s.fill}`);
   if (s.lineColor) style.push(`border:${Math.max(1, s.lineWidth ?? 1)}px ${dashStyle(s.dash)} ${s.lineColor}`);
-  if (s.geometry && s.geometry !== "rect") style.push(`clip-path:${clipFor(s.geometry)}`);
+  if (s.geometry && s.geometry !== "rect") style.push(...presetOutline(s.geometry, s));
   const inh = inheritedTextStyle(slide, s, pres);
   const body = !!s.placeholder && placeholderFamily(s.placeholder) === "body";
   const own1 = s.textLevels?.[0];
@@ -1656,6 +1656,67 @@ function dashStyle(dash: string | undefined): string {
   if (dash === "dot" || dash === "sysDot") return "dotted";
   if (dash === "solid") return "solid";
   return "dashed";
+}
+
+/**
+ * A preset shape's outline. `a:prstGeom/a:avLst` moves the points of the adjustable
+ * presets; the others keep their own default proportions. A preset CSS cannot express
+ * draws its box unclipped instead of emitting an empty `clip-path`.
+ */
+function presetOutline(geom: string, s: Shape): string[] {
+  const w = Math.max(0, s.width);
+  const h = Math.max(0, s.height);
+  const ss = Math.min(w, h);
+  const adj = s.adjustments ?? {};
+  const stated = (name: string, fallback: number): number => (Number.isFinite(adj[name]) ? adj[name] : fallback);
+  switch (geom) {
+    case "trapezoid": {
+      // `adj` is the top inset in 1/100000 of the short side; the preset caps it at
+      // `maxAdj = 50000·h/ss` so the top edge stops at the middle. WPS writes values
+      // past that cap (57534/58980), which clamp to the same half-width top.
+      const cap = ss > 0 ? (50000 * h) / ss : 0;
+      const inset = (ss * Math.max(0, Math.min(stated("adj", 25000), cap))) / 100000;
+      return [`clip-path:polygon(${pct(inset, w)} 0,${pct(w - inset, w)} 0,100% 100%,0 100%)`];
+    }
+    case "round2DiagRect": {
+      // Two rounded corners on one diagonal: `adj1` is the top-left radius, `adj2` the
+      // bottom-right one, each in 1/100000 of the short side and capped at half of it.
+      const radius = (name: string, fallback: number): number =>
+        (ss * Math.max(0, Math.min(stated(name, fallback), 50000))) / 100000;
+      return [`border-radius:${radius("adj1", 16667).toFixed(2)}px 0 ${radius("adj2", 0).toFixed(2)}px 0`];
+    }
+    case "blockArc": {
+      // `adj1`/`adj2` are start/end angles in 1/60000 degree, clockwise from 3 o'clock;
+      // `adj3` is the band's width in 1/100000 of the short side. Equal angles are the
+      // full circle, as the preset's own formulas say (sw13 = sw11 + 21600000).
+      const start = stated("adj1", 16200000) / 60000;
+      const diff = (stated("adj2", 0) / 60000 - start) % 360;
+      const sweep = (diff < 0 ? diff + 360 : diff) || 360;
+      const band = (ss * Math.max(0, Math.min(stated("adj3", 25000), 50000))) / 100000;
+      const rx = w / 2;
+      const ry = h / 2;
+      const irx = Math.max(0, rx - band);
+      const iry = Math.max(0, ry - band);
+      const steps = Math.max(2, Math.ceil(sweep / 5));
+      const point = (cx: number, cy: number, ax: number, ay: number, deg: number): string => {
+        const rad = (deg * Math.PI) / 180;
+        return `${pct(cx + ax * Math.cos(rad), w)} ${pct(cy + ay * Math.sin(rad), h)}`;
+      };
+      const points: string[] = [];
+      for (let i = 0; i <= steps; i++) points.push(point(rx, ry, rx, ry, start + (sweep * i) / steps));
+      for (let i = steps; i >= 0; i--) points.push(point(rx, ry, irx, iry, start + (sweep * i) / steps));
+      return [`clip-path:polygon(${points.join(",")})`];
+    }
+    default: {
+      const clip = clipFor(geom);
+      return clip ? [`clip-path:${clip}`] : [];
+    }
+  }
+}
+
+/** A length as a percentage of its axis, for `polygon()`/`clip-path` points. */
+function pct(value: number, total: number): string {
+  return total > 0 ? `${((value / total) * 100).toFixed(2)}%` : "0%";
 }
 
 function clipFor(geom: string): string {

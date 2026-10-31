@@ -92,6 +92,8 @@ export interface Shape {
   flipH?: boolean;
   flipV?: boolean;
   geometry?: string;
+  /** `a:prstGeom/a:avLst`: the preset's adjustments by `a:gd@name`, as the `val` formulas state them. */
+  adjustments?: Record<string, number>;
   fill?: string;
   lineColor?: string;
   lineWidth?: number;
@@ -491,6 +493,7 @@ export class Presentation {
       ...base,
       textBox: attr(find(nv, "cNvSpPr"), "txBox") === "1" || undefined,
       geometry: geom(spPr),
+      adjustments: adjustments(spPr),
       fill: solidHex(find(spPr, "solidFill"), resolve),
       lineColor: solidHex(find(ln, "solidFill"), resolve),
       lineWidth: attr(ln, "w") ? Number(attr(ln, "w")) / EMU_PER_PX : undefined,
@@ -1029,6 +1032,20 @@ function textOf(t: any): string {
 
 function geom(spPr: any): string | undefined {
   return attr(find(spPr, "prstGeom"), "prst");
+}
+
+/**
+ * `a:avLst` holds one `a:gd` per adjustment, either `val N` or a formula over other
+ * adjustments. Only the literal form is a value the file states; a formula is resolved
+ * by the preset, so it stays out of the model.
+ */
+function adjustments(spPr: any): Record<string, number> | undefined {
+  const out: Record<string, number> = {};
+  for (const gd of findAll(find(find(spPr, "prstGeom"), "avLst"), "gd")) {
+    const m = /^val\s+(-?\d+(?:\.\d+)?)$/.exec(String(attr(gd, "fmla") ?? ""));
+    if (m) out[String(attr(gd, "name") ?? "")] = Number(m[1]);
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 /** A fill/line colour as `#RRGGBB`; a theme reference goes through `resolve`. */

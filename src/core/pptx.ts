@@ -173,6 +173,8 @@ export class Presentation {
   ]);
   /** CSS background per layout/master part; every slide on that part inherits the same value. */
   private bgCache = new Map<string, string | undefined>();
+  /** Master placeholders by part, the geometry a layout leaves to its master. */
+  private masterPlaceholderCache = new Map<string, LayoutPlaceholder[]>();
 
   get slideWidthPx(): number {
     return this.slideWidthEmu / EMU_PER_PX;
@@ -504,7 +506,7 @@ export class Presentation {
     if (!path) return undefined;
     if (this.pkg) {
       const xml = this.pkg.text(path);
-      return xml ? parseLayoutPlaceholders(xml) : undefined;
+      return xml ? parseLayoutPlaceholders(xml, this.masterPlaceholdersOf(path)) : undefined;
     }
     const m = /slideLayout(\d+)\.xml$/.exec(path);
     const def = m ? BLANK_LAYOUTS[Number(m[1]) - 1] : undefined;
@@ -525,6 +527,21 @@ export class Presentation {
         indentEmu: p.zeroIndent ? 0 : undefined,
         noBullet: p.noBullet,
       }));
+  }
+
+  /** The master's placeholders: the geometry a layout borrows where it states no transform. */
+  private masterPlaceholdersOf(layoutPath: string): LayoutPlaceholder[] | undefined {
+    const pkg = this.pkg;
+    if (!pkg) return undefined;
+    const rel = [...pkg.rels(layoutPath).values()].find((r) => r.type.endsWith("/slideMaster"));
+    if (!rel) return undefined;
+    const path = pkg.resolve(layoutPath, rel);
+    const cached = this.masterPlaceholderCache.get(path);
+    if (cached) return cached;
+    const xml = pkg.parts.has(path) ? pkg.text(path) : undefined;
+    const list = xml ? parseLayoutPlaceholders(xml) : [];
+    this.masterPlaceholderCache.set(path, list);
+    return list;
   }
 
   /** Level-1 title/body sizes and the body's nine levels from the master `p:txStyles`. */
@@ -677,22 +694,41 @@ function shadeHex(hex: string, factor: number): string {
   return `#${channel(1)}${channel(3)}${channel(5)}`;
 }
 
-/** Placeholders a layout declares with geometry of its own; the ones that inherit from the master are skipped. */
-function parseLayoutPlaceholders(xml: string): LayoutPlaceholder[] {
+/**
+ * Placeholders a layout or master declares. A content placeholder that states no transform
+ * borrows its geometry from `master` (idx first, then type): WPS leaves 111 title/body
+ * placeholders of its 330 layouts to the master. The footer, date and slide-number
+ * placeholders also live only on the master, but nothing here draws them, so they stay out.
+ */
+function parseLayoutPlaceholders(xml: string, master?: LayoutPlaceholder[]): LayoutPlaceholder[] {
   const spTree = rawFind(parseOrderedXml(xml), "spTree");
   const out: LayoutPlaceholder[] = [];
   for (const entry of spTree ? rawChildren(spTree) : []) {
     if (tagLocalOf(entry) !== "sp") continue;
     const nv = rawFind(rawChildren(entry), "nvSpPr");
     const ph = nv ? rawFind(rawChildren(nv), "ph") : undefined;
+    if (!ph) continue;
     const spPr = rawFind(rawChildren(entry), "spPr");
     const xfrm = spPr ? rawFind(rawChildren(spPr), "xfrm") : undefined;
     const off = xfrm ? rawFind(rawChildren(xfrm), "off") : undefined;
     const ext = xfrm ? rawFind(rawChildren(xfrm), "ext") : undefined;
-    if (!ph || !off || !ext) continue;
     const a = rawAttrs(ph);
-    const o = rawAttrs(off);
-    const e = rawAttrs(ext);
+    const type = a["@_type"];
+    const idx = a["@_idx"] !== undefined ? Number(a["@_idx"]) : undefined;
+    const content = type === undefined || ["title", "ctrTitle", "subTitle", "body", "obj"].includes(type);
+    const geometry =
+      off && ext
+        ? {
+            x: Number(rawAttrs(off)["@_x"] ?? 0) / EMU_PER_PX,
+            y: Number(rawAttrs(off)["@_y"] ?? 0) / EMU_PER_PX,
+            width: Number(rawAttrs(ext)["@_cx"] ?? 0) / EMU_PER_PX,
+            height: Number(rawAttrs(ext)["@_cy"] ?? 0) / EMU_PER_PX,
+          }
+        : content
+          ? ((idx !== undefined ? master?.find((p) => p.idx === idx) : undefined) ??
+            master?.find((p) => (p.type ?? "obj") === (type ?? "obj")))
+          : undefined;
+    if (!geometry) continue;
     const txBody = rawFind(rawChildren(entry), "txBody");
     const bodyPr = txBody ? rawFind(rawChildren(txBody), "bodyPr") : undefined;
     const lst = txBody ? rawFind(rawChildren(txBody), "lstStyle") : undefined;
@@ -702,12 +738,12 @@ function parseLayoutPlaceholders(xml: string): LayoutPlaceholder[] {
     const lvlA = rawAttrs(lvl1 ?? {});
     const buChar = lvl1 ? rawFind(rawChildren(lvl1), "buChar") : undefined;
     out.push({
-      type: a["@_type"],
-      idx: a["@_idx"] !== undefined ? Number(a["@_idx"]) : undefined,
-      x: Number(o["@_x"] ?? 0) / EMU_PER_PX,
-      y: Number(o["@_y"] ?? 0) / EMU_PER_PX,
-      width: Number(e["@_cx"] ?? 0) / EMU_PER_PX,
-      height: Number(e["@_cy"] ?? 0) / EMU_PER_PX,
+      type,
+      idx,
+      x: geometry.x,
+      y: geometry.y,
+      width: geometry.width,
+      height: geometry.height,
       sizePt: Number.isFinite(sz) && sz > 0 ? sz / 100 : undefined,
       align: lvl1 ? ALGN_IN[lvlA["@_algn"] ?? ""] : undefined,
       anchor: bodyPr ? rawAttrs(bodyPr)["@_anchor"] : undefined,

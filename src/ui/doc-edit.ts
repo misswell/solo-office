@@ -776,6 +776,26 @@ export class DocEditor {
     this.render();
   }
 
+  /**
+   * 把缩放上到纸盒（#245 解耦重构）：视觉缩放走 **transform: scale**（`transform-origin: 0 0`），
+   * **布局一寸不动**——铺排/页界/页数从此是纸的事实，与屏幕缩放彻底解耦（§185 取证：CSS zoom 是
+   * 布局级缩放，同一份内容在 1.59 档的布局高与 1 档差近一倍，页数随之漂移）。滚动范围由
+   * margin 补偿（margin 在 transform 之外、是布局长度）：宽高各补 `布局尺寸 × (scale − 1)`。
+   * 档位同时写进 `--solo-scale`，`doc-layout.zoomOf` 从这里读——量测管线（rect ÷ scale）
+   * 的三十来处除法一处都不用动。
+   */
+  private applyPageScale(page: HTMLElement | null, z: number): void {
+    if (!page) return;
+    const scale = Math.min(2.5, Math.max(0.4, Math.round(z * 100) / 100));
+    page.style.transform = scale === 1 ? "" : `scale(${scale})`;
+    page.style.transformOrigin = "0 0";
+    page.style.setProperty("--solo-scale", String(scale));
+    const w = page.clientWidth;
+    const h = page.clientHeight;
+    page.style.marginRight = `${Math.round(w * (scale - 1) * 10) / 10}px`;
+    page.style.marginBottom = `${Math.round(h * (scale - 1) * 10) / 10}px`;
+  }
+
   render(): void {
     // 纸盒要重建：先把开着那一枚**还在纸上时**的字交回模型，再解除它那句「失焦就收笔」。
     // 顺序反了就出事：`innerHTML` 一换，浏览器照样给摘下来的旧元素发 blur，那份旧 DOM 不认识刚写进件里的
@@ -790,7 +810,7 @@ export class DocEditor {
     // 认领关系已在上面清掉；`contenteditable` 由下面这一句交还给正文，编辑开着的那一枚由 `insertPageNumber` 重新点开。
     this.setBodyEditable();
     this.page.spellcheck = false;
-    if (this.zoomLevel !== 1) this.page.style.zoom = String(this.zoomLevel);
+    this.applyPageScale(this.page, this.zoomLevel);
     this.reindex();
     this.imagePaths();
     this.wireHF();
@@ -1219,10 +1239,10 @@ export class DocEditor {
 
   private zoomLevel = 1;
 
-  /** Ribbon zoom: the page scales, the chrome stays put. */
+  /** Ribbon zoom: the page scales visually (`transform: scale`，排版与缩放解耦 #245), the chrome stays put. */
   setZoom(z: number): void {
     this.zoomLevel = z;
-    this.page?.style.setProperty("zoom", String(z));
+    this.applyPageScale(this.page, z);
     // 条带与复件的 `top` 写的是纸的像素，`zoom` 把纸连同缝一起放大：换了比例得重量重画，
     // 不然带子还守着旧坐标，跟它钉的那道缝错开。
     this.applySheets();

@@ -240,7 +240,9 @@ function forcesPage(br: HTMLElement): boolean {
  *   按纸盒上沿一次除回纸的像素，那条链自己算，不在这规矩外另开一口。
  */
 function zoomOf(page: HTMLElement): number {
-  return parseFloat(page.style.getPropertyValue("zoom")) || 1;
+  // #245 解耦重构：缩放走 transform: scale（排版与缩放解耦），档位从 `--solo-scale` 读——
+  // 量测管线（视口读数 ÷ scale = 布局）的形状不变，布局从此恒在 100% 档。
+  return parseFloat(page.style.getPropertyValue("--solo-scale")) || 1;
 }
 
 /**
@@ -558,30 +560,10 @@ export function layoutUnits(page: HTMLElement): PlacedUnit[] {
  * 或拉上来），那一块整块退回画出来的量——那种块本身就是缩放改变了断行，页界按屏幕那份算，不硬凑。
  */
 function unitBlocksForPacking(page: HTMLElement): { el: HTMLElement; units: PlacedUnit[] }[] {
-  const zoom = zoomOf(page);
-  if (zoom === 1) return unitBlocksOf(page);
-  // 摆回 100% 量高在前，量画出来的位置在最后：写 `zoom` 是一次 DOM 改动，浏览器按滚动锚定把这一叠纸的视口
-  // 位置挪一挪，而枚的 `top` 是**视口的绝对坐标**——下游 `applySheetGaps` 拿它与它自己现读的纸盒上沿相减
-  // （「原点只读这一次」那条守则，见该函数）。先量位置再摆档，两份读数就落在两个滚动空间里：实测 150% 上
-  // 推距凭空多垫 192 纸px，整张正文压进下一道缝（`.scratch/zoom-gap-dom.ts` 反向对照）。
-  page.style.setProperty("zoom", "1");
-  const paper = unitBlocksOf(page);
-  page.style.setProperty("zoom", String(zoom));
-  const drawn = unitBlocksOf(page);
-  return drawn.map((b, i) => {
-    const base = paper[i];
-    if (!base || base.units.length !== b.units.length) return b;
-    return {
-      el: b.el,
-      units: b.units.map((u, k) => {
-        const h = base.units[k]!;
-        const scaled: PlacedUnit = { ...u, height: h.height * zoom };
-        if (u.keepLines !== undefined && h.keepLines !== undefined) scaled.keepLines = h.keepLines * zoom;
-        if (u.resumeHeaderPx !== undefined && h.resumeHeaderPx !== undefined) scaled.resumeHeaderPx = h.resumeHeaderPx * zoom;
-        return scaled;
-      }),
-    };
-  });
+  // #245 解耦重构：视觉缩放走 transform: scale、布局恒在 100% 档——装箱量高与画出来的高是同一份
+  // （rect ÷ scale = 布局），§185 记的「100% 摆回双量」机制随之退役（缩放档下的断行变化不复存在，
+  // 页界/页数回到纸的事实）。
+  return unitBlocksOf(page);
 }
 
 /**
@@ -846,19 +828,21 @@ function planOf(page: HTMLElement, doc: WordDocument): PagePlan | undefined {
   // 跟着放大，纸的容量也得放大同样倍数，两边才是同一个空间。这一记乘在这里——`placementsAcrossSections` 自己
   // 不知道缩放，交出去的 `pages` 只由「量出来的高 ÷ 说出来的容量」定。
   // `PagePlan.contentHeightPx` 交回给外面的仍是纸的像素（它是报给人看的一截物理长度，不是比长短的中间量）。
-  const zoom = zoomOf(page);
-  // 第一节的两端让位已经写进纸上画出来的内边距（`applyBandYield` 的 `--band-yield-t/-b`），上面那一格
-  // `contentHeightOf` 量回来就带着它；其余各节的纸没画在流里，按属性上同一趟写下的数自己扣——两边问的是
-  // 同一截高度，谁也不多扣一次。让完放不下一行正文的节不给方案（宁可少一行读数）。
+  // #245 解耦重构：视觉缩放走 transform: scale（布局恒 100% 档、§185 取证的「zoom 改变布局高」不成立），
+  // 装箱的两边都在**视觉空间**：画出来的高（rect 含 scale）与纸的容量 × scale——同一空间相除，页界/页数
+  // 与缩放无关。第一节的两端让位已经写进纸上画出来的内边距（`applyBandYield` 的 `--band-yield-t/-b`），
+  // 上面那一格 `contentHeightOf` 量回来就带着它；其余各节的纸没画在流里，按属性上同一趟写下的数自己扣——
+  // 两边问的是同一截高度，谁也不多扣一次。让完放不下一行正文的节不给方案（宁可少一行读数）。
+  const scale = zoomOf(page);
   const yieldT = bandYieldsOf(page, BAND_YIELD_TOP);
   const yieldB = bandYieldsOf(page, BAND_YIELD_BOTTOM);
-  const sheets: Sheet[] = [{ contentHeightPx: contentHeightPx * zoom }];
+  const sheets: Sheet[] = [{ contentHeightPx: contentHeightPx * scale }];
   for (let s = 1; s < sections.length; s++) {
     const sheet = sheetOf(sections[s]!);
     if (!sheet) return undefined;
     const body = sheet.contentHeightPx - (yieldT[s] ?? 0) - (yieldB[s] ?? 0);
     if (!(body > 0)) return undefined;
-    sheets.push({ contentHeightPx: body * zoom });
+    sheets.push({ contentHeightPx: body * scale });
   }
   const ends = sectionEndsOf(doc.blocks);
   // 高不能直接从当前这一档缩放里取：Blink 按设备像素对齐字形上下伸，同一行在 100% 流推 24.766、在 150% 推

@@ -640,7 +640,23 @@
       .thumb.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
       .thumb span { position: absolute; left: 3px; top: 1px; font-size: 10px; color: #6b7280; }
       .stage { flex: 1; display: flex; align-items: center; justify-content: center; background: #d9dde2; overflow: auto; }
-      .scaler { box-shadow: 0 6px 28px #0003; background: #fff; }
+      /* 舞台框 = 缩放后的那张纸；标尺占掉上/左各 16 px，跟着纸边走而不是跟着舞台边。 */
+      .stage-frame { position: relative; flex: none; }
+      .scaler { position: absolute; left: 0; top: 0; transform-origin: 0 0; box-shadow: 0 6px 28px #0003; background: #fff; }
+      .stage.ruled .scaler { left: 16px; top: 16px; }
+      /* 标尺刻度由 deck-edit 按屏幕像素摆（数字不随纸缩，位置随），与 Writer 那条标尺同一副长相。 */
+      .stage-ruler { position: absolute; z-index: 2; pointer-events: none; background-color: #f4f6f8; overflow: hidden; }
+      .stage-ruler.h { left: 16px; right: 0; top: 0; height: 15px; border-bottom: 1px solid #c3c9d2; }
+      .stage-ruler.v { top: 16px; bottom: 0; left: 0; width: 15px; border-right: 1px solid #c3c9d2; }
+      .stage-ruler .tick { position: absolute; background: #8d96a3; }
+      .stage-ruler.h .tick { bottom: 0; width: 1px; height: 4px; }
+      .stage-ruler.h .tick.major { height: 6px; background: #525b68; }
+      .stage-ruler.h b { position: absolute; top: 0; transform: translateX(2px); font: 400 8px/10px var(--font-ui, sans-serif); color: #3a404a; }
+      .stage-ruler.v .tick { right: 0; height: 1px; width: 4px; }
+      .stage-ruler.v .tick.major { width: 6px; background: #525b68; }
+      .stage-ruler.v b { position: absolute; left: 0; transform: translateY(1px); font: 400 7px/7px var(--font-ui, sans-serif); color: #3a404a; }
+      /* 查看网格线：纸上导引线，间距取自件里的 p:gridSpacing，不上纸也不接指针。 */
+      .sdeck-grid { position: absolute; inset: 0; pointer-events: none; background-image: repeating-linear-gradient(90deg, #3341551f 0 1px, transparent 1px var(--grid-pitch)), repeating-linear-gradient(180deg, #3341551f 0 1px, transparent 1px var(--grid-pitch)); }
       .slide { position: relative; overflow: hidden; font-family: var(--font-ui); color: #14161a; }
       .shape { position: absolute; }
       .shape-text { width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: center; padding: 4px 8px; overflow: hidden; }

@@ -88,6 +88,12 @@ export class Presentation {
   presDirty = false;
   /** Layout a new slide references, as a package path. */
   newSlideLayoutPath?: string;
+  /**
+   * `p:gridSpacing@cx` from `ppt/viewProps.xml`, in EMU. WPS writes 72008 on 69 of the
+   * 77 authorized decks (6 more write 76200, 2 write 72000), so the grid pitch the
+   * editor draws comes from the deck; a blank deck built here uses WPS's common value.
+   */
+  gridSpacingEmu = 72008;
   /** Images inserted in the editor (package part → data URL); a save writes these parts. */
   addedMedia = new Map<string, string>();
   private theme = new Map<string, string>();
@@ -100,6 +106,11 @@ export class Presentation {
 
   get slideHeightPx(): number {
     return this.slideHeightEmu / EMU_PER_PX;
+  }
+
+  /** Grid pitch in slide pixels, for the editor's 查看网格线 overlay. */
+  get gridSpacingPx(): number {
+    return this.gridSpacingEmu / EMU_PER_PX;
   }
 
   static openBytes(data: Uint8Array): Presentation {
@@ -129,6 +140,14 @@ export class Presentation {
       this.slideHeightEmu = Number(attr(sldSz, "cy") ?? this.slideHeightEmu);
     }
     const rels = pkg.rels("ppt/presentation.xml");
+    // The grid pitch lives in the view part, not in the deck's slides; a deck without
+    // that part keeps the default above.
+    const viewProps = [...rels.values()].find((r) => r.type.endsWith("/viewProps"));
+    if (viewProps) {
+      const xml = pkg.text(pkg.resolve("ppt/presentation.xml", viewProps)) ?? "";
+      const pitch = /<p:gridSpacing\b[^>]*\bcx="(\d+)"/.exec(xml);
+      if (pitch) this.gridSpacingEmu = Number(pitch[1]);
+    }
     // `p:sldId` carries both the numeric id and the relationship id; the
     // prefix-stripped reader merges the two attributes, so read them raw.
     const lst = rawFind(this.presTree, "sldIdLst");

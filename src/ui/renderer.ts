@@ -436,6 +436,7 @@ const RIBBON_ICONS: Record<string, string> = {
   indentInc: "<path d='M4 6h16M4 12h16M4 18h16'/><path d='M8 9l3 3-3 3'/>",
   indentDec: "<path d='M4 6h16M4 12h16M4 18h16'/><path d='M12 9l-3 3 3 3'/>",
   ruler: "<path d='M3 8h18v8H3z'/><path d='M7 8v4M11 8v4M15 8v4M19 8v4'/>",
+  grid: "<path d='M3 4h18v16H3z'/><path d='M3 8h18M3 12h18M3 16h18M8 4v16M13 4v16M18 4v16'/>",
   navPane: "<path d='M4 5h16v14H4z'/><path d='M9.5 5v14'/><path d='M12.5 9h4.5M12.5 12h4.5M12.5 15h3'/>",
   bullet: "<path d='M9 7h11M9 12h11M9 17h11'/><path d='M4.5 7h.01M4.5 12h.01M4.5 17h.01'/>",
   numberList: "<path d='M9 7h11M9 12h11M9 17h11'/><path d='M4 5h1v4M4 13h2l-2 3h2'/>",
@@ -524,6 +525,7 @@ const RIBBON_ICON_IDS: Record<string, string> = {
   "1. 编号": "numberList",
   制表位: "ruler",
   标尺: "ruler",
+  查看网格线: "grid",
   导航窗格: "navPane",
   定位: "locate",
   页面设置: "pageSetup",
@@ -2055,6 +2057,29 @@ function buildDeckRibbon(): void {
   viewButton("阅读视图", "reading", "满窗单页阅读，翻页条换页；Esc 回到普通视图");
   viewButton("备注页", "notes", "上方是幻灯片，下方是演讲者备注");
 
+  // 视图页的「显示」组：`CT_View.kuip` 的 `RB_Show` 按声明摆 —— 「网格和参考线」对话框、查看网格线、
+  // 任务窗格、标尺、显示绘图参考线。两条没有面：参考线那句 `showGuides` 在件里，但 WPS 存的两条
+  // `p:guide` 位置（2160 / 3840）按 EMU 解出来贴在纸的左上角、亚像素可见，位置单位仍未取证，先不画；
+  // 任务窗格宿主的那几档（幻灯片切换/动画/选择）还没有模型，不摆空腿。这两枚是屏幕开关，
+  // 与 Writer 的标尺/网格线同一条性质：不进撤销栈，也不报脏。
+  const display = group("view", "显示");
+  const displayButton = (what: "grid" | "ruler", label: string, tip: string): void => {
+    const b = document.createElement("button");
+    b.className = "rb";
+    b.textContent = label;
+    b.title = tip;
+    decorateRibbonButton(b, label);
+    b.dataset.display = what;
+    b.onclick = () => {
+      deck?.setDisplay(what, !(deck?.display[what] ?? false));
+      syncDeckRibbon();
+    };
+    ctl[`display:${what}`] = b;
+    display.append(b);
+  };
+  displayButton("grid", "查看网格线", "在幻灯片上画出网格导引线（WPS：View Gridlines）；间距取自文件的 p:gridSpacing，导引线上不了纸");
+  displayButton("ruler", "标尺", "在纸上边与左边摆标尺（WPS：ViewRulerWord）；只影响屏幕，不改文件");
+
   shell.bars["view"]!.append(zoomGroup());
   shell.sync();
 }
@@ -2275,6 +2300,14 @@ function syncDeckRibbon(): void {
     const b = ctl[`view:${mode}`] as HTMLButtonElement | undefined;
     if (!b) continue;
     const on = (deck?.view ?? "normal") === mode;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-pressed", String(on));
+  }
+  // 显示组两枚是勾：回显的是屏幕开关，不问文档。
+  for (const what of ["grid", "ruler"] as const) {
+    const b = ctl[`display:${what}`] as HTMLButtonElement | undefined;
+    if (!b) continue;
+    const on = deck?.display[what] ?? false;
     b.classList.toggle("on", on);
     b.setAttribute("aria-pressed", String(on));
   }

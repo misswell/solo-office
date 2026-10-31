@@ -4831,7 +4831,26 @@ function smoke(): void {
         window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
         await wait(220);
         readingView.left = !!document.querySelector("#view .stage");
-        const pptViews = { sorter: sorterView, back: sorterBack, notes: notesView, reading: readingView, normal: !!document.querySelector("#view .stage"), pressed: viewBtn("普通视图")?.getAttribute("aria-pressed") };
+        // Display group: gridlines and rulers are screen switches drawn over the same paper.
+        const displayBtn = (label) => [...document.querySelectorAll("#ribbon .rbar[data-tab='view'] button.rb")].find((b) => b.textContent === label);
+        displayBtn("查看网格线")?.click();
+        displayBtn("标尺")?.click();
+        await wait(220);
+        const gridEl = document.querySelector("#view .stage .sdeck-grid");
+        const frameBox = document.querySelector("#view .stage-frame")?.getBoundingClientRect();
+        const paperBox = document.querySelector("#view .stage .scaler")?.getBoundingClientRect();
+        const displayView = {
+          grid: !!gridEl,
+          pitch: gridEl ? getComputedStyle(gridEl).getPropertyValue("--grid-pitch").trim() : "",
+          rulers: document.querySelectorAll("#view .stage-frame .stage-ruler").length,
+          rulerLabels: [...document.querySelectorAll("#view .stage-frame .stage-ruler.h b")].map((b) => b.textContent).join(","),
+          pressed: [displayBtn("查看网格线")?.getAttribute("aria-pressed"), displayBtn("标尺")?.getAttribute("aria-pressed")],
+          framed: !!frameBox && !!paperBox && frameBox.width > paperBox.width && frameBox.width - paperBox.width <= 17,
+        };
+        displayBtn("查看网格线")?.click();
+        await wait(180);
+        displayView.off = !document.querySelector("#view .stage .sdeck-grid");
+        const pptViews = { sorter: sorterView, back: sorterBack, notes: notesView, reading: readingView, display: displayView, normal: !!document.querySelector("#view .stage"), pressed: viewBtn("普通视图")?.getAttribute("aria-pressed") };
         fire("solo:save");
         await wait(600);
         const pptSaved = { title: document.getElementById("title")?.textContent };

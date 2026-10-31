@@ -19,6 +19,10 @@ interface Snap {
 const HANDLE_DIRS = ["nw", "n", "ne", "e", "se", "s", "sw", "w"] as const;
 type Dir = (typeof HANDLE_DIRS)[number];
 
+/** Ruler strip thickness, and one centimetre in slide pixels (360000 EMU / 9525 per px). */
+const RULER_PX = 16;
+const CM_PX = 360000 / 9525;
+
 /** Insert defaults, close to what a fresh shape looks like in an office suite. */
 const SHAPE_FILL = "#dce6f1";
 const SHAPE_LINE = "#4472c4";
@@ -57,6 +61,12 @@ export class DeckEditor {
   private fit = 1;
   private viewMode: DeckViewMode = "normal";
   private readingFit?: () => void;
+  /** Screen-only switches (WPS `RB_Show`): neither writes the deck. */
+  private showGrid = false;
+  private showRuler = false;
+  private wrapEl?: HTMLElement;
+  private frameEl?: HTMLElement;
+  private rulerStrips?: { h: HTMLElement; v: HTMLElement };
 
   constructor(private host: HTMLElement, private pres: Presentation, private selectedSlide: number, private hooks: { changed(): void; selected?(): void }) {
     liveDeck = this;
@@ -85,6 +95,9 @@ export class DeckEditor {
   private render(): void {
     this.host.replaceChildren();
     this.selBox = undefined;
+    this.wrapEl = undefined;
+    this.frameEl = undefined;
+    this.rulerStrips = undefined;
     if (this.viewMode === "sorter") this.renderSorter();
     else if (this.viewMode === "notes") this.renderNotesPage();
     else if (this.viewMode === "reading") this.renderReading();
@@ -95,6 +108,23 @@ export class DeckEditor {
 
   get view(): DeckViewMode {
     return this.viewMode;
+  }
+
+  /** The screen switches the 视图·显示 group reflects; grid pitch and ruler are screen-only. */
+  get display(): { grid: boolean; ruler: boolean } {
+    return { grid: this.showGrid, ruler: this.showRuler };
+  }
+
+  /**
+   * Flips a screen switch. Neither one touches the deck: WPS's `RB_Show` gridlines and
+   * ruler are view state, so no history step and no dirty mark. Only the normal view
+   * paints them, but the switch survives a trip through the other views.
+   */
+  setDisplay(what: "grid" | "ruler", on: boolean): void {
+    if (what === "grid") this.showGrid = on;
+    else this.showRuler = on;
+    if (this.viewMode === "normal") this.render();
+    else this.hooks.selected?.();
   }
 
   /**
@@ -151,16 +181,36 @@ export class DeckEditor {
 
     const stage = document.createElement("div");
     stage.className = "stage";
+    stage.classList.toggle("ruled", this.showRuler);
     this.stage = stage;
+    // The frame is the scaled paper's box; rulers sit in the 16 px margin above and to
+    // its left, so they line up with the slide edges at any zoom instead of the stage.
+    const frame = document.createElement("div");
+    frame.className = "stage-frame";
+    this.frameEl = frame;
     const wrap = document.createElement("div");
     wrap.className = "scaler";
-    this.fit = this.fitScale();
-    wrap.style.transform = `scale(${this.fit})`;
-    wrap.style.transformOrigin = "center center";
+    this.wrapEl = wrap;
     wrap.style.width = `${this.pres.slideWidthPx}px`;
     wrap.style.height = `${this.pres.slideHeightPx}px`;
     wrap.innerHTML = renderSlideHtml(this.pres, this.selectedSlide);
-    stage.append(wrap);
+    if (this.showGrid) {
+      const grid = document.createElement("div");
+      grid.className = "sdeck-grid";
+      grid.style.setProperty("--grid-pitch", `${this.pres.gridSpacingPx}px`);
+      wrap.append(grid);
+    }
+    this.rulerStrips = undefined;
+    if (this.showRuler) {
+      const strips = { h: document.createElement("div"), v: document.createElement("div") };
+      strips.h.className = "stage-ruler h";
+      strips.v.className = "stage-ruler v";
+      frame.append(strips.h, strips.v);
+      this.rulerStrips = strips;
+    }
+    frame.append(wrap);
+    stage.append(frame);
+    this.applyFit();
 
     this.wireStage(wrap);
 
@@ -1019,11 +1069,55 @@ export class DeckEditor {
 
   /** Re-fits the stage after the window changed size, without touching history. */
   refit(): void {
-    const wrap = this.host.querySelector<HTMLElement>(".stage .scaler");
+    this.applyFit();
+  }
+
+  /** One place for the fit: paper transform, frame box and the ruler's ticks. */
+  private applyFit(): void {
+    const wrap = this.wrapEl;
     if (!wrap) return;
     this.fit = this.fitScale() * this.zoomExtra;
     wrap.style.transform = `scale(${this.fit})`;
+    if (this.frameEl) {
+      const pad = this.showRuler ? RULER_PX : 0;
+      this.frameEl.style.width = `${this.pres.slideWidthPx * this.fit + pad}px`;
+      this.frameEl.style.height = `${this.pres.slideHeightPx * this.fit + pad}px`;
+    }
+    if (this.rulerStrips) {
+      this.renderRulerTicks(this.rulerStrips.h, this.pres.slideWidthPx * this.fit, "h");
+      this.renderRulerTicks(this.rulerStrips.v, this.pres.slideHeightPx * this.fit, "v");
+    }
     this.placeSelection();
+  }
+
+  /**
+   * 标尺刻度：0 落在纸的上/左沿（WPS 的演示标尺从纸边起数），主单位是厘米——1 cm = 360000 EMU
+   * 是定义，不是读数；相邻数字排不下时按 1→2→5 升档，细分取主刻度的四分之一。数字按屏幕像素
+   * 排（不随缩放变形），位置乘 `fit`，所以纸多大标尺就多长。
+   */
+  private renderRulerTicks(strip: HTMLElement, lengthPx: number, axis: "h" | "v"): void {
+    const cmPx = CM_PX * this.fit;
+    strip.textContent = "";
+    if (!(cmPx > 0) || !(lengthPx > 0)) return;
+    let step = 1;
+    while (step * cmPx < 26) step = step === 1 ? 2 : step === 2 ? 5 : step * 2;
+    const minor = step / 4;
+    const maxUnits = lengthPx / cmPx;
+    for (let k = 0; k * minor <= maxUnits + 1e-9; k += 1) {
+      const value = k * minor;
+      const major = k % 4 === 0;
+      const tick = document.createElement("i");
+      tick.className = major ? "tick major" : "tick";
+      if (axis === "h") tick.style.left = `${(value * cmPx).toFixed(1)}px`;
+      else tick.style.top = `${(value * cmPx).toFixed(1)}px`;
+      strip.append(tick);
+      if (!major) continue;
+      const label = document.createElement("b");
+      label.textContent = String(Math.round(value));
+      if (axis === "h") label.style.left = `${(value * cmPx).toFixed(1)}px`;
+      else label.style.top = `${(value * cmPx).toFixed(1)}px`;
+      strip.append(label);
+    }
   }
 
   deleteShape(): void {

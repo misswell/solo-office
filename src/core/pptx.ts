@@ -27,8 +27,12 @@ export interface LayoutPlaceholder {
   lineSpacingPct?: number;
   /** Level-1 `a:spcBef/a:spcPts`, in points. */
   spaceBeforePt?: number;
+  /** Level-1 `a:spcBef/a:spcPct`, as a percentage of the line height. */
+  spaceBeforePct?: number;
   /** Level-1 `a:spcAft/a:spcPts`, in points. */
   spaceAfterPt?: number;
+  /** Level-1 `a:spcAft/a:spcPct`, as a percentage of the line height. */
+  spaceAfterPct?: number;
 }
 
 /** One level of a text style (`p:bodyStyle` or a shape's `a:lstStyle`). */
@@ -43,8 +47,12 @@ export interface BodyLevel {
   lineSpacingPct?: number;
   /** `a:spcBef/a:spcPts`, in points. */
   spaceBeforePt?: number;
+  /** `a:spcBef/a:spcPct`, as a percentage of the line height. */
+  spaceBeforePct?: number;
   /** `a:spcAft/a:spcPts`, in points. */
   spaceAfterPt?: number;
+  /** `a:spcAft/a:spcPct`, as a percentage of the line height. */
+  spaceAfterPct?: number;
 }
 
 /**
@@ -105,8 +113,12 @@ export interface SlideParagraph {
   lineSpacingPct?: number;
   /** `a:pPr/a:spcBef/a:spcPts`, in points. */
   spaceBeforePt?: number;
+  /** `a:pPr/a:spcBef/a:spcPct`, as a percentage of the line height. */
+  spaceBeforePct?: number;
   /** `a:pPr/a:spcAft/a:spcPts`, in points. */
   spaceAfterPt?: number;
+  /** `a:pPr/a:spcAft/a:spcPct`, as a percentage of the line height. */
+  spaceAfterPct?: number;
 }
 
 export interface SlideCell {
@@ -150,8 +162,7 @@ const attr = (node: any, name: string): string | undefined => node?.[`@_${name}`
 /**
  * One `a:lvlNpPr` (or `a:pPr`) as the editor's level paint. `a:lnSpc` holds the line
  * spacing, `a:spcBef`/`a:spcAft` the paragraph spacing; both may say points or a
- * percentage, and only the point form is modeled (a percentage before/after has no
- * consumer in the authorized corpus — 2 masters, 20%, `.scratch/ppt-spacing-census`).
+ * percentage of the line height, kept apart so the ladder can pick one rung's answer.
  */
 function readLevel(lvl: any): BodyLevel {
   const a = rawAttrs(lvl);
@@ -162,11 +173,15 @@ function readLevel(lvl: any): BodyLevel {
   const lnPct = ln ? rawFind(rawChildren(ln), "spcPct") : undefined;
   const bef = rawFind(rawChildren(lvl), "spcBef");
   const befPts = bef ? rawFind(rawChildren(bef), "spcPts") : undefined;
+  const befPct = bef ? rawFind(rawChildren(bef), "spcPct") : undefined;
   const aft = rawFind(rawChildren(lvl), "spcAft");
   const aftPts = aft ? rawFind(rawChildren(aft), "spcPts") : undefined;
+  const aftPct = aft ? rawFind(rawChildren(aft), "spcPct") : undefined;
   const pct = lnPct ? Number(rawAttrs(lnPct)["@_val"]) : NaN;
   const before = befPts ? Number(rawAttrs(befPts)["@_val"]) : NaN;
+  const beforePct = befPct ? Number(rawAttrs(befPct)["@_val"]) : NaN;
   const after = aftPts ? Number(rawAttrs(aftPts)["@_val"]) : NaN;
+  const afterPct = aftPct ? Number(rawAttrs(aftPct)["@_val"]) : NaN;
   return {
     sizePt: Number.isFinite(sz) && sz > 0 ? sz / 100 : undefined,
     align: a["@_algn"] ? ALGN_IN[a["@_algn"]] : undefined,
@@ -178,7 +193,9 @@ function readLevel(lvl: any): BodyLevel {
     // hundredths-of-a-point and thousandths-of-a-percent are scaled here once.
     lineSpacingPct: Number.isFinite(pct) && pct > 0 ? pct / 1000 : undefined,
     spaceBeforePt: Number.isFinite(before) && before > 0 ? before / 100 : undefined,
+    spaceBeforePct: Number.isFinite(beforePct) && beforePct > 0 ? beforePct / 1000 : undefined,
     spaceAfterPt: Number.isFinite(after) && after > 0 ? after / 100 : undefined,
+    spaceAfterPct: Number.isFinite(afterPct) && afterPct > 0 ? afterPct / 1000 : undefined,
   };
 }
 
@@ -201,7 +218,9 @@ const hasLevel = (l: BodyLevel): boolean =>
   l.noBullet !== undefined ||
   l.lineSpacingPct !== undefined ||
   l.spaceBeforePt !== undefined ||
-  l.spaceAfterPt !== undefined;
+  l.spaceBeforePct !== undefined ||
+  l.spaceAfterPt !== undefined ||
+  l.spaceAfterPct !== undefined;
 
 
 export class Presentation {
@@ -880,21 +899,27 @@ function parseLayoutPlaceholders(xml: string, master?: LayoutPlaceholder[]): Lay
       noBullet: level.noBullet,
       lineSpacingPct: level.lineSpacingPct,
       spaceBeforePt: level.spaceBeforePt,
+      spaceBeforePct: level.spaceBeforePct,
       spaceAfterPt: level.spaceAfterPt,
+      spaceAfterPct: level.spaceAfterPct,
     });
   }
   return out;
 }
 
 /** A paragraph's own spacing from the parsed tree; zero is a declared "none", same as silence. */
-function paragraphSpacing(pPr: any): Pick<SlideParagraph, "lineSpacingPct" | "spaceBeforePt" | "spaceAfterPt"> {
+function paragraphSpacing(pPr: any): Pick<SlideParagraph, "lineSpacingPct" | "spaceBeforePt" | "spaceBeforePct" | "spaceAfterPt" | "spaceAfterPct"> {
   const pct = Number(attr(find(find(pPr, "lnSpc"), "spcPct"), "val"));
   const before = Number(attr(find(find(pPr, "spcBef"), "spcPts"), "val"));
+  const beforePct = Number(attr(find(find(pPr, "spcBef"), "spcPct"), "val"));
   const after = Number(attr(find(find(pPr, "spcAft"), "spcPts"), "val"));
+  const afterPct = Number(attr(find(find(pPr, "spcAft"), "spcPct"), "val"));
   return {
     lineSpacingPct: Number.isFinite(pct) && pct > 0 ? pct / 1000 : undefined,
     spaceBeforePt: Number.isFinite(before) && before > 0 ? before / 100 : undefined,
+    spaceBeforePct: Number.isFinite(beforePct) && beforePct > 0 ? beforePct / 1000 : undefined,
     spaceAfterPt: Number.isFinite(after) && after > 0 ? after / 100 : undefined,
+    spaceAfterPct: Number.isFinite(afterPct) && afterPct > 0 ? afterPct / 1000 : undefined,
   };
 }
 

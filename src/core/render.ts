@@ -1445,7 +1445,9 @@ interface InhText {
   noBullet?: boolean;
   lineSpacingPct?: number;
   spaceBeforePt?: number;
+  spaceBeforePct?: number;
   spaceAfterPt?: number;
+  spaceAfterPct?: number;
 }
 
 /**
@@ -1467,7 +1469,9 @@ function inheritedTextStyle(slide: Slide | undefined, s: Shape, pres: Presentati
     noBullet: ph?.noBullet,
     lineSpacingPct: ph?.lineSpacingPct,
     spaceBeforePt: ph?.spaceBeforePt,
+    spaceBeforePct: ph?.spaceBeforePct,
     spaceAfterPt: ph?.spaceAfterPt,
+    spaceAfterPct: ph?.spaceAfterPct,
   };
 }
 
@@ -1486,11 +1490,20 @@ const SLIDE_SINGLE_LINE = 1.3;
  * master's `p:bodyStyle` level for body text. `a:pPr@lvl` and the model are both
  * zero-based, so level 0 is the first `lvl1pPr` and level 2 the third. A file's line and
  * paragraph spacing ride the same ladder; a plain text box's level stops at the shape.
+ * Points and a percentage are two answers to one spacing question, so the first rung
+ * that states either form wins — not the first rung that states each form separately.
  */
 function levelPaint(p: SlideParagraph, inh: InhText | undefined, levels: BodyLevel[], body: boolean, own?: BodyLevel): BodyLevel {
   const level = Math.max(0, Math.min(Math.max(0, levels.length - 1), p.level));
   const master = body ? (levels[level] ?? {}) : {};
   const lvl1 = level === 0 ? inh : undefined;
+  const rungs = [p, own, lvl1, master];
+  const side = (before: boolean): Pick<BodyLevel, "spaceBeforePt" | "spaceBeforePct" | "spaceAfterPt" | "spaceAfterPct"> => {
+    const hit = rungs.find((r) => (before ? (r?.spaceBeforePt ?? r?.spaceBeforePct) : (r?.spaceAfterPt ?? r?.spaceAfterPct)) !== undefined);
+    return before
+      ? { spaceBeforePt: hit?.spaceBeforePt, spaceBeforePct: hit?.spaceBeforePct }
+      : { spaceAfterPt: hit?.spaceAfterPt, spaceAfterPct: hit?.spaceAfterPct };
+  };
   return {
     sizePt: own?.sizePt ?? lvl1?.sizePt ?? master.sizePt,
     align: own?.align ?? lvl1?.align ?? master.align,
@@ -1499,8 +1512,8 @@ function levelPaint(p: SlideParagraph, inh: InhText | undefined, levels: BodyLev
     bullet: own?.bullet ?? lvl1?.bullet ?? master.bullet,
     noBullet: own?.noBullet ?? lvl1?.noBullet ?? master.noBullet,
     lineSpacingPct: p.lineSpacingPct ?? own?.lineSpacingPct ?? lvl1?.lineSpacingPct ?? master.lineSpacingPct,
-    spaceBeforePt: p.spaceBeforePt ?? own?.spaceBeforePt ?? lvl1?.spaceBeforePt ?? master.spaceBeforePt,
-    spaceAfterPt: p.spaceAfterPt ?? own?.spaceAfterPt ?? lvl1?.spaceAfterPt ?? master.spaceAfterPt,
+    ...side(true),
+    ...side(false),
   };
 }
 
@@ -1540,13 +1553,17 @@ function renderSlideParagraph(p: SlideParagraph, inh?: InhText, levels?: BodyLev
   if (!bullet && !style.noBullet) bullet = style.bullet;
   // `a:normAutofit` gives back a share of the line height as well; a paragraph that states
   // no percentage is still drawn at the editor's single line, so the reduction applies to it.
+  const keep = fit?.lineSpacingReductionPct !== undefined ? 1 - fit.lineSpacingReductionPct / 100 : 1;
   const linePct = style.lineSpacingPct ?? (fit?.lineSpacingReductionPct !== undefined ? 100 : undefined);
-  if (linePct) {
-    const keep = fit?.lineSpacingReductionPct !== undefined ? 1 - fit.lineSpacingReductionPct / 100 : 1;
-    css.push(`line-height:${Math.round(SLIDE_SINGLE_LINE * linePct * keep) / 100}`);
-  }
-  if (style.spaceBeforePt) css.push(`margin-top:${style.spaceBeforePt}pt`);
-  if (style.spaceAfterPt) css.push(`margin-bottom:${style.spaceAfterPt}pt`);
+  if (linePct) css.push(`line-height:${Math.round(SLIDE_SINGLE_LINE * linePct * keep) / 100}`);
+  // A percentage spacing says how many line heights to leave, so it rides the line this
+  // paragraph is drawn at; the point form is an absolute height and needs no conversion.
+  const lineEm = (SLIDE_SINGLE_LINE * (linePct ?? 100) * keep) / 100;
+  const gapEm = (pct: number): string => `${Math.round(lineEm * pct * 10) / 1000}em`;
+  if (style.spaceBeforePt !== undefined) css.push(`margin-top:${style.spaceBeforePt}pt`);
+  else if (style.spaceBeforePct !== undefined) css.push(`margin-top:${gapEm(style.spaceBeforePct)}`);
+  if (style.spaceAfterPt !== undefined) css.push(`margin-bottom:${style.spaceAfterPt}pt`);
+  else if (style.spaceAfterPct !== undefined) css.push(`margin-bottom:${gapEm(style.spaceAfterPct)}`);
   const runs = p.runs.map((r) => renderInline(scaledRun(r, fit?.fontScalePct))).join("");
   return `<div class="sp-p" data-lvl="${p.level}" style="${css.join(";")}">${bullet ? `<span class="bullet">${esc(bulletGlyph(bullet))}</span>` : ""}${runs || "<br>"}</div>`;
 }

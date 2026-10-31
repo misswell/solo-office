@@ -270,7 +270,9 @@ function paragraphNode(p: SlideParagraph): any {
   // CT_TextParagraphProperties order: lnSpc, spcBef, spcAft, then the bullet.
   if (p.lineSpacingPct) kids.push({ "a:lnSpc": [{ "a:spcPct": [], ":@": { "@_val": String(Math.round(p.lineSpacingPct * 1000)) } }] });
   if (p.spaceBeforePt) kids.push({ "a:spcBef": [{ "a:spcPts": [], ":@": { "@_val": String(Math.round(p.spaceBeforePt * 100)) } }] });
+  else if (p.spaceBeforePct !== undefined) kids.push({ "a:spcBef": [{ "a:spcPct": [], ":@": { "@_val": String(Math.round(p.spaceBeforePct * 1000)) } }] });
   if (p.spaceAfterPt) kids.push({ "a:spcAft": [{ "a:spcPts": [], ":@": { "@_val": String(Math.round(p.spaceAfterPt * 100)) } }] });
+  else if (p.spaceAfterPct !== undefined) kids.push({ "a:spcAft": [{ "a:spcPct": [], ":@": { "@_val": String(Math.round(p.spaceAfterPct * 1000)) } }] });
   if (p.bullet) kids.push({ "a:buChar": [], ":@": { "@_char": p.bullet } });
   // DrawingML spells a soft line break as a sibling `a:br`, never as text.
   const node: any[] = [];

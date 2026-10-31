@@ -435,6 +435,17 @@ export class DeckEditor {
     if (!slideEl) return;
     slideEl.addEventListener("pointerdown", (e) => this.stageDown(e as PointerEvent, slideEl as HTMLElement));
     slideEl.addEventListener("dblclick", (e) => this.stageDouble(e as MouseEvent, slideEl as HTMLElement));
+    slideEl.addEventListener("keydown", (e) => this.stageKey(e as KeyboardEvent, slideEl as HTMLElement));
+  }
+
+  /** Enter or Space on a focused prompt claims it, exactly as clicking it does. */
+  private stageKey(e: KeyboardEvent, slideEl: HTMLElement): void {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key !== "Enter" && e.key !== " " && e.key !== "Spacebar") return;
+    const hint = (e.target as HTMLElement).closest<HTMLElement>(".ph-hint");
+    if (!hint || !slideEl.contains(hint)) return;
+    e.preventDefault();
+    this.claimPlaceholder(Number(hint.dataset.ph));
   }
 
   private elementFor(index: number): HTMLElement | undefined {

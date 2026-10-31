@@ -1618,7 +1618,10 @@ function placeholderHints(slide: Slide): string {
       const size = ph.sizePt ? `;font-size:${ph.sizePt}pt` : "";
       const horizontal = `;justify-content:${ph.align === "center" ? "center" : ph.align === "right" ? "flex-end" : "flex-start"}`;
       const vertical = `;align-items:${ph.anchor === "b" ? "flex-end" : ph.anchor === "ctr" ? "center" : "flex-start"}`;
-      return `<div class="ph-hint" data-ph="${i}" aria-hidden="true" style="${box}${size}${horizontal}${vertical}">${PLACEHOLDER_PROMPTS[ph.type ?? ""]}</div>`;
+      // The prompt is also the keyboard entry to its placeholder: Tab reaches it, Enter or
+      // Space claims it. Its own words are the accessible name, so nothing extra is spoken.
+      const prompt = PLACEHOLDER_PROMPTS[ph.type ?? ""] ?? "";
+      return `<div class="ph-hint" data-ph="${i}" role="button" tabindex="0" aria-label="${prompt}" style="${box}${size}${horizontal}${vertical}">${prompt}</div>`;
     })
     .join("");
 }

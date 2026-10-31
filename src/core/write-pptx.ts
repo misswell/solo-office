@@ -31,6 +31,10 @@ export function writePptx(pres: Presentation): Uint8Array {
   for (const slide of pres.slides) {
     const relsPath = relsPathOf(slide.partPath);
     const rewritten = slide.dirty || !files[slide.partPath];
+    // Notes typed into a deck whose slide never had a notes part need that part
+    // created first: the slide's relationship has to name a part that exists.
+    const addedNotes = slide.notesDirty && !slide.notesPath && !!(slide.notes ?? "").trim();
+    if (addedNotes) slide.notesPath = createNotesPart(slide, files);
     // A picture the editor inserted needs a relationship in the slide part, which
     // the id must take before the shape node naming that id is built.
     const extra = rewritten ? assignPictureRels(pres, slide, !files[relsPath] && !!pres.newSlideLayoutPath) : [];
@@ -39,7 +43,7 @@ export function writePptx(pres: Presentation): Uint8Array {
       syncShapeTree(rawFind(slide.tree, "spTree"), slide.shapes);
       files[slide.partPath] = strToU8(buildXml(slide.tree));
     }
-    if (extra.length) files[relsPath] = strToU8(slideRels(pres, slide, extra));
+    if (extra.length || addedNotes) files[relsPath] = strToU8(slideRels(pres, slide, extra));
     else if (!files[relsPath] && slide.partPath) files[relsPath] = strToU8(slideRels(pres, slide));
     if (slide.notesDirty && slide.notesPath && files[slide.notesPath]) patchNotes(slide, files);
   }
@@ -302,6 +306,32 @@ function patchNotes(slide: Slide, files: Record<string, Uint8Array>): void {
   }
 }
 
+/**
+ * A notes part for a slide that never had one, shaped like the one WPS writes:
+ * the slide image, the body placeholder and the slide-number placeholder, with
+ * relationships back to the slide and (when the deck has one) the notes master.
+ */
+function createNotesPart(slide: Slide, files: Record<string, Uint8Array>): string {
+  let n = 1;
+  while (files[`ppt/notesSlides/notesSlide${n}.xml`]) n++;
+  const path = `ppt/notesSlides/notesSlide${n}.xml`;
+  files[path] = strToU8(notesSlideXml((slide.notes ?? "").split("\n")));
+  const master = Object.keys(files)
+    .filter((p) => /^ppt\/notesMasters\/notesMaster\d+\.xml$/.test(p))
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))[0];
+  const rels = [`<Relationship Id="rId1" Type="${NS_R}/slide" Target="${XML_ESC(relativeTarget(path, slide.partPath))}"/>`];
+  if (master) rels.push(`<Relationship Id="rId2" Type="${NS_R}/notesMaster" Target="${XML_ESC(relativeTarget(path, master))}"/>`);
+  files[relsPathOf(path)] = strToU8(`${DECL}<Relationships xmlns="${NS_PKG}">${rels.join("")}</Relationships>`);
+  return path;
+}
+
+function notesSlideXml(lines: string[]): string {
+  const body = lines
+    .map((line) => (line ? `<a:p><a:r><a:rPr lang="zh-CN" altLang="en-US"/><a:t>${XML_ESC(line)}</a:t></a:r></a:p>` : "<a:p/>"))
+    .join("");
+  return `${DECL}<p:notes xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr><p:sp><p:nvSpPr><p:cNvPr id="2" name="幻灯片图像占位符 1"/><p:cNvSpPr><a:spLocks noGrp="1" noRot="1" noChangeAspect="1"/></p:cNvSpPr><p:nvPr><p:ph type="sldImg"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:p><a:endParaRPr lang="zh-CN" altLang="en-US"/></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="3" name="备注占位符 2"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/>${body}</p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="4" name="幻灯片编号占位符 3"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr><p:ph type="sldNum" sz="quarter" idx="10"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr lang="zh-CN" altLang="en-US"/></a:p></p:txBody></p:sp></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:notes>`;
+}
+
 // ---------------------------------------------------------- presentation.xml
 
 function patchPresentation(pres: Presentation): void {
@@ -347,6 +377,12 @@ function slideRels(pres: Presentation, slide: Slide, extra: { id: string; path: 
   }
   for (const e of extra) {
     rels.push(`<Relationship Id="${XML_ESC(e.id)}" Type="${NS_R}/image" Target="${XML_ESC(relativeTarget(slide.partPath, e.path))}"/>`);
+  }
+  if (slide.notesPath && !rels.some((rel) => rel.includes('/notesSlide"'))) {
+    const taken = new Set(rels.map((rel) => /Id="([^"]+)"/.exec(rel)?.[1] ?? ""));
+    let n = 0;
+    while (taken.has(`rId${++n}`));
+    rels.push(`<Relationship Id="rId${n}" Type="${NS_R}/notesSlide" Target="${XML_ESC(relativeTarget(slide.partPath, slide.notesPath))}"/>`);
   }
   return `${DECL}<Relationships xmlns="${NS_PKG}">${rels.join("")}</Relationships>`;
 }

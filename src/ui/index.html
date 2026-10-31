@@ -701,6 +701,23 @@
       .notes-text { margin-top: 3px; outline: none; white-space: pre-wrap; }
       .notes-text[data-empty="1"]::before { content: "点击添加备注…"; color: #98a0ac; }
 
+      /* ---- slide sorter / notes page ---- */
+      /* 幻灯片浏览：整副幻灯片按文件里的顺序铺成网格。 */
+      .deck.sorter { display: block; height: 100%; overflow: auto; background: #d9dde2; padding: 22px 26px 30px; }
+      .sorter-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(236px, 1fr)); gap: 22px 26px; justify-items: center; align-items: start; }
+      .sorter-cell { position: relative; padding: 17px 6px 6px; border: 2px solid transparent; border-radius: 4px; cursor: pointer; }
+      .sorter-cell.on { border-color: var(--accent); background: #ffffff80; }
+      .sorter-num { position: absolute; left: 4px; top: 1px; font-size: 11px; color: #5c6572; }
+      .sorter-slide { overflow: hidden; background: #fff; border: 1px solid #c3c9d2; box-shadow: 0 2px 8px #0002; }
+      .sorter-cell.on .sorter-slide { border-color: var(--accent); }
+
+      /* 备注页：一张纸上先幻灯片后备注，备注可改，写回的还是那一条 notes。 */
+      .deck.notes-page { display: block; height: 100%; overflow: auto; background: #d9dde2; padding: 26px 0 40px; }
+      .notes-sheet { width: min(720px, calc(100% - 56px)); margin: 0 auto; background: #fff; border: 1px solid #c3c9d2; box-shadow: 0 4px 18px #0002; padding: 26px 40px 40px; }
+      .notes-slide { margin: 0 auto; overflow: hidden; border: 1px solid #b9bfc7; }
+      .notes-sheet-text { margin-top: 26px; min-height: 150px; outline: none; white-space: pre-wrap; font-size: 13px; line-height: 1.6; color: #2c3138; }
+      .notes-sheet-text[data-empty="1"]::before { content: attr(data-placeholder); color: #98a0ac; }
+
       /* ---- slideshow ---- */
       .show {
         position: fixed;

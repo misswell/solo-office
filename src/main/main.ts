@@ -4725,7 +4725,7 @@ function smoke(): void {
 
         fire("solo:new", { kind: "pptx" });
         await wait(150);
-        const pptPart = { slides: document.querySelectorAll("#view .thumb").length, stage: !!document.querySelector("#view .stage"), title: document.getElementById("title")?.textContent, tabs: [...document.querySelectorAll("#ribbon .rtabs button")].map((t) => t.textContent).join("/"), homeCaps: [...document.querySelectorAll("#ribbon .rbar[data-tab='home'] .grp")].map((g) => g.dataset.cap || "-").join("/"), homeIcons: document.querySelectorAll("#ribbon .rbar[data-tab='home'] button.rb.ico .ic svg path").length, homeIconText: [...document.querySelectorAll("#ribbon .rbar[data-tab='home'] button.rb.ico")].every((b) => b.textContent === b.querySelector(".lb")?.textContent), undoInRibbon: [...document.querySelectorAll("#ribbon .rbar button.rb")].filter((b) => b.textContent === "撤销" || b.textContent === "重做").length };
+        const pptPart = { slides: document.querySelectorAll("#view .thumb").length, stage: !!document.querySelector("#view .stage"), title: document.getElementById("title")?.textContent, tabs: [...document.querySelectorAll("#ribbon .rtabs button")].map((t) => t.textContent).join("/"), homeCaps: [...document.querySelectorAll("#ribbon .rbar[data-tab='home'] .grp")].map((g) => g.dataset.cap || "-").join("/"), homeIcons: document.querySelectorAll("#ribbon .rbar[data-tab='home'] button.rb.ico .ic svg path").length, homeIconText: [...document.querySelectorAll("#ribbon .rbar[data-tab='home'] button.rb.ico")].every((b) => b.textContent === b.querySelector(".lb")?.textContent), undoInRibbon: [...document.querySelectorAll("#ribbon .rbar button.rb")].filter((b) => b.textContent === "撤销" || b.textContent === "重做").length, viewCaps: [...document.querySelectorAll("#ribbon .rbar[data-tab='view'] .grp")].map((g) => g.dataset.cap || "-").join("/") };
         // Insert a text box, type into it, restyle it through the ribbon, then
         // insert a shape and a picture through the shell picker.
         const stage = () => document.querySelector("#view .stage .slide");
@@ -4789,6 +4789,32 @@ function smoke(): void {
         window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
         await wait(150);
         const pptShow = { deckPages, start: showStart, next: showNext, black: showBlack, left: !document.querySelector(".show") };
+        // Views: the sorter paints every page, a double click opens that page in the
+        // normal view, the notes page shows the same slide plus its notes, and each
+        // button reports which view is live.
+        const viewBtn = (label) => [...document.querySelectorAll("#ribbon .rbar[data-tab='view'] button.rb")].find((b) => b.textContent === label);
+        viewBtn("幻灯片浏览")?.click();
+        await wait(220);
+        const sorterView = { painted: !!document.querySelector("#view .deck.sorter"), cells: document.querySelectorAll("#view .sorter-cell").length, pressed: viewBtn("幻灯片浏览")?.getAttribute("aria-pressed") };
+        document.querySelectorAll("#view .sorter-cell")[1]?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+        await wait(220);
+        const sorterBack = { normal: !!document.querySelector("#view .stage"), picked: [...document.querySelectorAll("#view .thumb")].findIndex((t) => t.classList.contains("on")) };
+        viewBtn("备注页")?.click();
+        await wait(220);
+        const notesBody = document.querySelector("#view .notes-sheet-text");
+        const notesView = { painted: !!document.querySelector("#view .notes-sheet"), editable: notesBody?.getAttribute("contenteditable") };
+        if (notesBody) {
+          notesBody.focus();
+          notesBody.textContent = "口头备注落在盘上";
+          notesBody.dispatchEvent(new Event("input", { bubbles: true }));
+          notesBody.blur();
+          await wait(120);
+          notesView.text = notesBody.textContent;
+          notesView.empty = notesBody.dataset.empty;
+        }
+        viewBtn("普通视图")?.click();
+        await wait(220);
+        const pptViews = { sorter: sorterView, back: sorterBack, notes: notesView, normal: !!document.querySelector("#view .stage"), pressed: viewBtn("普通视图")?.getAttribute("aria-pressed") };
         fire("solo:save");
         await wait(600);
         const pptSaved = { title: document.getElementById("title")?.textContent };
@@ -5048,7 +5074,7 @@ function smoke(): void {
         const recovered = { cells: document.querySelectorAll(".sheet-wrap td").length, title: document.getElementById("title")?.textContent };
         // The run ends on a modified document, so quitting goes through the unsaved prompt.
         // A PDF the export asked for shows up in saveAsWrites, next to the pptx/xlsx saves.
-        return { docPart, bandLeg, bandTabsLeg, editMarksLeg, sortLeg, rowSplitLeg, rulerLeg, painterLeg, leaderLeg, tabStopsLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, clearLeg, styleLeg, vertLeg, caseLeg, origLeg, origTableLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, sheetBorder, sheetRibbon, docNewPart, errorState, recovered };
+        return { docPart, bandLeg, bandTabsLeg, editMarksLeg, sortLeg, rowSplitLeg, rulerLeg, painterLeg, leaderLeg, tabStopsLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, clearLeg, styleLeg, vertLeg, caseLeg, origLeg, origTableLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptViews, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, sheetBorder, sheetRibbon, docNewPart, errorState, recovered };
       })()`;
       void last?.webContents
         .executeJavaScript(probe)

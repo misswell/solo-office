@@ -23,6 +23,12 @@ type Dir = (typeof HANDLE_DIRS)[number];
 const SHAPE_FILL = "#dce6f1";
 const SHAPE_LINE = "#4472c4";
 export type PresetGeometry = "rect" | "roundRect" | "ellipse" | "triangle" | "line" | "diamond" | "parallelogram" | "rightArrow" | "star5" | "chevron";
+/**
+ * The three views this editor can actually paint. WPS's `CT_View.kuip` `RB_PresView`
+ * declares a fourth (`Reading View`) and `RB_MasterView` three master layouts; neither has
+ * a model here yet, so the ribbon only offers the three below.
+ */
+export type DeckViewMode = "normal" | "sorter" | "notes";
 const SHAPE_NAMES: Record<PresetGeometry, string> = {
   rect: "矩形",
   roundRect: "圆角矩形",
@@ -48,6 +54,7 @@ export class DeckEditor {
   private editing: HTMLElement | null = null;
   private burst = 0;
   private fit = 1;
+  private viewMode: DeckViewMode = "normal";
 
   constructor(private host: HTMLElement, private pres: Presentation, private selectedSlide: number, private hooks: { changed(): void; selected?(): void }) {
     this.render();
@@ -74,6 +81,32 @@ export class DeckEditor {
 
   private render(): void {
     this.host.replaceChildren();
+    this.selBox = undefined;
+    if (this.viewMode === "sorter") this.renderSorter();
+    else if (this.viewMode === "notes") this.renderNotesPage();
+    else this.renderNormal();
+    this.placeSelection();
+    this.hooks.selected?.();
+  }
+
+  get view(): DeckViewMode {
+    return this.viewMode;
+  }
+
+  /**
+   * Switches the editing view. WPS keeps the same document in every view; only the
+   * surface changes, so an open text edit is flushed before the stage goes away.
+   */
+  setView(mode: DeckViewMode): void {
+    if (mode === this.viewMode) return;
+    // The surface is about to be replaced; its notes belong to the model either way.
+    this.commit();
+    this.viewMode = mode;
+    this.selected = null;
+    this.render();
+  }
+
+  private renderNormal(): void {
     const deck = document.createElement("div");
     deck.className = "deck";
 
@@ -150,8 +183,79 @@ export class DeckEditor {
 
     deck.append(rail, right);
     this.host.append(deck);
-    this.placeSelection();
-    this.hooks.selected?.();
+  }
+
+  /** 幻灯片浏览: the whole deck as a grid. A click picks a slide for the commands, a double click opens it. */
+  private renderSorter(): void {
+    // The grid carries no notes body; a detached one must not be read back as the
+    // current slide's notes after a click moves the selection.
+    this.notesEl = undefined;
+    const deck = document.createElement("div");
+    deck.className = "deck sorter";
+    const grid = document.createElement("div");
+    grid.className = "sorter-grid";
+    const width = 236;
+    const scale = width / this.pres.slideWidthPx;
+    this.pres.slides.forEach((_, i) => {
+      const cell = document.createElement("div");
+      cell.className = "sorter-cell" + (i === this.selectedSlide ? " on" : "");
+      cell.dataset.idx = String(i);
+      cell.title = `第 ${i + 1} 页`;
+      const num = document.createElement("span");
+      num.className = "sorter-num";
+      num.textContent = String(i + 1);
+      const box = document.createElement("div");
+      box.className = "sorter-slide";
+      box.style.width = `${width}px`;
+      box.style.height = `${this.pres.slideHeightPx * scale}px`;
+      box.innerHTML = `<div style="transform:scale(${scale});transform-origin:0 0;width:${this.pres.slideWidthPx}px;height:${this.pres.slideHeightPx}px">${renderSlideHtml(this.pres, i)}</div>`;
+      cell.append(num, box);
+      // 单击只挪选中（就地改类，不重画）：重画会把刚点中的格子从文档里摘掉，双击便到不了第二下。
+      cell.onclick = () => {
+        this.commit();
+        this.selectedSlide = i;
+        this.selected = null;
+        for (const el of grid.querySelectorAll(".sorter-cell.on")) el.classList.remove("on");
+        cell.classList.add("on");
+        this.hooks.selected?.();
+      };
+      cell.ondblclick = () => {
+        this.selectedSlide = i;
+        this.setView("normal");
+      };
+      grid.append(cell);
+    });
+    deck.append(grid);
+    this.host.append(deck);
+  }
+
+  /** 备注页: one page holding the slide and its speaker notes, notes editable in place. */
+  private renderNotesPage(): void {
+    const page = document.createElement("div");
+    page.className = "deck notes-page";
+    const sheet = document.createElement("div");
+    sheet.className = "notes-sheet";
+    const width = Math.min(this.pres.slideWidthPx, 640);
+    const scale = width / this.pres.slideWidthPx;
+    const frame = document.createElement("div");
+    frame.className = "notes-slide";
+    frame.style.width = `${width}px`;
+    frame.style.height = `${this.pres.slideHeightPx * scale}px`;
+    frame.innerHTML = `<div style="transform:scale(${scale});transform-origin:0 0;width:${this.pres.slideWidthPx}px;height:${this.pres.slideHeightPx}px">${renderSlideHtml(this.pres, this.selectedSlide)}</div>`;
+    const body = document.createElement("div");
+    body.className = "notes-sheet-text";
+    body.contentEditable = "plaintext-only";
+    body.spellcheck = false;
+    const slide = this.slide;
+    body.textContent = slide?.notes ?? "";
+    body.dataset.empty = slide?.notes ? "0" : "1";
+    body.dataset.placeholder = "点击添加备注…";
+    body.oninput = () => (body.dataset.empty = body.textContent ? "0" : "1");
+    body.onblur = () => this.commitNotes(body);
+    this.notesEl = body;
+    sheet.append(frame, body);
+    page.append(sheet);
+    this.host.append(page);
   }
 
   private wireStage(wrap: HTMLElement): void {
@@ -920,7 +1024,9 @@ export class DeckEditor {
   /** Flushes an in-progress edit before a save reads the model. */
   commit(): void {
     this.commitEditing();
-    if (this.notesEl && document.activeElement === this.notesEl) this.commitNotes(this.notesEl);
+    // Focus is not required: a hidden or background window never fires blur, and
+    // the notes body always belongs to the selected slide while it is mounted.
+    if (this.notesEl?.isConnected) this.commitNotes(this.notesEl);
   }
 }
 

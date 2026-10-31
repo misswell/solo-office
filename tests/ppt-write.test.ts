@@ -186,12 +186,25 @@ describe("pptx round trip", () => {
     pres.slides[0].notes = "改好的备注\n第二行";
     pres.slides[0].notesDirty = true;
     const back = open(writePptx(pres));
-    expect(back.slides[0].notes).toContain("改好的备注");
-    expect(back.slides[0].notes).toContain("第二行");
+    expect(back.slides[0].notes).toBe("改好的备注\n第二行");
   });
 });
 
 describe("a deck created from nothing", () => {
+  it("creates the notes part when speaker notes are typed into it", () => {
+    const pres = Presentation.blank();
+    pres.slides[0].notes = "第一行\n第二行";
+    pres.slides[0].notesDirty = true;
+    const out = writePptx(pres);
+    const pkg = OpcPackage.from(out);
+    expect(pkg.text("ppt/notesSlides/notesSlide1.xml")).toContain("第一行");
+    const rels = pkg.text("ppt/slides/_rels/slide1.xml.rels")!;
+    expect(rels).toContain("/notesSlide");
+    expect(rels).toContain('Target="../notesSlides/notesSlide1.xml"');
+    expect(pkg.text("ppt/notesSlides/_rels/notesSlide1.xml.rels")).toContain('Target="../slides/slide1.xml"');
+    expect(pkg.text("[Content_Types].xml")).toContain("/ppt/notesSlides/notesSlide1.xml");
+    expect(open(out).slides[0].notes).toBe("第一行\n第二行");
+  });
   it("round-trips through its own writer and reader", () => {
     const pres = Presentation.blank();
     expect(pres.slides).toHaveLength(1);

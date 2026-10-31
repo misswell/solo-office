@@ -176,9 +176,7 @@ export class Presentation {
       const notesPath = pkg.resolve(path, notesRel);
       if (pkg.parts.has(notesPath)) {
         slide.notesPath = notesPath;
-        const raw = pkg.text(notesPath) ?? "";
-        const texts = [...raw.matchAll(/<(?:[\w.-]+:)?t(?:\s[^>]*)?>([\s\S]*?)<\/(?:[\w.-]+:)?t>/g)].map((m) => m[1]);
-        slide.notes = decodeXml(texts.join(" ").trim()) || undefined;
+        slide.notes = notesTextOf(pkg.text(notesPath) ?? "") || undefined;
       }
     }
     return slide;
@@ -433,6 +431,28 @@ function findDeep(node: any, name: string): any {
 
 function decodeXml(s: string): string {
   return s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&");
+}
+
+/**
+ * The notes body placeholder's paragraphs, one line each. The slide image and the
+ * number placeholders carry no speaker text, and an empty paragraph is a real line.
+ */
+function notesTextOf(raw: string): string {
+  const shapes = rawFindAll(parseOrderedXml(raw), "sp");
+  const target =
+    shapes.find((sp) => {
+      const ph = rawFind(rawChildren(sp), "ph");
+      return ph ? rawAttrs(ph)["@_type"] === "body" : false;
+    }) ?? shapes.find((sp) => rawFind(rawChildren(sp), "txBody"));
+  const txBody = target ? rawFind(rawChildren(target), "txBody") : undefined;
+  if (!txBody) return "";
+  const lines = rawFindAll(rawChildren(txBody), "p").map((p) =>
+    rawFindAll(rawChildren(p), "t")
+      .map((t) => rawChildren(t).map((entry) => String(entry["#text"] ?? "")).join(""))
+      .join(""),
+  );
+  const text = decodeXml(lines.join("\n"));
+  return text.trim() ? text : "";
 }
 
 /** A blank slide, valid on its own; its relationship to a layout is added by the writer. */

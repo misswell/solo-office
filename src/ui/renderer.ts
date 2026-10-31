@@ -16,7 +16,7 @@ import { DocStatusBar } from "./doc-status-bar.js";
 import { showTableSortDialog } from "./doc-table-sort.js";
 import { CUSTOM, PAPER, paperEdges, paperOf } from "./doc-page-setup.js";
 import { currentUnit, onUnitChange, twipText, twipsFromUnit } from "./doc-units.js";
-import { DeckEditor, type PresetGeometry } from "./deck-edit.js";
+import { DeckEditor, type DeckViewMode, type PresetGeometry } from "./deck-edit.js";
 import { DeckShow } from "./deck-show.js";
 import { dataUrl, IMAGE_MIME_BY_EXT } from "../core/media.js";
 import { writePptx } from "../core/write-pptx.js";
@@ -455,6 +455,9 @@ const RIBBON_ICONS: Record<string, string> = {
   deleteShape: "<path d='M4 4h9v9H4z' stroke-dasharray='2 2'/><path d='M13 13l7 7M20 13l-7 7'/>",
   play: "<path d='M7 4l12 8-12 8z'/>",
   playHere: "<path d='M5 4l11 8-11 8z'/><path d='M19 5v14'/>",
+  viewNormal: "<path d='M3 5h18v14H3z'/><path d='M8 5v14'/><path d='M11 10h7M11 14h5'/>",
+  viewSorter: "<path d='M3 5h8v6H3zM13 5h8v6h-8zM3 13h8v6H3zM13 13h8v6h-8z'/>",
+  viewNotes: "<path d='M4 3h16v9H4z'/><path d='M4 16h16M4 20h10'/>",
   shapeRect: "<path d='M4 6h16v12H4z'/>",
   shapeRoundRect: "<path d='M8 6h8a4 4 0 0 1 4 4v4a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4v-4a4 4 0 0 1 4-4z'/>",
   shapeEllipse: "<path d='M12 5c4.4 0 8 3.1 8 7s-3.6 7-8 7-8-3.1-8-7 3.6-7 8-7z'/>",
@@ -537,6 +540,9 @@ const RIBBON_ICON_IDS: Record<string, string> = {
   删除形状: "deleteShape",
   放映: "play",
   本页放映: "playHere",
+  普通视图: "viewNormal",
+  幻灯片浏览: "viewSorter",
+  备注页: "viewNotes",
   矩形: "shapeRect",
   圆角: "shapeRoundRect",
   椭圆: "shapeEllipse",
@@ -2024,6 +2030,28 @@ function buildDeckRibbon(): void {
   button(show, "", "放映", "全屏放映，从头开始（F5）", () => startShow(false));
   button(show, "", "本页放映", "从当前页开始放映（⇧F5）", () => startShow(true));
 
+  // 视图页：`CT_View.kuip` 的 `RB_PresView`（`text="@Presentation View"`）声明四条 —— `Normal` /
+  // `SlideSorter` / `SlideShowReading` / `NotesPage`。阅读视图要的是满窗单页加一条翻页条，与放映共用
+  // 一套绘制却换了外壳，这一片不做；母版三档（`RB_MasterView`）没有母版模型，不摆空腿。
+  const presView = group("view", "演示视图");
+  const viewButton = (label: string, mode: DeckViewMode, tip: string): void => {
+    const b = document.createElement("button");
+    b.className = "rb";
+    b.textContent = label;
+    b.title = tip;
+    decorateRibbonButton(b, label);
+    b.dataset.view = mode;
+    b.onclick = () => {
+      deck?.setView(mode);
+      syncDeckRibbon();
+    };
+    ctl[`view:${mode}`] = b;
+    presView.append(b);
+  };
+  viewButton("普通视图", "normal", "编辑幻灯片的普通视图");
+  viewButton("幻灯片浏览", "sorter", "所有幻灯片排成一页；双击某页进入普通视图");
+  viewButton("备注页", "notes", "上方是幻灯片，下方是演讲者备注");
+
   shell.bars["view"]!.append(zoomGroup());
   shell.sync();
 }
@@ -2239,6 +2267,14 @@ function syncDeckRibbon(): void {
   }
   if (shape?.fill) (ctl.fill as HTMLInputElement | undefined)!.value = shape.fill.slice(0, 7);
   if (shape?.line) (ctl.line as HTMLInputElement | undefined)!.value = shape.line.slice(0, 7);
+  // 视图那一组三枚互斥：`aria-pressed` 给探针读，`.on` 是看得见的那一份。
+  for (const mode of ["normal", "sorter", "notes"] as const) {
+    const b = ctl[`view:${mode}`] as HTMLButtonElement | undefined;
+    if (!b) continue;
+    const on = (deck?.view ?? "normal") === mode;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-pressed", String(on));
+  }
 }
 
 function selectAllDoc(): void {

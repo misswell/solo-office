@@ -232,3 +232,57 @@ describe("new slides choose a layout", () => {
     expect(back.slides[1].layoutPath).toBe("ppt/slideLayouts/slideLayout1.xml");
   });
 });
+
+describe("body text inherits the master's nine levels", () => {
+  const claim = (pres: Presentation, layout: string, level: number): string => {
+    const slide = pres.addSlide(layout);
+    slide.shapes.push({
+      kind: "shape",
+      name: "文本占位符 2",
+      x: 0,
+      y: 0,
+      width: 400,
+      height: 200,
+      placeholder: "body",
+      placeholderIdx: 1,
+      paragraphs: [{ level, runs: [{ text: "甲乙" }] }],
+    });
+    return renderSlideHtml(pres, pres.slides.indexOf(slide));
+  };
+
+  it("reads all nine bodyStyle levels back with sizes, indents and bullets", () => {
+    const back = open(writePptx(Presentation.blank()));
+    expect(back.bodyLevels.map((l) => l.sizePt)).toEqual([18, 16, 16, 14, 14, 18, 18, 18, 18]);
+    expect(back.bodyLevels[0]).toMatchObject({ marLEmu: 228600, indentEmu: -228600, bullet: "●" });
+    expect(back.bodyLevels[1].marLEmu).toBe(685800);
+    expect(back.bodyLevels[8].marLEmu).toBe(228600 + 457200 * 8);
+    expect(back.bodyStylePt).toBe(18);
+    expect(pkgOf(Presentation.blank()).text("ppt/slideMasters/slideMaster1.xml")).toContain('<a:lvl9pPr marL="3886200" indent="-228600"');
+  });
+
+  it("draws a body placeholder's silent paragraph with the master's bullet and hanging indent", () => {
+    const html = claim(Presentation.blank(), "ppt/slideLayouts/slideLayout2.xml", 0);
+    expect(html).toContain('<span class="bullet">●</span>');
+    expect(html).toContain("padding-left:24px;text-indent:-24px");
+  });
+
+  it("honours a layout's buNone: 节标题 body text carries no bullet and starts at the box edge", () => {
+    const html = claim(Presentation.blank(), "ppt/slideLayouts/slideLayout3.xml", 0);
+    expect(html).not.toContain('class="bullet"');
+    expect(html).toContain("padding-left:0px;text-indent:0px");
+  });
+
+  it("draws a level-2 paragraph at the master's 16pt, 72px in with the level-2 bullet", () => {
+    const html = claim(Presentation.blank(), "ppt/slideLayouts/slideLayout2.xml", 2);
+    expect(html).toContain("padding-left:72px;text-indent:-24px");
+    expect(html).toContain("font-size:16pt");
+    expect(html).toContain('<span class="bullet">●</span>');
+  });
+
+  it("writes the layout lstStyle buNone 节标题/比较/图片与标题 declare", () => {
+    const pkg = pkgOf(Presentation.blank());
+    expect(pkg.text("ppt/slideLayouts/slideLayout3.xml")).toContain('<a:lvl1pPr marL="0" indent="0"><a:buNone/><a:defRPr sz="1800"/>');
+    expect(pkg.text("ppt/slideLayouts/slideLayout5.xml")).toContain("<a:buNone/>");
+    expect(pkg.text("ppt/slideLayouts/slideLayout8.xml")).toContain("<a:buNone/>");
+  });
+});

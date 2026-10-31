@@ -34,6 +34,10 @@ interface Ph {
   algn?: "l" | "ctr";
   /** `a:bodyPr@anchor`; empty means top. */
   anchor?: "t" | "ctr" | "b";
+  /** The layout states `marL="0" indent="0"` for this placeholder, as 节标题/比较/图片与标题 do. */
+  zeroIndent?: boolean;
+  /** The layout states `<a:buNone/>`: its text carries no bullet even though the master does. */
+  noBullet?: boolean;
 }
 
 interface LayoutDef {
@@ -74,7 +78,7 @@ export const BLANK_LAYOUTS: LayoutDef[] = [
     type: "secHead",
     placeholders: [
       title(1990800, 3848400, 7768800, 766800, true, { szPt: 44, anchor: "b" }),
-      body(1, 1990800, 4615200, 7768800, 867600, { custom: true, szPt: 18 }),
+      body(1, 1990800, 4615200, 7768800, 867600, { custom: true, szPt: 18, zeroIndent: true, noBullet: true }),
       ...footer(),
     ],
   },
@@ -93,9 +97,9 @@ export const BLANK_LAYOUTS: LayoutDef[] = [
     type: "twoTxTwoObj",
     placeholders: [
       title(608400, 608400, 10969200, 705600, false, { anchor: "ctr" }),
-      body(1, 608400, 1429200, 5342400, 381600, { custom: true, szPt: 20, anchor: "t" }),
+      body(1, 608400, 1429200, 5342400, 381600, { custom: true, szPt: 20, anchor: "t", zeroIndent: true, noBullet: true }),
       content(2, 608400, 1854000, 5342400, 4395600, { sz: "half" }),
-      body(3, 6235750, 1421729, 5342400, 381600, { sz: "quarter", custom: true, szPt: 20, anchor: "t" }),
+      body(3, 6235750, 1421729, 5342400, 381600, { sz: "quarter", custom: true, szPt: 20, anchor: "t", zeroIndent: true, noBullet: true }),
       content(4, 6235750, 1854000, 5342400, 4395600, { sz: "quarter" }),
       ...footer(),
     ],
@@ -114,8 +118,8 @@ export const BLANK_LAYOUTS: LayoutDef[] = [
     name: "图片与标题",
     userDrawn: true,
     placeholders: [
-      content(1, 608400, 1555200, 5233077, 4608000, { type: "pic", sz: "half", szPt: 16 }),
-      body(2, 6350400, 1555200, 5227200, 4608000, { sz: "half", szPt: 16 }),
+      content(1, 608400, 1555200, 5233077, 4608000, { type: "pic", sz: "half", szPt: 16, zeroIndent: true, noBullet: true }),
+      body(2, 6350400, 1555200, 5227200, 4608000, { sz: "half", szPt: 16, zeroIndent: true, noBullet: true }),
       ...footer(),
       { type: "title" },
     ],
@@ -160,9 +164,12 @@ function spElement(id: number, name: string, p: Ph): string {
     p.x !== undefined ? `<a:xfrm><a:off x="${p.x}" y="${p.y}"/><a:ext cx="${p.w}" cy="${p.h}"/></a:xfrm>` : "";
   // The layout states its own level-1 size/alignment; where it stays silent the master's txStyles answer.
   const bodyPr = p.anchor ? `<a:bodyPr anchor="${p.anchor}"/>` : `<a:bodyPr/>`;
+  const lvlAttrs =
+    (p.algn ? ` algn="${p.algn}"` : "") + (p.zeroIndent ? ' marL="0" indent="0"' : "");
+  const lvlKids = (p.noBullet ? "<a:buNone/>" : "") + `<a:defRPr${p.szPt ? ` sz="${p.szPt * 100}"` : ""}/>`;
   const lvl =
-    p.algn || p.szPt
-      ? `<a:lstStyle><a:lvl1pPr${p.algn ? ` algn="${p.algn}"` : ""}><a:defRPr${p.szPt ? ` sz="${p.szPt * 100}"` : ""}/></a:lvl1pPr></a:lstStyle>`
+    p.algn || p.szPt || p.zeroIndent || p.noBullet
+      ? `<a:lstStyle><a:lvl1pPr${lvlAttrs}>${lvlKids}</a:lvl1pPr></a:lstStyle>`
       : `<a:lstStyle/>`;
   return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${name}"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr><p:ph${phAttrs(p)}/></p:nvPr></p:nvSpPr><p:spPr>${xfrm}</p:spPr><p:txBody>${bodyPr}${lvl}<a:p/></p:txBody></p:sp>`;
 }
@@ -198,9 +205,20 @@ function masterXml(): string {
     spElement(6, "幻灯片编号占位符 5", { type: "sldNum", sz: "quarter", idx: 4, x: 8877600, y: 6314400, w: 2700000, h: 316800 }),
   ].join("");
   const ids = BLANK_LAYOUTS.map((_, i) => `<p:sldLayoutId id="${2147483649 + i}" r:id="rId${i + 1}"/>`).join("");
-  const textStyle = (first: string): string =>
-    `<a:lvl1pPr marL="0" algn="l" defTabSz="914400" rtl="0" eaLnBrk="1" latinLnBrk="0" hangingPunct="1"><a:defRPr sz="${first}" kern="1200"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill><a:latin typeface="+mn-lt"/><a:ea typeface="+mn-ea"/><a:cs typeface="+mn-cs"/></a:defRPr></a:lvl1pPr>`;
-  const txStyles = `<p:txStyles><p:titleStyle>${textStyle("3600")}</p:titleStyle><p:bodyStyle>${textStyle("1800")}</p:bodyStyle><p:otherStyle><a:defPPr><a:defRPr lang="zh-CN"/></a:defPPr>${textStyle("1800")}</p:otherStyle></p:txStyles>`;
+  const defRPr = (sz: number): string =>
+    `<a:defRPr sz="${sz}" kern="1200"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill><a:latin typeface="+mn-lt"/><a:ea typeface="+mn-ea"/><a:cs typeface="+mn-cs"/></a:defRPr>`;
+  const titleStyle = `<a:lvl1pPr marL="0" algn="l" defTabSz="914400" rtl="0" eaLnBrk="1" latinLnBrk="0" hangingPunct="1">${defRPr(3600)}</a:lvl1pPr>`;
+  // WPS's bodyStyle steps in 228600 EMU per level with a hanging -228600 indent; level 4's
+  // bullet is Wingdings 0x9F (its filled square), which the XML carries as `&#x9F;`.
+  const levelSizes = [1800, 1600, 1600, 1400, 1400, 1800, 1800, 1800, 1800];
+  const levelBullets = ["●", "●", "●", "&#x9F;", "•", "•", "•", "•", "•"];
+  const bodyStyle = levelSizes
+    .map((sz, i) => {
+      const face = i === 3 ? "Wingdings" : "Arial";
+      return `<a:lvl${i + 1}pPr marL="${228600 + 457200 * i}" indent="-228600" algn="l" defTabSz="914400" rtl="0" eaLnBrk="1" latinLnBrk="0" hangingPunct="1"><a:buFont typeface="${face}"/><a:buChar char="${levelBullets[i]}"/>${defRPr(sz)}</a:lvl${i + 1}pPr>`;
+    })
+    .join("");
+  const txStyles = `<p:txStyles><p:titleStyle>${titleStyle}</p:titleStyle><p:bodyStyle>${bodyStyle}</p:bodyStyle><p:otherStyle><a:defPPr><a:defRPr lang="zh-CN"/></a:defPPr><a:lvl1pPr marL="0" algn="l">${defRPr(1800)}</a:lvl1pPr></p:otherStyle></p:txStyles>`;
   return `${DECL}<p:sldMaster ${P_ROOT}><p:cSld><p:bg><p:bgRef idx="1001"><a:schemeClr val="bg1"/></p:bgRef></p:bg><p:spTree>${GROUP_PR}${shapes}</p:spTree></p:cSld><p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/><p:sldLayoutIdLst>${ids}</p:sldLayoutIdLst>${txStyles}</p:sldMaster>`;
 }
 

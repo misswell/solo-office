@@ -1,7 +1,7 @@
 import type { Block, BandPlace, Carried, CarriedInline, HeaderFooter, IndentFields, Inline, NumberLevel, PageBorder, Paragraph, PropSlot, RowInfo, Section, Table, TableBorder, TableCell, TabStop, WordDocument } from "./docx.js";
 import { DEFAULT_SECTION, TAB_LEADER_TOKENS, hasLine, LINE_ONE, MARGIN_SIDES, PAGE_BORDER_SIDES, PBDR_ORDER, headingLevel, lineGridPitchTwips, twipsToPx } from "./docx.js";
 import type { CommentAnchor } from "./comments.js";
-import type { LayoutPlaceholder, Presentation, Shape, Slide, SlideParagraph } from "./pptx.js";
+import type { BodyLevel, LayoutPlaceholder, Presentation, Shape, Slide, SlideParagraph } from "./pptx.js";
 
 const esc = (s: string): string =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -1438,6 +1438,11 @@ interface InhText {
   sizePt?: number;
   align?: string;
   anchor?: string;
+  /** Level-1 indents and bullet the layout states; the master's `p:bodyStyle` answers the rest. */
+  marLEmu?: number;
+  indentEmu?: number;
+  bullet?: string;
+  noBullet?: boolean;
 }
 
 /**
@@ -1453,15 +1458,50 @@ function inheritedTextStyle(slide: Slide | undefined, s: Shape, pres: Presentati
     sizePt: ph?.sizePt ?? (family === "title" ? pres.titleStylePt : pres.bodyStylePt),
     align: ph?.align,
     anchor: ph?.anchor,
+    marLEmu: ph?.marLEmu,
+    indentEmu: ph?.indentEmu,
+    bullet: ph?.bullet,
+    noBullet: ph?.noBullet,
   };
 }
 
-function renderSlideParagraph(p: SlideParagraph, inh?: InhText): string {
+/** Wingdings 0x9F draws a filled square; without that face, ▪ is the nearest honest glyph. */
+const bulletGlyph = (ch: string): string => (ch === "\u009f" ? "▪" : ch);
+
+/**
+ * A body paragraph's level: the layout's level 1 where it states one, the master's
+ * `p:bodyStyle` level otherwise (deeper levels only exist there).
+ */
+function levelStyle(p: SlideParagraph, inh: InhText | undefined, levels: BodyLevel[]): BodyLevel {
+  if (p.level > 0) return levels[p.level - 1] ?? {};
+  const master = levels[0] ?? {};
+  return {
+    sizePt: inh?.sizePt ?? master.sizePt,
+    marLEmu: inh?.marLEmu ?? master.marLEmu,
+    indentEmu: inh?.indentEmu ?? master.indentEmu,
+    bullet: inh?.bullet ?? master.bullet,
+    noBullet: inh?.noBullet ?? master.noBullet,
+  };
+}
+
+function renderSlideParagraph(p: SlideParagraph, inh?: InhText, levels?: BodyLevel[], body = false): string {
   const css: string[] = [];
   const align = p.align ?? inh?.align;
   if (align && ALIGN[align]) css.push(`text-align:${ALIGN[align]}`);
+  let bullet = p.bullet;
+  if (body && levels) {
+    const style = levelStyle(p, inh, levels);
+    const marL = Math.round((style.marLEmu ?? 0) / 9525);
+    const indent = Math.round((style.indentEmu ?? 0) / 9525);
+    css.push(`padding-left:${marL}px`, `text-indent:${indent}px`);
+    if (p.level > 0 && style.sizePt) css.push(`font-size:${style.sizePt}pt`);
+    // A slide's own `a:buChar` wins; otherwise the inherited bullet, unless `a:buNone` suppresses it.
+    if (!bullet && !style.noBullet) bullet = style.bullet;
+  } else {
+    css.push(`padding-left:${p.level * 18}px`);
+  }
   const runs = p.runs.map(renderInline).join("");
-  return `<div class="sp-p" style="${css.join(";")};padding-left:${p.level * 18}px">${p.bullet ? `<span class="bullet">${esc(p.bullet)}</span>` : ""}${runs || "<br>"}</div>`;
+  return `<div class="sp-p" style="${css.join(";")}">${bullet ? `<span class="bullet">${esc(bulletGlyph(bullet))}</span>` : ""}${runs || "<br>"}</div>`;
 }
 
 function renderShape(s: Shape, pres: Presentation, idx?: number, slide?: Slide): string {
@@ -1492,7 +1532,8 @@ function renderShape(s: Shape, pres: Presentation, idx?: number, slide?: Slide):
   if (s.lineColor) style.push(`border:${Math.max(1, s.lineWidth ?? 1)}px solid ${s.lineColor}`);
   if (s.geometry && s.geometry !== "rect") style.push(`clip-path:${clipFor(s.geometry)}`);
   const inh = inheritedTextStyle(slide, s, pres);
-  const text = (s.paragraphs ?? []).map((p) => renderSlideParagraph(p, inh)).join("");
+  const body = !!s.placeholder && placeholderFamily(s.placeholder) === "body";
+  const text = (s.paragraphs ?? []).map((p) => renderSlideParagraph(p, inh, pres.bodyLevels, body)).join("");
   // A placeholder's paragraph is drawn at the size its layout states (a run may state its
   // own), and its box stacks from the layout's bodyPr anchor — the title slide anchors the
   // title at the bottom, so an 18px default would put the clicked-in text in the wrong place.

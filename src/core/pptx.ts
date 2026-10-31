@@ -17,7 +17,34 @@ export interface LayoutPlaceholder {
   align?: string;
   /** `a:bodyPr@anchor`: "t", "ctr" or "b". */
   anchor?: string;
+  /** Level-1 `marL`/`indent`, in EMU; the hanging indent a bulleted line starts from. */
+  marLEmu?: number;
+  indentEmu?: number;
+  /** Level-1 bullet character, or `<a:buNone/>` suppressing the master's bullet. */
+  bullet?: string;
+  noBullet?: boolean;
 }
+
+/** One level of the master's `p:bodyStyle`, which body text inherits where the layout stays silent. */
+export interface BodyLevel {
+  sizePt?: number;
+  marLEmu?: number;
+  indentEmu?: number;
+  bullet?: string;
+  noBullet?: boolean;
+}
+
+/**
+ * The WPS blank template's `p:bodyStyle` levels: step-in 228600 EMU per level with a
+ * hanging -228600 indent, sizes 18/16/16/14/14/18/18/18/18 and ●/●/●/Wingdings-0x9F/•…
+ * A blank deck built here writes these, so a blank `Presentation` starts from them.
+ */
+export const WPS_BODY_LEVELS: BodyLevel[] = [18, 16, 16, 14, 14, 18, 18, 18, 18].map((sizePt, i) => ({
+  sizePt,
+  marLEmu: 228600 + 457200 * i,
+  indentEmu: -228600,
+  bullet: ["●", "●", "●", "\u009f", "•", "•", "•", "•", "•"][i],
+}));
 
 export interface Shape {
   kind: "shape" | "picture" | "table" | "group";
@@ -127,6 +154,8 @@ export class Presentation {
    */
   titleStylePt = 36;
   bodyStylePt = 18;
+  /** Master `p:bodyStyle` levels 1–9; a body paragraph's level picks its size, indent and bullet. */
+  bodyLevels: BodyLevel[] = WPS_BODY_LEVELS.map((l) => ({ ...l }));
   /** Images inserted in the editor (package part → data URL); a save writes these parts. */
   addedMedia = new Map<string, string>();
   private theme = new Map<string, string>();
@@ -382,27 +411,47 @@ export class Presentation {
         sizePt: p.szPt,
         align: p.algn ? ALGN_IN[p.algn] : undefined,
         anchor: p.anchor,
+        marLEmu: p.zeroIndent ? 0 : undefined,
+        indentEmu: p.zeroIndent ? 0 : undefined,
+        noBullet: p.noBullet,
       }));
   }
 
-  /** Level-1 title/body sizes from the one master `p:txStyles`; layout placeholders inherit them. */
+  /** Level-1 title/body sizes and the body's nine levels from the master `p:txStyles`. */
   private readMasterStyles(pkg: OpcPackage): void {
     const rel = [...pkg.rels("ppt/presentation.xml").values()].find((r) => r.type.endsWith("/slideMaster"));
     if (!rel) return;
     const xml = pkg.text(pkg.resolve("ppt/presentation.xml", rel));
     const styles = xml ? rawFind(parseOrderedXml(xml), "txStyles") : undefined;
     if (!styles) return;
-    const level1Pt = (name: string): number | undefined => {
-      const style = rawFind(rawChildren(styles), name);
-      const lvl = style ? rawFind(rawChildren(style), "lvl1pPr") : undefined;
-      const rpr = lvl ? rawFind(rawChildren(lvl), "defRPr") : undefined;
-      const sz = Number(rawAttrs(rpr ?? {})["@_sz"]);
-      return Number.isFinite(sz) && sz > 0 ? sz / 100 : undefined;
+    const styleOf = (name: string): any => rawFind(rawChildren(styles), name);
+    const levels = (style: any): BodyLevel[] => {
+      const out: BodyLevel[] = [];
+      for (let n = 1; n <= 9; n++) {
+        const lvl = style ? rawFind(rawChildren(style), `lvl${n}pPr`) : undefined;
+        if (!lvl) {
+          out.push({});
+          continue;
+        }
+        const a = rawAttrs(lvl);
+        const rpr = rawFind(rawChildren(lvl), "defRPr");
+        const sz = Number(rawAttrs(rpr ?? {})["@_sz"]);
+        const buChar = rawFind(rawChildren(lvl), "buChar");
+        out.push({
+          sizePt: Number.isFinite(sz) && sz > 0 ? sz / 100 : undefined,
+          marLEmu: a["@_marL"] !== undefined ? Number(a["@_marL"]) : undefined,
+          indentEmu: a["@_indent"] !== undefined ? Number(a["@_indent"]) : undefined,
+          bullet: buChar ? rawAttrs(buChar)["@_char"] : undefined,
+          noBullet: !!rawFind(rawChildren(lvl), "buNone") || undefined,
+        });
+      }
+      return out;
     };
-    const title = level1Pt("titleStyle");
-    const body = level1Pt("bodyStyle");
+    const title = levels(styleOf("titleStyle"))[0]?.sizePt;
+    const body = levels(styleOf("bodyStyle"));
     if (title !== undefined) this.titleStylePt = title;
-    if (body !== undefined) this.bodyStylePt = body;
+    if (body[0]?.sizePt !== undefined) this.bodyStylePt = body[0].sizePt;
+    if (body.some((l) => l.sizePt !== undefined || l.marLEmu !== undefined || l.bullet)) this.bodyLevels = body;
   }
 
   /**
@@ -523,6 +572,8 @@ function parseLayoutPlaceholders(xml: string): LayoutPlaceholder[] {
     const lvl1 = lst ? rawFind(rawChildren(lst), "lvl1pPr") : undefined;
     const defRPr = lvl1 ? rawFind(rawChildren(lvl1), "defRPr") : undefined;
     const sz = Number(rawAttrs(defRPr ?? {})["@_sz"]);
+    const lvlA = rawAttrs(lvl1 ?? {});
+    const buChar = lvl1 ? rawFind(rawChildren(lvl1), "buChar") : undefined;
     out.push({
       type: a["@_type"],
       idx: a["@_idx"] !== undefined ? Number(a["@_idx"]) : undefined,
@@ -531,8 +582,12 @@ function parseLayoutPlaceholders(xml: string): LayoutPlaceholder[] {
       width: Number(e["@_cx"] ?? 0) / EMU_PER_PX,
       height: Number(e["@_cy"] ?? 0) / EMU_PER_PX,
       sizePt: Number.isFinite(sz) && sz > 0 ? sz / 100 : undefined,
-      align: lvl1 ? ALGN_IN[rawAttrs(lvl1)["@_algn"] ?? ""] : undefined,
+      align: lvl1 ? ALGN_IN[lvlA["@_algn"] ?? ""] : undefined,
       anchor: bodyPr ? rawAttrs(bodyPr)["@_anchor"] : undefined,
+      marLEmu: lvlA["@_marL"] !== undefined ? Number(lvlA["@_marL"]) : undefined,
+      indentEmu: lvlA["@_indent"] !== undefined ? Number(lvlA["@_indent"]) : undefined,
+      bullet: buChar ? rawAttrs(buChar)["@_char"] : undefined,
+      noBullet: lvl1 && rawFind(rawChildren(lvl1), "buNone") ? true : undefined,
     });
   }
   return out;

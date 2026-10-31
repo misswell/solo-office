@@ -1443,6 +1443,9 @@ interface InhText {
   indentEmu?: number;
   bullet?: string;
   noBullet?: boolean;
+  lineSpacingPct?: number;
+  spaceBeforePt?: number;
+  spaceAfterPt?: number;
 }
 
 /**
@@ -1462,6 +1465,9 @@ function inheritedTextStyle(slide: Slide | undefined, s: Shape, pres: Presentati
     indentEmu: ph?.indentEmu,
     bullet: ph?.bullet,
     noBullet: ph?.noBullet,
+    lineSpacingPct: ph?.lineSpacingPct,
+    spaceBeforePt: ph?.spaceBeforePt,
+    spaceAfterPt: ph?.spaceAfterPt,
   };
 }
 
@@ -1471,47 +1477,64 @@ export const bulletGlyph = (ch: string): string => (ch === "\u009f" ? "▪" : ch
 /** A body-family placeholder inherits the master's levels; a plain text box does not. */
 export const isBodyPlaceholder = (s: Shape): boolean => !!s.placeholder && placeholderFamily(s.placeholder) === "body";
 
+/** The stylesheet's single-line metric; a file's `a:spcPct` scales this, so 100% keeps today's line. */
+const SLIDE_SINGLE_LINE = 1.3;
+
 /**
- * A body paragraph's level: the layout's level 1 where it states one, the master's
- * `p:bodyStyle` level otherwise. `a:pPr@lvl` and the model are both zero-based, so
- * level 0 is the first `lvl1pPr` and level 2 the third.
+ * The paint a paragraph gets at its level. The ladder, most specific first: the shape's
+ * own `a:lstStyle` level, the layout's level 1 (what a placeholder inherits), then the
+ * master's `p:bodyStyle` level for body text. `a:pPr@lvl` and the model are both
+ * zero-based, so level 0 is the first `lvl1pPr` and level 2 the third. A file's line and
+ * paragraph spacing ride the same ladder; a plain text box's level stops at the shape.
  */
-function levelStyle(p: SlideParagraph, inh: InhText | undefined, levels: BodyLevel[]): BodyLevel {
+function levelPaint(p: SlideParagraph, inh: InhText | undefined, levels: BodyLevel[], body: boolean, own?: BodyLevel): BodyLevel {
   const level = Math.max(0, Math.min(Math.max(0, levels.length - 1), p.level));
-  const own = levels[level] ?? {};
-  if (level > 0) return own;
+  const master = body ? (levels[level] ?? {}) : {};
+  const lvl1 = level === 0 ? inh : undefined;
   return {
-    sizePt: inh?.sizePt ?? own.sizePt,
-    marLEmu: inh?.marLEmu ?? own.marLEmu,
-    indentEmu: inh?.indentEmu ?? own.indentEmu,
-    bullet: inh?.bullet ?? own.bullet,
-    noBullet: inh?.noBullet ?? own.noBullet,
+    sizePt: own?.sizePt ?? lvl1?.sizePt ?? master.sizePt,
+    align: own?.align ?? lvl1?.align ?? master.align,
+    marLEmu: own?.marLEmu ?? lvl1?.marLEmu ?? master.marLEmu,
+    indentEmu: own?.indentEmu ?? lvl1?.indentEmu ?? master.indentEmu,
+    bullet: own?.bullet ?? lvl1?.bullet ?? master.bullet,
+    noBullet: own?.noBullet ?? lvl1?.noBullet ?? master.noBullet,
+    lineSpacingPct: p.lineSpacingPct ?? own?.lineSpacingPct ?? lvl1?.lineSpacingPct ?? master.lineSpacingPct,
+    spaceBeforePt: p.spaceBeforePt ?? own?.spaceBeforePt ?? lvl1?.spaceBeforePt ?? master.spaceBeforePt,
+    spaceAfterPt: p.spaceAfterPt ?? own?.spaceAfterPt ?? lvl1?.spaceAfterPt ?? master.spaceAfterPt,
   };
 }
 
 /** The paint a paragraph gets at a level; the editor's Tab/Shift+Tab restyles through it. */
 export function bodyLevelStyle(slide: Slide | undefined, s: Shape, level: number, pres: Presentation): BodyLevel {
-  return levelStyle({ level, runs: [] }, inheritedTextStyle(slide, s, pres), pres.bodyLevels);
+  const own = s.textLevels?.[Math.max(0, Math.min((s.textLevels?.length ?? 1) - 1, level))];
+  return levelPaint({ level, runs: [] }, inheritedTextStyle(slide, s, pres), pres.bodyLevels, isBodyPlaceholder(s), own);
 }
 
-function renderSlideParagraph(p: SlideParagraph, inh?: InhText, levels?: BodyLevel[], body = false): string {
+function renderSlideParagraph(p: SlideParagraph, inh?: InhText, levels?: BodyLevel[], body = false, own?: BodyLevel): string {
   const css: string[] = [];
-  const align = p.align ?? inh?.align;
+  const style = levelPaint(p, inh, levels ?? [], body, own);
+  const align = p.align ?? style.align;
   if (align && ALIGN[align]) css.push(`text-align:${ALIGN[align]}`);
   let bullet = p.bullet;
   if (body && levels) {
-    const style = levelStyle(p, inh, levels);
     const marL = Math.round((style.marLEmu ?? 0) / 9525);
     const indent = Math.round((style.indentEmu ?? 0) / 9525);
     css.push(`padding-left:${marL}px`, `text-indent:${indent}px`);
-    // The stylesheet's 14px is a fallback for plain shapes; a body placeholder draws at
-    // the master's size for its level (18pt on the first), never at that fallback.
-    if (style.sizePt) css.push(`font-size:${style.sizePt}pt`);
-    // A slide's own `a:buChar` wins; otherwise the inherited bullet, unless `a:buNone` suppresses it.
-    if (!bullet && !style.noBullet) bullet = style.bullet;
+  } else if (style.marLEmu !== undefined) {
+    // A text box's own `a:lstStyle` states where its line starts; the 18px step is only
+    // the fallback for a shape that says nothing.
+    css.push(`padding-left:${Math.round(style.marLEmu / 9525)}px`, `text-indent:${Math.round((style.indentEmu ?? 0) / 9525)}px`);
   } else {
     css.push(`padding-left:${p.level * 18}px`);
   }
+  // The stylesheet's 14px is a fallback for plain shapes; a body placeholder draws at
+  // the master's size for its level (18pt on the first), never at that fallback.
+  if (style.sizePt) css.push(`font-size:${style.sizePt}pt`);
+  // A slide's own `a:buChar` wins; otherwise the style's bullet, unless `a:buNone` suppresses it.
+  if (!bullet && !style.noBullet) bullet = style.bullet;
+  if (style.lineSpacingPct) css.push(`line-height:${Math.round(SLIDE_SINGLE_LINE * style.lineSpacingPct) / 100}`);
+  if (style.spaceBeforePt) css.push(`margin-top:${style.spaceBeforePt}pt`);
+  if (style.spaceAfterPt) css.push(`margin-bottom:${style.spaceAfterPt}pt`);
   const runs = p.runs.map(renderInline).join("");
   return `<div class="sp-p" data-lvl="${p.level}" style="${css.join(";")}">${bullet ? `<span class="bullet">${esc(bulletGlyph(bullet))}</span>` : ""}${runs || "<br>"}</div>`;
 }
@@ -1545,13 +1568,18 @@ function renderShape(s: Shape, pres: Presentation, idx?: number, slide?: Slide):
   if (s.geometry && s.geometry !== "rect") style.push(`clip-path:${clipFor(s.geometry)}`);
   const inh = inheritedTextStyle(slide, s, pres);
   const body = !!s.placeholder && placeholderFamily(s.placeholder) === "body";
-  const text = (s.paragraphs ?? []).map((p) => renderSlideParagraph(p, inh, pres.bodyLevels, body)).join("");
+  const own1 = s.textLevels?.[0];
+  const ownAt = (lvl: number): BodyLevel | undefined =>
+    s.textLevels?.[Math.max(0, Math.min(s.textLevels.length - 1, lvl))];
+  const text = (s.paragraphs ?? []).map((p) => renderSlideParagraph(p, inh, pres.bodyLevels, body, ownAt(p.level))).join("");
   // A placeholder's paragraph is drawn at the size its layout states (a run may state its
   // own), and its box stacks from the layout's bodyPr anchor — the title slide anchors the
   // title at the bottom, so an 18px default would put the clicked-in text in the wrong place.
-  // Text in a shape that is not a placeholder takes the master's `p:otherStyle` instead.
+  // Text in a shape that is not a placeholder takes the master's `p:otherStyle` instead,
+  // unless the shape's own `a:lstStyle` names a size first.
   const textCss: string[] = [];
-  if (inh?.sizePt) textCss.push(`font-size:${inh.sizePt}pt`);
+  if (own1?.sizePt) textCss.push(`font-size:${own1.sizePt}pt`);
+  else if (inh?.sizePt) textCss.push(`font-size:${inh.sizePt}pt`);
   else if (!inh) textCss.push(`font-size:${pres.otherStylePt}pt`);
   if (inh) textCss.push(`justify-content:${inh.anchor === "b" ? "flex-end" : inh.anchor === "ctr" ? "center" : "flex-start"}`);
   const textStyle = textCss.length ? ` style="${textCss.join(";")}"` : "";

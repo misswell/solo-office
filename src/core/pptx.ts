@@ -23,15 +23,28 @@ export interface LayoutPlaceholder {
   /** Level-1 bullet character, or `<a:buNone/>` suppressing the master's bullet. */
   bullet?: string;
   noBullet?: boolean;
+  /** Level-1 `a:lnSpc/a:spcPct`: line spacing as a percentage of single. */
+  lineSpacingPct?: number;
+  /** Level-1 `a:spcBef/a:spcPts`, in points. */
+  spaceBeforePt?: number;
+  /** Level-1 `a:spcAft/a:spcPts`, in points. */
+  spaceAfterPt?: number;
 }
 
-/** One level of the master's `p:bodyStyle`, which body text inherits where the layout stays silent. */
+/** One level of a text style (`p:bodyStyle` or a shape's `a:lstStyle`). */
 export interface BodyLevel {
   sizePt?: number;
+  align?: string;
   marLEmu?: number;
   indentEmu?: number;
   bullet?: string;
   noBullet?: boolean;
+  /** `a:lnSpc/a:spcPct`: line spacing as a percentage of single. */
+  lineSpacingPct?: number;
+  /** `a:spcBef/a:spcPts`, in points. */
+  spaceBeforePt?: number;
+  /** `a:spcAft/a:spcPts`, in points. */
+  spaceAfterPt?: number;
 }
 
 /**
@@ -73,6 +86,8 @@ export interface Shape {
   relId?: string;
   /** The part's own ordered nodes for this element, patched in place when the shape is edited. */
   raw?: any;
+  /** `a:txBody/a:lstStyle` levels: what this shape's text inherits before the layout and master speak. */
+  textLevels?: BodyLevel[];
   /** Text was edited; a save rebuilds this shape's text body from the model. */
   textDirty?: boolean;
 }
@@ -82,6 +97,12 @@ export interface SlideParagraph {
   level: number;
   bullet?: string;
   runs: Inline[];
+  /** `a:pPr/a:lnSpc/a:spcPct`: line spacing as a percentage of single. */
+  lineSpacingPct?: number;
+  /** `a:pPr/a:spcBef/a:spcPts`, in points. */
+  spaceBeforePt?: number;
+  /** `a:pPr/a:spcAft/a:spcPts`, in points. */
+  spaceAfterPt?: number;
 }
 
 export interface SlideCell {
@@ -121,6 +142,63 @@ const ALGN_IN: Record<string, string | undefined> = { l: "left", ctr: "center", 
 const find = (node: any, name: string): any => kids(node).find((c) => c.name === name)?.node;
 const findAll = (node: any, name: string): any[] => kids(node).filter((c) => c.name === name).map((c) => c.node);
 const attr = (node: any, name: string): string | undefined => node?.[`@_${name}`];
+
+/**
+ * One `a:lvlNpPr` (or `a:pPr`) as the editor's level paint. `a:lnSpc` holds the line
+ * spacing, `a:spcBef`/`a:spcAft` the paragraph spacing; both may say points or a
+ * percentage, and only the point form is modeled (a percentage before/after has no
+ * consumer in the authorized corpus — 2 masters, 20%, `.scratch/ppt-spacing-census`).
+ */
+function readLevel(lvl: any): BodyLevel {
+  const a = rawAttrs(lvl);
+  const rpr = rawFind(rawChildren(lvl), "defRPr");
+  const sz = Number(rawAttrs(rpr ?? {})["@_sz"]);
+  const buChar = rawFind(rawChildren(lvl), "buChar");
+  const ln = rawFind(rawChildren(lvl), "lnSpc");
+  const lnPct = ln ? rawFind(rawChildren(ln), "spcPct") : undefined;
+  const bef = rawFind(rawChildren(lvl), "spcBef");
+  const befPts = bef ? rawFind(rawChildren(bef), "spcPts") : undefined;
+  const aft = rawFind(rawChildren(lvl), "spcAft");
+  const aftPts = aft ? rawFind(rawChildren(aft), "spcPts") : undefined;
+  const pct = lnPct ? Number(rawAttrs(lnPct)["@_val"]) : NaN;
+  const before = befPts ? Number(rawAttrs(befPts)["@_val"]) : NaN;
+  const after = aftPts ? Number(rawAttrs(aftPts)["@_val"]) : NaN;
+  return {
+    sizePt: Number.isFinite(sz) && sz > 0 ? sz / 100 : undefined,
+    align: a["@_algn"] ? ALGN_IN[a["@_algn"]] : undefined,
+    marLEmu: a["@_marL"] !== undefined ? Number(a["@_marL"]) : undefined,
+    indentEmu: a["@_indent"] !== undefined ? Number(a["@_indent"]) : undefined,
+    bullet: buChar ? rawAttrs(buChar)["@_char"] : undefined,
+    noBullet: !!rawFind(rawChildren(lvl), "buNone") || undefined,
+    // Zero is a declared "no spacing", which draws the same as silence; the type's
+    // hundredths-of-a-point and thousandths-of-a-percent are scaled here once.
+    lineSpacingPct: Number.isFinite(pct) && pct > 0 ? pct / 1000 : undefined,
+    spaceBeforePt: Number.isFinite(before) && before > 0 ? before / 100 : undefined,
+    spaceAfterPt: Number.isFinite(after) && after > 0 ? after / 100 : undefined,
+  };
+}
+
+/** The nine levels of a `a:lstStyle`, absent levels left empty. */
+function readLevels(style: any): BodyLevel[] {
+  const out: BodyLevel[] = [];
+  for (let n = 1; n <= 9; n++) {
+    const lvl = style ? rawFind(rawChildren(style), `lvl${n}pPr`) : undefined;
+    out.push(lvl ? readLevel(lvl) : {});
+  }
+  return out;
+}
+
+const hasLevel = (l: BodyLevel): boolean =>
+  l.sizePt !== undefined ||
+  l.align !== undefined ||
+  l.marLEmu !== undefined ||
+  l.indentEmu !== undefined ||
+  l.bullet !== undefined ||
+  l.noBullet !== undefined ||
+  l.lineSpacingPct !== undefined ||
+  l.spaceBeforePt !== undefined ||
+  l.spaceAfterPt !== undefined;
+
 
 export class Presentation {
   slides: Slide[] = [];
@@ -346,6 +424,11 @@ export class Presentation {
       return { kind: "table", ...base, rows: rows.length ? rows : [[]], raw };
     }
     const ln = find(spPr, "ln");
+    // The text style is read off the raw part nodes: a parsed child map does not keep an
+    // array shape when a level appears once, which rawFind needs.
+    const rawTxBody = raw ? rawFind(rawChildren(raw), "txBody") : undefined;
+    const lstStyle = rawTxBody ? rawFind(rawChildren(rawTxBody), "lstStyle") : undefined;
+    const textLevels = lstStyle ? readLevels(lstStyle) : undefined;
     return {
       kind: "shape",
       ...base,
@@ -355,6 +438,7 @@ export class Presentation {
       lineColor: solidHex(find(ln, "solidFill")),
       lineWidth: attr(ln, "w") ? Number(attr(ln, "w")) / EMU_PER_PX : undefined,
       paragraphs: paragraphs(find(node, "txBody")),
+      textLevels: textLevels?.some(hasLevel) ? textLevels : undefined,
       raw,
     };
   }
@@ -564,35 +648,13 @@ export class Presentation {
     const styles = tree ? rawFind(tree, "txStyles") : undefined;
     if (!styles) return;
     const styleOf = (name: string): any => rawFind(rawChildren(styles), name);
-    const levels = (style: any): BodyLevel[] => {
-      const out: BodyLevel[] = [];
-      for (let n = 1; n <= 9; n++) {
-        const lvl = style ? rawFind(rawChildren(style), `lvl${n}pPr`) : undefined;
-        if (!lvl) {
-          out.push({});
-          continue;
-        }
-        const a = rawAttrs(lvl);
-        const rpr = rawFind(rawChildren(lvl), "defRPr");
-        const sz = Number(rawAttrs(rpr ?? {})["@_sz"]);
-        const buChar = rawFind(rawChildren(lvl), "buChar");
-        out.push({
-          sizePt: Number.isFinite(sz) && sz > 0 ? sz / 100 : undefined,
-          marLEmu: a["@_marL"] !== undefined ? Number(a["@_marL"]) : undefined,
-          indentEmu: a["@_indent"] !== undefined ? Number(a["@_indent"]) : undefined,
-          bullet: buChar ? rawAttrs(buChar)["@_char"] : undefined,
-          noBullet: !!rawFind(rawChildren(lvl), "buNone") || undefined,
-        });
-      }
-      return out;
-    };
-    const title = levels(styleOf("titleStyle"))[0]?.sizePt;
-    const body = levels(styleOf("bodyStyle"));
-    const other = levels(styleOf("otherStyle"))[0]?.sizePt;
+    const title = readLevels(styleOf("titleStyle"))[0]?.sizePt;
+    const body = readLevels(styleOf("bodyStyle"));
+    const other = readLevels(styleOf("otherStyle"))[0]?.sizePt;
     if (title !== undefined) this.titleStylePt = title;
     if (body[0]?.sizePt !== undefined) this.bodyStylePt = body[0].sizePt;
     if (other !== undefined) this.otherStylePt = other;
-    if (body.some((l) => l.sizePt !== undefined || l.marLEmu !== undefined || l.bullet)) this.bodyLevels = body;
+    if (body.some(hasLevel)) this.bodyLevels = body;
   }
 
   /**
@@ -741,10 +803,7 @@ function parseLayoutPlaceholders(xml: string, master?: LayoutPlaceholder[]): Lay
     const bodyPr = txBody ? rawFind(rawChildren(txBody), "bodyPr") : undefined;
     const lst = txBody ? rawFind(rawChildren(txBody), "lstStyle") : undefined;
     const lvl1 = lst ? rawFind(rawChildren(lst), "lvl1pPr") : undefined;
-    const defRPr = lvl1 ? rawFind(rawChildren(lvl1), "defRPr") : undefined;
-    const sz = Number(rawAttrs(defRPr ?? {})["@_sz"]);
-    const lvlA = rawAttrs(lvl1 ?? {});
-    const buChar = lvl1 ? rawFind(rawChildren(lvl1), "buChar") : undefined;
+    const level = lvl1 ? readLevel(lvl1) : {};
     out.push({
       type,
       idx,
@@ -752,16 +811,31 @@ function parseLayoutPlaceholders(xml: string, master?: LayoutPlaceholder[]): Lay
       y: geometry.y,
       width: geometry.width,
       height: geometry.height,
-      sizePt: Number.isFinite(sz) && sz > 0 ? sz / 100 : undefined,
-      align: lvl1 ? ALGN_IN[lvlA["@_algn"] ?? ""] : undefined,
+      sizePt: level.sizePt,
+      align: level.align,
       anchor: bodyPr ? rawAttrs(bodyPr)["@_anchor"] : undefined,
-      marLEmu: lvlA["@_marL"] !== undefined ? Number(lvlA["@_marL"]) : undefined,
-      indentEmu: lvlA["@_indent"] !== undefined ? Number(lvlA["@_indent"]) : undefined,
-      bullet: buChar ? rawAttrs(buChar)["@_char"] : undefined,
-      noBullet: lvl1 && rawFind(rawChildren(lvl1), "buNone") ? true : undefined,
+      marLEmu: level.marLEmu,
+      indentEmu: level.indentEmu,
+      bullet: level.bullet,
+      noBullet: level.noBullet,
+      lineSpacingPct: level.lineSpacingPct,
+      spaceBeforePt: level.spaceBeforePt,
+      spaceAfterPt: level.spaceAfterPt,
     });
   }
   return out;
+}
+
+/** A paragraph's own spacing from the parsed tree; zero is a declared "none", same as silence. */
+function paragraphSpacing(pPr: any): Pick<SlideParagraph, "lineSpacingPct" | "spaceBeforePt" | "spaceAfterPt"> {
+  const pct = Number(attr(find(find(pPr, "lnSpc"), "spcPct"), "val"));
+  const before = Number(attr(find(find(pPr, "spcBef"), "spcPts"), "val"));
+  const after = Number(attr(find(find(pPr, "spcAft"), "spcPts"), "val"));
+  return {
+    lineSpacingPct: Number.isFinite(pct) && pct > 0 ? pct / 1000 : undefined,
+    spaceBeforePt: Number.isFinite(before) && before > 0 ? before / 100 : undefined,
+    spaceAfterPt: Number.isFinite(after) && after > 0 ? after / 100 : undefined,
+  };
 }
 
 function paragraphs(txBody: any): SlideParagraph[] {
@@ -778,6 +852,7 @@ function paragraphs(txBody: any): SlideParagraph[] {
       // Real producers nest `a:buChar char="•"`; an attribute is tolerated too.
       bullet: attr(find(pPr, "buChar"), "char") ?? attr(pPr, "buChar"),
       runs,
+      ...paragraphSpacing(pPr),
     };
   });
 }

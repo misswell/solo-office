@@ -113,6 +113,8 @@ export interface Shape {
   fill?: string;
   lineColor?: string;
   lineWidth?: number;
+  /** `p:style/a:fontRef`: the colour this shape's theme style gives text that states none. */
+  styleTextColor?: string;
   /** `a:ln/a:prstDash@val`: the outline's dash pattern, as the file states it. */
   dash?: string;
   headEnd?: ArrowEnd;
@@ -511,6 +513,10 @@ export class Presentation {
       return { kind: "table", ...base, rows: rows.length ? rows : [[]], raw };
     }
     const ln = find(spPr, "ln");
+    // `p:style/a:fontRef` is the colour this shape's theme style gives its text. Every
+    // styled shape in the authorized corpus still states its own fill and outline, so the
+    // sibling `a:fillRef`/`a:lnRef` fallbacks have no audience and are not modelled.
+    const fontRef = find(find(node, "style"), "fontRef");
     // The text style is read off the raw part nodes: a parsed child map does not keep an
     // array shape when a level appears once, which rawFind needs.
     const rawTxBody = raw ? rawFind(rawChildren(raw), "txBody") : undefined;
@@ -534,6 +540,7 @@ export class Presentation {
       lineColor: solidHex(find(ln, "solidFill"), resolve),
       lineWidth: attr(ln, "w") ? Number(attr(ln, "w")) / EMU_PER_PX : undefined,
       dash: attr(find(ln, "prstDash"), "val"),
+      styleTextColor: solidHex(fontRef, resolve),
       headEnd: arrowEnd(find(ln, "headEnd")),
       tailEnd: arrowEnd(find(ln, "tailEnd")),
       paragraphs: paragraphs(find(node, "txBody"), resolve, typeface),

@@ -1555,7 +1555,7 @@ const scaledPt = (pt: number, pct?: number): number => (pct === undefined ? pt :
 /** A run's own size is stated in the file too, so the fit scales it on the way to the page. */
 const scaledRun = (r: Inline, pct?: number): Inline => (pct !== undefined && r.sizePt !== undefined ? { ...r, sizePt: scaledPt(r.sizePt, pct) } : r);
 
-function renderSlideParagraph(p: SlideParagraph, inh?: InhText, levels?: BodyLevel[], body = false, own?: BodyLevel, fit?: { fontScalePct?: number; lineSpacingReductionPct?: number }): string {
+function renderSlideParagraph(p: SlideParagraph, inh?: InhText, levels?: BodyLevel[], body = false, own?: BodyLevel, fit?: { fontScalePct?: number; lineSpacingReductionPct?: number }, styleColor?: string): string {
   const css: string[] = [];
   const style = levelPaint(p, inh, levels ?? [], body, own);
   const align = p.align ?? style.align;
@@ -1596,7 +1596,7 @@ function renderSlideParagraph(p: SlideParagraph, inh?: InhText, levels?: BodyLev
   // A run without a face of its own inherits the paragraph's `a:defRPr` face; a run
   // that states one keeps it. Theme references were resolved when the file was read.
   const runs = p.runs
-    .map((r) => renderInline({ ...scaledRun(r, fit?.fontScalePct), font: r.font ?? style.font, fontEastAsia: r.fontEastAsia ?? style.fontEastAsia }))
+    .map((r) => renderInline({ ...scaledRun(r, fit?.fontScalePct), font: r.font ?? style.font, fontEastAsia: r.fontEastAsia ?? style.fontEastAsia, color: r.color ?? styleColor }))
     .join("");
   return `<div class="sp-p" data-lvl="${p.level}" style="${css.join(";")}">${bullet ? `<span class="bullet">${esc(bulletGlyph(bullet))}</span>` : ""}${runs || "<br>"}</div>`;
 }
@@ -1639,7 +1639,7 @@ function renderShape(s: Shape, pres: Presentation, idx?: number, slide?: Slide):
   const ownAt = (lvl: number): BodyLevel | undefined =>
     s.textLevels?.[Math.max(0, Math.min(s.textLevels.length - 1, lvl))];
   const fit = s.fontScalePct !== undefined || s.lineSpacingReductionPct !== undefined ? { fontScalePct: s.fontScalePct, lineSpacingReductionPct: s.lineSpacingReductionPct } : undefined;
-  const text = (s.paragraphs ?? []).map((p) => renderSlideParagraph(p, inh, pres.bodyLevels, body, ownAt(p.level), fit)).join("");
+  const text = (s.paragraphs ?? []).map((p) => renderSlideParagraph(p, inh, pres.bodyLevels, body, ownAt(p.level), fit, s.styleTextColor)).join("");
   // A placeholder's paragraph is drawn at the size its layout states (a run may state its
   // own), and its box stacks from the layout's bodyPr anchor — the title slide anchors the
   // title at the bottom, so an 18px default would put the clicked-in text in the wrong place.

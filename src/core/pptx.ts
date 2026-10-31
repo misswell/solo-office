@@ -468,6 +468,34 @@ export class Presentation {
         const built = this.build(entry.name, entry.node, rels, sourcePart, rawKids[child++]);
         if (built) children.push(built);
       }
+      // Members state `a:off`/`a:ext` in the group's child space, which `chOff`/`chExt`
+      // map onto the group's own box. The renderer nests members under that box, so store
+      // them relative to it; reading child space as slide space would shift the whole
+      // group by the group's own offset.
+      const chOff = find(xfrm, "chOff");
+      const chExt = find(xfrm, "chExt");
+      const chX = Number(attr(chOff, "x") ?? 0) / EMU_PER_PX;
+      const chY = Number(attr(chOff, "y") ?? 0) / EMU_PER_PX;
+      const chW = Number(attr(chExt, "cx") ?? 0) / EMU_PER_PX;
+      const chH = Number(attr(chExt, "cy") ?? 0) / EMU_PER_PX;
+      const sx = chW > 0 ? base.width / chW : 1;
+      const sy = chH > 0 ? base.height / chH : 1;
+      const scaleInside = (s: Shape): void => {
+        for (const c of s.children ?? []) {
+          c.x *= sx;
+          c.y *= sy;
+          c.width *= sx;
+          c.height *= sy;
+          scaleInside(c);
+        }
+      };
+      for (const built of children) {
+        built.x = (built.x - chX) * sx;
+        built.y = (built.y - chY) * sy;
+        built.width *= sx;
+        built.height *= sy;
+        scaleInside(built);
+      }
       return { kind: "group", name: "", ...base, children, raw };
     }
     if (name !== "sp" && name !== "pic" && name !== "graphicFrame" && name !== "cxnSp") return undefined;

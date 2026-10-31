@@ -1755,6 +1755,11 @@ function presetOutline(geom: string, s: Shape): string[] {
       const inset = (ss * Math.max(0, Math.min(stated("adj", 25000), cap))) / 100000;
       return [`clip-path:polygon(${pct(inset, w)} 0,${pct(w - inset, w)} 0,100% 100%,0 100%)`];
     }
+    case "flowChartDelay": {
+      // The delay symbol is a rectangle whose right edge is the right half of an
+      // ellipse filling the box; two 50% right-hand corner radii draw exactly that.
+      return ["border-radius:0 50% 50% 0 / 0 50% 50% 0"];
+    }
     case "round2DiagRect": {
       // Two rounded corners on one diagonal: `adj1` is the top-left radius, `adj2` the
       // bottom-right one, each in 1/100000 of the short side and capped at half of it.

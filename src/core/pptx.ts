@@ -258,7 +258,9 @@ export class Presentation {
     let child = 0;
     for (const entry of kids(spTree)) {
       const shape = this.build(entry.name, entry.node, rels, path, rawKids[child++]);
-      if (shape) slide.shapes.push(shape);
+      if (!shape) continue;
+      this.inheritLayoutFrame(shape, entry.node, slide.layoutPlaceholders);
+      slide.shapes.push(shape);
     }
     const notesRel = [...rels.values()].find((r) => r.type.endsWith("/notesSlide"));
     if (notesRel) {
@@ -345,6 +347,29 @@ export class Presentation {
       height: Number(attr(ext, "cy") ?? 0) / EMU_PER_PX,
       rotation: attr(xfrm, "rot") ? Number(attr(xfrm, "rot")) / 60000 : undefined,
     };
+  }
+
+  /**
+   * A slide placeholder that states no transform takes the layout's geometry: PowerPoint
+   * matches `p:ph@idx` first, then the type, and WPS's own templates leave every one to it.
+   */
+  private inheritLayoutFrame(shape: Shape, node: any, layout: LayoutPlaceholder[] | undefined): void {
+    if (!layout?.length || shape.placeholder === undefined) return;
+    const spPr = find(node, "spPr") ?? find(node, "grpSpPr");
+    if (find(node, "xfrm") ?? find(spPr, "xfrm")) return;
+    const nv = find(node, "nvSpPr") ?? find(node, "nvPicPr") ?? find(node, "nvGraphicFramePr") ?? find(node, "nvCxnSpPr");
+    const ph = find(find(nv, "nvPr"), "ph");
+    const idx = attr(ph, "idx") !== undefined ? Number(attr(ph, "idx")) : undefined;
+    const type = String(attr(ph, "type") ?? "obj");
+    const hit =
+      (idx !== undefined ? layout.find((p) => p.idx === idx) : undefined) ??
+      layout.find((p) => (p.type ?? "obj") === type) ??
+      (type === "obj" ? layout.find((p) => p.type === undefined) : undefined);
+    if (!hit) return;
+    shape.x = hit.x;
+    shape.y = hit.y;
+    shape.width = hit.width;
+    shape.height = hit.height;
   }
 
   private readTheme(pkg: OpcPackage): void {

@@ -1,0 +1,85 @@
+import { describe, expect, it } from "vitest";
+import { OpcPackage } from "../src/core/opc.js";
+import { Presentation } from "../src/core/pptx.js";
+import { writePptx } from "../src/core/write-pptx.js";
+
+const open = (bytes: Uint8Array): Presentation => Presentation.openBytes(bytes);
+const pkgOf = (pres: Presentation): OpcPackage => OpcPackage.from(writePptx(pres));
+
+describe("blank deck package", () => {
+  it("writes the master, eleven layouts, theme and property parts WPS's blank deck has", () => {
+    const pkg = pkgOf(Presentation.blank());
+    expect(pkg.text("ppt/presentation.xml")).toContain('<p:sldMasterId id="2147483648" r:id="rId1"/>');
+    expect(pkg.text("ppt/presentation.xml")).toContain('<p:sldSz cx="12192000" cy="6858000"/>');
+    expect(pkg.text("ppt/slideMasters/slideMaster1.xml")).toContain('name="标题占位符 1"');
+    expect(pkg.text("ppt/slideMasters/slideMaster1.xml")).toContain("<p:sldLayoutIdLst>");
+    expect(pkg.text("ppt/theme/theme1.xml")).toContain('<a:srgbClr val="4874CB"/>');
+    expect(pkg.text("ppt/theme/theme1.xml")).toContain('<a:ea typeface="微软雅黑"/>');
+    expect(pkg.text("ppt/presProps.xml")).toContain("<p:presentationPr");
+    expect(pkg.text("ppt/viewProps.xml")).toContain('<p:gridSpacing cx="72008" cy="72008"/>');
+    expect(pkg.text("ppt/tableStyles.xml")).toContain("<a:tblStyleLst");
+    expect(pkg.text("docProps/core.xml")).toContain("<cp:coreProperties");
+    expect(pkg.text("docProps/app.xml")).toContain("<Slides>1</Slides>");
+    const layouts = [...pkg.parts.keys()].filter((p) => /^ppt\/slideLayouts\/slideLayout\d+\.xml$/.test(p));
+    expect(layouts).toHaveLength(11);
+    expect(pkg.text("ppt/slideLayouts/slideLayout1.xml")).toContain('type="title"');
+    expect(pkg.text("ppt/slideLayouts/slideLayout1.xml")).toContain('name="标题幻灯片"');
+    expect(pkg.text("ppt/slideLayouts/slideLayout7.xml")).toContain('type="blank"');
+    expect(pkg.text("ppt/slideLayouts/slideLayout9.xml")).toContain('orient="vert"');
+    // WPS's three typeless layouts are user-drawn; PowerPoint hides untyped custom
+    // layouts that do not say so, which would drop 图片与标题/内容/末尾幻灯片 from its picker.
+    for (const n of [8, 10, 11]) expect(pkg.text(`ppt/slideLayouts/slideLayout${n}.xml`)).toContain('preserve="1" userDrawn="1"');
+    expect(pkg.text("ppt/slideLayouts/slideLayout3.xml")).not.toContain("userDrawn");
+  });
+
+  it("wires the relationships the package needs to be a presentation", () => {
+    const pkg = pkgOf(Presentation.blank());
+    const presRels = pkg.text("ppt/_rels/presentation.xml.rels")!;
+    expect(presRels).toContain('Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster"');
+    expect(presRels).toContain('Target="theme/theme1.xml"');
+    expect(presRels).toContain('Target="viewProps.xml"');
+    expect(presRels).toContain('Id="rId6" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"');
+    expect(pkg.text("ppt/slides/_rels/slide1.xml.rels")).toContain('Target="../slideLayouts/slideLayout1.xml"');
+    const masterRels = pkg.text("ppt/slideMasters/_rels/slideMaster1.xml.rels")!;
+    expect(masterRels).toContain('Id="rId11" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout11.xml"');
+    expect(masterRels).toContain('Id="rId12" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="../theme/theme1.xml"');
+    expect(pkg.text("ppt/slideLayouts/_rels/slideLayout11.xml.rels")).toContain('Target="../slideMasters/slideMaster1.xml"');
+    expect(pkg.text("_rels/.rels")).toContain('Target="docProps/core.xml"');
+  });
+
+  it("declares every generated part's content type", () => {
+    const types = pkgOf(Presentation.blank()).text("[Content_Types].xml")!;
+    for (const part of [
+      "/ppt/slideMasters/slideMaster1.xml",
+      "/ppt/slideLayouts/slideLayout11.xml",
+      "/ppt/theme/theme1.xml",
+      "/ppt/presProps.xml",
+      "/ppt/viewProps.xml",
+      "/ppt/tableStyles.xml",
+      "/docProps/core.xml",
+      "/docProps/app.xml",
+    ]) {
+      expect(types).toContain(`PartName="${part}"`);
+    }
+  });
+
+  it("reads its own blank package back with the layouts it wrote", () => {
+    const back = open(writePptx(Presentation.blank()));
+    expect(back.slides).toHaveLength(1);
+    expect(back.slideWidthEmu).toBe(12192000);
+    expect(back.gridSpacingEmu).toBe(72008);
+    expect(back.newSlideLayoutPath).toBe("ppt/slideLayouts/slideLayout1.xml");
+    const added = back.addSlide();
+    expect(added.relId).toBe("rId7");
+    expect(open(writePptx(back)).slides).toHaveLength(2);
+  });
+
+  it("keeps notes parts free of a notes master the blank package never writes", () => {
+    const pres = Presentation.blank();
+    pres.slides[0].notes = "写在空白件上的备注";
+    pres.slides[0].notesDirty = true;
+    const pkg = pkgOf(pres);
+    expect(pkg.text("ppt/notesSlides/notesSlide1.xml")).toContain("写在空白件上的备注");
+    expect(pkg.text("ppt/notesSlides/_rels/notesSlide1.xml.rels")).not.toContain("notesMaster");
+  });
+});

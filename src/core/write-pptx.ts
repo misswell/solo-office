@@ -2,6 +2,7 @@ import { strToU8, zipSync } from "fflate";
 import { bytesOfDataUrl, IMAGE_MIME_BY_EXT } from "./media.js";
 import { buildXml, parseOrderedXml, rawAttrs, rawChildren, rawFind, rawFindAll, relsPathOf, tagLocalOf } from "./opc.js";
 import type { Presentation, Shape, Slide, SlideCell, SlideParagraph } from "./pptx.js";
+import { blankDeckParts } from "./pptx-blank.js";
 import type { Inline } from "./docx.js";
 import { hasLine } from "./docx.js";
 
@@ -27,6 +28,9 @@ export function writePptx(pres: Presentation): Uint8Array {
   if (pres.src) for (const [path, bytes] of pres.src.parts) files[path] = bytes;
   for (const path of pres.removedParts) delete files[path];
   for (const [path, url] of pres.addedMedia) files[path] = bytesOfDataUrl(url);
+  // A deck built in the editor has no source package: master, layouts, theme and
+  // the document properties are generated here, never overwriting what was written.
+  if (!pres.src) for (const [path, xml] of Object.entries(blankDeckParts(pres.slides.length))) if (!files[path]) files[path] = strToU8(xml);
 
   for (const slide of pres.slides) {
     const relsPath = relsPathOf(slide.partPath);
@@ -353,6 +357,18 @@ function presentationRels(pres: Presentation): string {
       if (slideIds.has(id) || rel.type.endsWith("/slide")) continue;
       others.push(`<Relationship Id="${XML_ESC(id)}" Type="${XML_ESC(rel.type)}" Target="${XML_ESC(rel.target)}"${rel.targetMode === "External" ? ' TargetMode="External"' : ""}/>`);
     }
+  } else {
+    // The generated blank package hangs master, theme and the three property parts
+    // under rId1..rId5, which slides start after.
+    for (const [id, type, target] of [
+      ["rId1", "slideMaster", "slideMasters/slideMaster1.xml"],
+      ["rId2", "theme", "theme/theme1.xml"],
+      ["rId3", "presProps", "presProps.xml"],
+      ["rId4", "viewProps", "viewProps.xml"],
+      ["rId5", "tableStyles", "tableStyles.xml"],
+    ]) {
+      others.push(`<Relationship Id="${id}" Type="${NS_R}/${type}" Target="${target}"/>`);
+    }
   }
   const slides = pres.slides.map((s) => {
     const target = "slides/" + s.partPath.slice("ppt/slides/".length);
@@ -439,6 +455,23 @@ function contentTypesXml(pres: Presentation, files: Record<string, Uint8Array>):
   }
   // A deck built in the editor carries no source override for its main part.
   if (files[pres.presPath] && !overrides.has("/" + pres.presPath)) overrides.set("/" + pres.presPath, `${CT_P}.presentation.main+xml`);
+  // Generated parts (blank master, layouts, theme, property parts, notes) need
+  // their content type wherever the source package did not already declare one.
+  const TYPE_BY_PART: [RegExp, string][] = [
+    [/^ppt\/slideMasters\/slideMaster\d+\.xml$/, `${CT_P}.slideMaster+xml`],
+    [/^ppt\/slideLayouts\/slideLayout\d+\.xml$/, `${CT_P}.slideLayout+xml`],
+    [/^ppt\/theme\/theme\d+\.xml$/, "application/vnd.openxmlformats-officedocument.theme+xml"],
+    [/^ppt\/presProps\.xml$/, `${CT_P}.presProps+xml`],
+    [/^ppt\/viewProps\.xml$/, `${CT_P}.viewProps+xml`],
+    [/^ppt\/tableStyles\.xml$/, `${CT_P}.tableStyles+xml`],
+    [/^docProps\/core\.xml$/, "application/vnd.openxmlformats-package.core-properties+xml"],
+    [/^docProps\/app\.xml$/, "application/vnd.openxmlformats-officedocument.extended-properties+xml"],
+  ];
+  for (const path of Object.keys(files)) {
+    if (overrides.has("/" + path)) continue;
+    const hit = TYPE_BY_PART.find(([re]) => re.test(path));
+    if (hit) overrides.set("/" + path, hit[1]);
+  }
   if (!defaults.has("rels")) defaults.set("rels", "application/vnd.openxmlformats-package.relationships+xml");
   if (!defaults.has("xml")) defaults.set("xml", "application/xml");
   for (const path of Object.keys(files)) {

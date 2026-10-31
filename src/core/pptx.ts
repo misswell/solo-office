@@ -74,7 +74,7 @@ const attr = (node: any, name: string): string | undefined => node?.[`@_${name}`
 
 export class Presentation {
   slides: Slide[] = [];
-  slideWidthEmu = 9144000;
+  slideWidthEmu = 12192000;
   slideHeightEmu = 6858000;
   /** The package the deck was read from; a writer copies every part it does not own. */
   src?: OpcPackage;
@@ -88,6 +88,8 @@ export class Presentation {
   presDirty = false;
   /** Layout a new slide references, as a package path. */
   newSlideLayoutPath?: string;
+  /** First relationship id a blank deck may hand to a slide; its presentation rels hold the rest. */
+  private blankRelBase = 0;
   /**
    * `p:gridSpacing@cx` from `ppt/viewProps.xml`, in EMU. WPS writes 72008 on 69 of the
    * 77 authorized decks (6 more write 76200, 2 write 72000), so the grid pitch the
@@ -123,6 +125,10 @@ export class Presentation {
   static blank(): Presentation {
     const p = new Presentation();
     p.presTree = parseOrderedXml(PRESENTATION_TEMPLATE);
+    // The blank writer emits master, theme, presProps, viewProps and tableStyles
+    // under rId1..rId5, so slides start after them.
+    p.newSlideLayoutPath = "ppt/slideLayouts/slideLayout1.xml";
+    p.blankRelBase = 5;
     p.addSlide();
     return p;
   }
@@ -338,7 +344,7 @@ export class Presentation {
     let n = 1;
     while (used.has(n)) n++;
     const rels = this.pkg?.rels(this.presPath);
-    let maxRel = 0;
+    let maxRel = this.blankRelBase;
     const takeRel = (id: string): void => {
       const m = /^rId(\d+)$/.exec(id);
       if (m) maxRel = Math.max(maxRel, Number(m[1]));
@@ -480,4 +486,4 @@ const SLIDE_TEMPLATE = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 
 /** A blank presentation root for a deck that never came from a file. */
 const PRESENTATION_TEMPLATE = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sldIdLst/><p:sldSz cx="9144000" cy="6858000"/><p:notesSz cx="6858000" cy="9144000"/></p:presentation>`;
+<p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst><p:sldIdLst/><p:sldSz cx="12192000" cy="6858000"/><p:notesSz cx="6858000" cy="9144000"/></p:presentation>`;

@@ -581,22 +581,44 @@ export class DeckEditor {
     sel?.removeAllRanges();
     sel?.addRange(range);
     body.dataset.before = JSON.stringify(shape.paragraphs ?? []);
+    this.lockBullets(body);
     body.onkeydown = (e) => {
       if (e.key === "Escape") {
         e.preventDefault();
         (e.target as HTMLElement).blur();
         return;
       }
+      if (!isBodyPlaceholder(shape)) return;
+      // A body placeholder's keydown target is the focused body itself, so the caret — not
+      // the event target — says which paragraph the key is about.
+      const pe = this.paragraphAt(body, window.getSelection()?.anchorNode ?? (e.target as Node));
+      if (e.key === "Enter" && !e.shiftKey) {
+        const sel = window.getSelection();
+        if (e.isComposing || !pe || !sel?.rangeCount || !sel.isCollapsed) return;
+        // Split here instead of letting the browser clone the block: it keeps the tag but
+        // drops the inline level marks, and cloning an inline bullet span misplaces it.
+        e.preventDefault();
+        this.splitParagraph(body, pe, shape);
+        return;
+      }
       // Tab / Shift+Tab demote and promote the caret's paragraph, as in WPS. Outside a
       // body placeholder the key keeps its default (moving focus out of the field).
-      if (e.key === "Tab" && isBodyPlaceholder(shape)) {
-        const pe = this.paragraphAt(body, e.target as Node);
+      if (e.key === "Tab") {
         if (!pe) return;
         e.preventDefault();
         this.shiftLevel(body, pe, shape, e.shiftKey);
       }
     };
     plainPaste(body);
+    if (isBodyPlaceholder(shape)) {
+      body.addEventListener("input", (e) => {
+        // Only stray browser splits (selection, multi-block paste) need the neighbour's level.
+        if ((e as InputEvent).inputType !== "insertParagraph") return;
+        setTimeout(() => {
+          if (this.editing === body && body.isConnected) this.inheritLevels(body, shape);
+        }, 0);
+      });
+    }
     body.onblur = () => this.commitText();
   }
 
@@ -620,6 +642,19 @@ export class DeckEditor {
   private shiftLevel(body: HTMLElement, pe: HTMLElement, shape: Shape, promote: boolean): void {
     const last = Math.max(0, this.pres.bodyLevels.length - 1);
     const level = Math.max(0, Math.min(last, this.levelOf(pe, shape) + (promote ? -1 : 1)));
+    this.paintLevel(pe, shape, level);
+    // Keep the caret in the paragraph after restyling.
+    const range = document.createRange();
+    range.selectNodeContents(pe);
+    range.collapse(false);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+    body.focus();
+  }
+
+  /** Writes one paragraph's level as the marks the browser keeps: indent, size and bullet. */
+  private paintLevel(pe: HTMLElement, shape: Shape, level: number): void {
     const style = bodyLevelStyle(this.slide, shape, level, this.pres);
     pe.dataset.lvl = String(level);
     pe.style.paddingLeft = `${Math.round((style.marLEmu ?? 0) / 9525)}px`;
@@ -634,16 +669,59 @@ export class DeckEditor {
         span.className = "bullet";
         pe.prepend(span);
       }
+      // The glyph is a mark, not text: keep the caret and typing out of it.
+      span.contentEditable = "false";
       span.textContent = bulletGlyph(ch);
     } else bullet?.remove();
-    // Keep the caret in the paragraph after restyling.
-    const range = document.createRange();
-    range.selectNodeContents(pe);
-    range.collapse(false);
+  }
+
+  private lockBullets(body: HTMLElement): void {
+    for (const b of body.querySelectorAll<HTMLElement>(".bullet")) b.contentEditable = "false";
+  }
+
+  /** Splits pe at the caret; the new block keeps pe's level, bullet and size. */
+  private splitParagraph(body: HTMLElement, pe: HTMLElement, shape: Shape): void {
     const sel = window.getSelection();
-    sel?.removeAllRanges();
-    sel?.addRange(range);
+    if (!sel?.rangeCount) return;
+    const range = sel.getRangeAt(0);
+    if (!pe.contains(range.startContainer)) return;
+    const tail = document.createRange();
+    tail.selectNodeContents(pe);
+    tail.setStart(range.startContainer, range.startOffset);
+    const next = document.createElement("div");
+    next.className = "sp-p";
+    next.append(tail.extractContents());
+    pe.after(next);
+    this.paintLevel(next, shape, this.levelOf(pe, shape));
+    const first = [...next.childNodes].find((n) => !(n instanceof HTMLElement && n.classList.contains("bullet")));
+    const caret = document.createRange();
+    if (first) {
+      caret.setStartBefore(first);
+      caret.collapse(true);
+    } else {
+      // An empty block is just the bullet: the caret goes after it, not before.
+      caret.selectNodeContents(next);
+      caret.collapse(false);
+    }
+    sel.removeAllRanges();
+    sel.addRange(caret);
     body.focus();
+  }
+
+  /**
+   * A split the browser performs on its own (a selection, or a paste with blocks) clones
+   * the tag but not the inline level marks; give such a paragraph its neighbour's level.
+   */
+  private inheritLevels(body: HTMLElement, shape: Shape): void {
+    const ps = [...body.children].filter(
+      (c): c is HTMLElement => c instanceof HTMLElement && c.tagName === "DIV" && c.classList.contains("sp-p"),
+    );
+    const styled = (p: HTMLElement): boolean => p.dataset.lvl !== undefined || p.style.paddingLeft !== "";
+    ps.forEach((pe, i) => {
+      if (styled(pe)) return;
+      const src = [...ps.slice(0, i)].reverse().find(styled) ?? ps.slice(i + 1).find(styled);
+      if (src) this.paintLevel(pe, shape, this.levelOf(src, shape));
+    });
   }
 
   private editCell(td: HTMLElement, shape: Shape): void {
@@ -772,6 +850,8 @@ export class DeckEditor {
       }
       if (node.nodeType !== Node.ELEMENT_NODE) return;
       const el = node as HTMLElement;
+      // The bullet is painted from the level, never typed; reading it back would double it.
+      if (el.classList.contains("bullet")) return;
       if (el.tagName === "BR") {
         out.push({ ...inherited, text: "\n", break: false } as Inline);
         return;

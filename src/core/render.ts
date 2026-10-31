@@ -1436,6 +1436,9 @@ export function renderWord(doc: WordDocument, view: RevisionView = "marks"): str
 
 interface InhText {
   sizePt?: number;
+  /** The face a placeholder's level states, when the layout/master names one. */
+  font?: string;
+  fontEastAsia?: string;
   align?: string;
   /** Level-1 indents and bullet the layout states; the master's `p:bodyStyle` answers the rest. */
   marLEmu?: number;
@@ -1462,6 +1465,8 @@ function inheritedTextStyle(slide: Slide | undefined, s: Shape, pres: Presentati
   const family = placeholderFamily(s.placeholder);
   return {
     sizePt: ph?.sizePt ?? (family === "title" ? pres.titleStylePt : pres.bodyStylePt),
+    font: ph?.font,
+    fontEastAsia: ph?.fontEastAsia,
     align: ph?.align,
     textBody: ph?.textBody,
     marLEmu: ph?.marLEmu,
@@ -1525,6 +1530,8 @@ function levelPaint(p: SlideParagraph, inh: InhText | undefined, levels: BodyLev
   };
   return {
     sizePt: own?.sizePt ?? lvl1?.sizePt ?? master.sizePt,
+    font: p.font ?? own?.font ?? lvl1?.font ?? master.font,
+    fontEastAsia: p.fontEastAsia ?? own?.fontEastAsia ?? lvl1?.fontEastAsia ?? master.fontEastAsia,
     align: own?.align ?? lvl1?.align ?? master.align,
     marLEmu: own?.marLEmu ?? lvl1?.marLEmu ?? master.marLEmu,
     indentEmu: own?.indentEmu ?? lvl1?.indentEmu ?? master.indentEmu,
@@ -1586,7 +1593,11 @@ function renderSlideParagraph(p: SlideParagraph, inh?: InhText, levels?: BodyLev
   else if (style.spaceBeforePct !== undefined) css.push(`margin-top:${gapEm(style.spaceBeforePct)}`);
   if (style.spaceAfterPt !== undefined) css.push(`margin-bottom:${style.spaceAfterPt}pt`);
   else if (style.spaceAfterPct !== undefined) css.push(`margin-bottom:${gapEm(style.spaceAfterPct)}`);
-  const runs = p.runs.map((r) => renderInline(scaledRun(r, fit?.fontScalePct))).join("");
+  // A run without a face of its own inherits the paragraph's `a:defRPr` face; a run
+  // that states one keeps it. Theme references were resolved when the file was read.
+  const runs = p.runs
+    .map((r) => renderInline({ ...scaledRun(r, fit?.fontScalePct), font: r.font ?? style.font, fontEastAsia: r.fontEastAsia ?? style.fontEastAsia }))
+    .join("");
   return `<div class="sp-p" data-lvl="${p.level}" style="${css.join(";")}">${bullet ? `<span class="bullet">${esc(bulletGlyph(bullet))}</span>` : ""}${runs || "<br>"}</div>`;
 }
 

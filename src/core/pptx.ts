@@ -26,6 +26,9 @@ export interface LayoutPlaceholder {
   height: number;
   /** Level-1 character size the layout's `a:lstStyle` states, in points. */
   sizePt?: number;
+  /** Level-1 face the layout's `a:lstStyle` states, theme references resolved. */
+  font?: string;
+  fontEastAsia?: string;
   /** Level-1 paragraph alignment, in the editor's words. */
   align?: string;
   /** The layout's `a:bodyPr`, with the master's own where the layout leaves one out. */
@@ -51,6 +54,10 @@ export interface LayoutPlaceholder {
 /** One level of a text style (`p:bodyStyle` or a shape's `a:lstStyle`). */
 export interface BodyLevel {
   sizePt?: number;
+  /** `a:defRPr/a:latin`: the face, with theme references (`+mn-lt`) already resolved. */
+  font?: string;
+  /** `a:defRPr/a:ea`: the East Asian face, theme references resolved. */
+  fontEastAsia?: string;
   align?: string;
   marLEmu?: number;
   indentEmu?: number;
@@ -141,6 +148,10 @@ export interface SlideParagraph {
   align?: string;
   level: number;
   bullet?: string;
+  /** `a:pPr/a:defRPr/a:latin`: the face this paragraph's runs inherit, theme references resolved. */
+  font?: string;
+  /** `a:pPr/a:defRPr/a:ea`: the East Asian face those runs inherit, theme references resolved. */
+  fontEastAsia?: string;
   /** `a:pPr/a:buNone`: this paragraph draws no bullet even where its level names one. */
   noBullet?: boolean;
   /** `a:pPr@marL`/`@indent`, in EMU: the paragraph's own start and hanging indent. */
@@ -202,9 +213,11 @@ const attr = (node: any, name: string): string | undefined => node?.[`@_${name}`
  * spacing, `a:spcBef`/`a:spcAft` the paragraph spacing; both may say points or a
  * percentage of the line height, kept apart so the ladder can pick one rung's answer.
  */
-function readLevel(lvl: any): BodyLevel {
+function readLevel(lvl: any, typeface?: (name?: string) => string | undefined): BodyLevel {
   const a = rawAttrs(lvl);
   const rpr = rawFind(rawChildren(lvl), "defRPr");
+  const latin = rpr ? rawFind(rawChildren(rpr), "latin") : undefined;
+  const ea = rpr ? rawFind(rawChildren(rpr), "ea") : undefined;
   const sz = Number(rawAttrs(rpr ?? {})["@_sz"]);
   const buChar = rawFind(rawChildren(lvl), "buChar");
   const ln = rawFind(rawChildren(lvl), "lnSpc");
@@ -222,6 +235,8 @@ function readLevel(lvl: any): BodyLevel {
   const afterPct = aftPct ? Number(rawAttrs(aftPct)["@_val"]) : NaN;
   return {
     sizePt: Number.isFinite(sz) && sz > 0 ? sz / 100 : undefined,
+    font: typeface?.(rawAttrs(latin ?? {})["@_typeface"]),
+    fontEastAsia: typeface?.(rawAttrs(ea ?? {})["@_typeface"]),
     align: a["@_algn"] ? ALGN_IN[a["@_algn"]] : undefined,
     marLEmu: a["@_marL"] !== undefined ? Number(a["@_marL"]) : undefined,
     indentEmu: a["@_indent"] !== undefined ? Number(a["@_indent"]) : undefined,
@@ -238,11 +253,11 @@ function readLevel(lvl: any): BodyLevel {
 }
 
 /** The nine levels of a `a:lstStyle`, absent levels left empty. */
-function readLevels(style: any): BodyLevel[] {
+function readLevels(style: any, typeface?: (name?: string) => string | undefined): BodyLevel[] {
   const out: BodyLevel[] = [];
   for (let n = 1; n <= 9; n++) {
     const lvl = style ? rawFind(rawChildren(style), `lvl${n}pPr`) : undefined;
-    out.push(lvl ? readLevel(lvl) : {});
+    out.push(lvl ? readLevel(lvl, typeface) : {});
   }
   return out;
 }
@@ -304,6 +319,8 @@ export class Presentation {
   /** Images inserted in the editor (package part → data URL); a save writes these parts. */
   addedMedia = new Map<string, string>();
   private theme = new Map<string, string>();
+  /** `a:fontScheme` faces by reference (`mj-lt`, `mn-ea`, …), from the theme the master owns. */
+  private fonts = new Map<string, string>();
   private media = new Map<string, string>();
   private pkg?: OpcPackage;
   /**
@@ -458,6 +475,7 @@ export class Presentation {
     // A deck may paint with the theme (`a:schemeClr accent1`) instead of an sRGB literal;
     // the master's `p:clrMap` says which clrScheme slot a `bg1`/`tx1` name means.
     const resolve = (scheme: any): string | undefined => this.themeHex(scheme);
+    const typeface = (name?: string): string | undefined => this.typeface(name);
     const ph = find(find(nv, "nvPr"), "ph");
     const spPr = find(node, "spPr") ?? find(node, "grpSpPr");
     // A graphicFrame carries its own p:xfrm; shapes and pictures nest it under spPr.
@@ -484,7 +502,9 @@ export class Presentation {
       const tbl = findDeep(node, "tbl");
       const rows = findAll(tbl, "tr").map((tr) =>
         findAll(tr, "tc").map((tc): SlideCell => {
-          const runs = paragraphs(find(tc, "txBody"), resolve).flatMap((p) => p.runs);
+          const runs = paragraphs(find(tc, "txBody"), resolve, typeface).flatMap((p) =>
+            p.runs.map((r) => ({ ...r, font: r.font ?? p.font, fontEastAsia: r.fontEastAsia ?? p.fontEastAsia })),
+          );
           return { text: runs.map((r) => r.text).join(""), runs, fill: solidHex(find(find(tc, "tcPr"), "solidFill"), resolve) };
         }),
       );
@@ -495,7 +515,7 @@ export class Presentation {
     // array shape when a level appears once, which rawFind needs.
     const rawTxBody = raw ? rawFind(rawChildren(raw), "txBody") : undefined;
     const lstStyle = rawTxBody ? rawFind(rawChildren(rawTxBody), "lstStyle") : undefined;
-    const textLevels = lstStyle ? readLevels(lstStyle) : undefined;
+    const textLevels = lstStyle ? readLevels(lstStyle, typeface) : undefined;
     // "Shrink text on overflow" leaves the size it picked in `a:normAutofit`; without a
     // `fontScale` the producer expects the renderer to fit at draw time, which this model
     // does not measure. Only the stated percentage is a fact the file carries.
@@ -516,7 +536,7 @@ export class Presentation {
       dash: attr(find(ln, "prstDash"), "val"),
       headEnd: arrowEnd(find(ln, "headEnd")),
       tailEnd: arrowEnd(find(ln, "tailEnd")),
-      paragraphs: paragraphs(find(node, "txBody"), resolve),
+      paragraphs: paragraphs(find(node, "txBody"), resolve, typeface),
       textLevels: textLevels?.some(hasLevel) ? textLevels : undefined,
       textBody: readTextBody(bodyPr),
       fontScalePct: Number.isFinite(fontScale) && fontScale > 0 ? fontScale / 1000 : undefined,
@@ -578,7 +598,8 @@ export class Presentation {
       ? [owner]
       : [...pkg.parts.keys()].filter((p) => /^ppt\/theme\/theme\d+\.xml$/.test(p));
     for (const path of paths) {
-      const clrScheme = findDeep(pkg.xml(path), "clrScheme");
+      const root = pkg.xml(path);
+      const clrScheme = findDeep(root, "clrScheme");
       for (const { name, node } of kids(clrScheme)) {
         // WPS names the two base slots with `sysClr` (windowText / window) and keeps
         // the concrete value in `lastClr`; the other slots are plain sRGB.
@@ -586,6 +607,18 @@ export class Presentation {
         const sys = srgb ? undefined : find(node, "sysClr");
         const val = srgb ? attr(srgb, "val") : attr(sys, "lastClr");
         if (val) this.theme.set(name.toLowerCase(), "#" + val);
+      }
+      // The same theme states the major/minor faces that `+mj-lt`/`+mn-lt` and their
+      // `ea`/`cs` siblings reference. An empty face is no face: the producer left the
+      // script to the renderer, so it stays unstated instead of becoming `""`.
+      const fontScheme = findDeep(root, "fontScheme");
+      // The reference token for the latin face is `lt` (`+mj-lt`), not the element's name.
+      for (const [slot, prefix] of [["majorFont", "mj"], ["minorFont", "mn"]] as const) {
+        const font = find(fontScheme, slot);
+        for (const [element, token] of [["latin", "lt"], ["ea", "ea"], ["cs", "cs"]] as const) {
+          const face = attr(find(font, element), "typeface");
+          if (face && !this.fonts.has(`${prefix}-${token}`)) this.fonts.set(`${prefix}-${token}`, face);
+        }
       }
     }
   }
@@ -613,6 +646,16 @@ export class Presentation {
 
   themeColor(name: string): string | undefined {
     return this.theme.get(name);
+  }
+
+  /**
+   * The face a typeface reference names: `+mn-lt`/`+mj-ea` and their `cs` siblings resolve
+   * through the theme's `a:fontScheme`; a literal name is itself. An unstated face stays
+   * undefined so the renderer does not invent one.
+   */
+  typeface(name?: string): string | undefined {
+    if (!name) return undefined;
+    return name.startsWith("+") ? this.fonts.get(name.slice(1)) : name;
   }
 
   /** The clrScheme slot a `a:schemeClr@val` names, after the master's `p:clrMap`. */
@@ -680,7 +723,7 @@ export class Presentation {
     if (!path) return undefined;
     if (this.pkg) {
       const xml = this.pkg.text(path);
-      return xml ? parseLayoutPlaceholders(xml, this.masterPlaceholdersOf(path)) : undefined;
+      return xml ? parseLayoutPlaceholders(xml, this.masterPlaceholdersOf(path), (name) => this.typeface(name)) : undefined;
     }
     const m = /slideLayout(\d+)\.xml$/.exec(path);
     const def = m ? BLANK_LAYOUTS[Number(m[1]) - 1] : undefined;
@@ -713,7 +756,7 @@ export class Presentation {
     const cached = this.masterPlaceholderCache.get(path);
     if (cached) return cached;
     const xml = pkg.parts.has(path) ? pkg.text(path) : undefined;
-    const list = xml ? parseLayoutPlaceholders(xml) : [];
+    const list = xml ? parseLayoutPlaceholders(xml, undefined, (name) => this.typeface(name)) : [];
     this.masterPlaceholderCache.set(path, list);
     return list;
   }
@@ -732,9 +775,10 @@ export class Presentation {
     const styles = tree ? rawFind(tree, "txStyles") : undefined;
     if (!styles) return;
     const styleOf = (name: string): any => rawFind(rawChildren(styles), name);
-    const title = readLevels(styleOf("titleStyle"))[0]?.sizePt;
-    const body = readLevels(styleOf("bodyStyle"));
-    const other = readLevels(styleOf("otherStyle"))[0]?.sizePt;
+    const typeface = (name?: string): string | undefined => this.typeface(name);
+    const title = readLevels(styleOf("titleStyle"), typeface)[0]?.sizePt;
+    const body = readLevels(styleOf("bodyStyle"), typeface);
+    const other = readLevels(styleOf("otherStyle"), typeface)[0]?.sizePt;
     if (title !== undefined) this.titleStylePt = title;
     if (body[0]?.sizePt !== undefined) this.bodyStylePt = body[0].sizePt;
     if (other !== undefined) this.otherStylePt = other;
@@ -898,7 +942,7 @@ function transformHex(hex: string, node: any): string {
  * placeholders of its 330 layouts to the master. The footer, date and slide-number
  * placeholders also live only on the master, but nothing here draws them, so they stay out.
  */
-function parseLayoutPlaceholders(xml: string, master?: LayoutPlaceholder[]): LayoutPlaceholder[] {
+function parseLayoutPlaceholders(xml: string, master?: LayoutPlaceholder[], typeface?: (name?: string) => string | undefined): LayoutPlaceholder[] {
   const spTree = rawFind(parseOrderedXml(xml), "spTree");
   const out: LayoutPlaceholder[] = [];
   for (const entry of spTree ? rawChildren(spTree) : []) {
@@ -932,7 +976,7 @@ function parseLayoutPlaceholders(xml: string, master?: LayoutPlaceholder[]): Lay
     const bodyPr = txBody ? rawFind(rawChildren(txBody), "bodyPr") : undefined;
     const lst = txBody ? rawFind(rawChildren(txBody), "lstStyle") : undefined;
     const lvl1 = lst ? rawFind(rawChildren(lst), "lvl1pPr") : undefined;
-    const level = lvl1 ? readLevel(lvl1) : {};
+    const level = lvl1 ? readLevel(lvl1, typeface) : {};
     out.push({
       type,
       idx,
@@ -941,6 +985,8 @@ function parseLayoutPlaceholders(xml: string, master?: LayoutPlaceholder[]): Lay
       width: geometry.width,
       height: geometry.height,
       sizePt: level.sizePt,
+      font: level.font,
+      fontEastAsia: level.fontEastAsia,
       align: level.align,
       // `a:bodyPr` inherits attribute by attribute: the layout may anchor and leave the
       // insets to the master, or the other way round.
@@ -1009,12 +1055,13 @@ function paragraphSpacing(pPr: any): Pick<SlideParagraph, "lineSpacingPct" | "sp
   };
 }
 
-function paragraphs(txBody: any, resolve?: (node: any) => string | undefined): SlideParagraph[] {
+function paragraphs(txBody: any, resolve?: (node: any) => string | undefined, typeface?: (name?: string) => string | undefined): SlideParagraph[] {
   return findAll(txBody, "p").map((p) => {
     const pPr = find(p, "pPr");
+    const def = find(pPr, "defRPr");
     const runs: Inline[] = [];
     for (const child of kids(p)) {
-      if (child.name === "r" || child.name === "fld") runs.push(inlineOf(child.node, resolve));
+      if (child.name === "r" || child.name === "fld") runs.push(inlineOf(child.node, resolve, typeface));
       else if (child.name === "br") runs.push({ text: "\n" } as Inline);
     }
     return {
@@ -1025,13 +1072,16 @@ function paragraphs(txBody: any, resolve?: (node: any) => string | undefined): S
       noBullet: find(pPr, "buNone") ? true : undefined,
       marLEmu: attr(pPr, "marL") !== undefined ? Number(attr(pPr, "marL")) : undefined,
       indentEmu: attr(pPr, "indent") !== undefined ? Number(attr(pPr, "indent")) : undefined,
+      // The paragraph's default run properties: the face every run without its own inherits.
+      font: typeface?.(attr(find(def, "latin"), "typeface")),
+      fontEastAsia: typeface?.(attr(find(def, "ea"), "typeface")),
       runs,
       ...paragraphSpacing(pPr),
     };
   });
 }
 
-function inlineOf(r: any, resolve?: (node: any) => string | undefined): Inline {
+function inlineOf(r: any, resolve?: (node: any) => string | undefined, typeface?: (name?: string) => string | undefined): Inline {
   const rPr = find(r, "rPr");
   return {
     text: textOf(find(r, "t")),
@@ -1042,7 +1092,8 @@ function inlineOf(r: any, resolve?: (node: any) => string | undefined): Inline {
     underline: attr(rPr, "u") && attr(rPr, "u") !== "none" ? "single" : undefined,
     sizePt: attr(rPr, "sz") ? Number(attr(rPr, "sz")) / 100 : undefined,
     color: solidHex(find(rPr, "solidFill"), resolve),
-    font: attr(find(rPr, "latin"), "typeface"),
+    font: typeface?.(attr(find(rPr, "latin"), "typeface")),
+    fontEastAsia: typeface?.(attr(find(rPr, "ea"), "typeface")),
   } as Inline;
 }
 

@@ -1606,13 +1606,17 @@ function renderShape(s: Shape, pres: Presentation, idx?: number, slide?: Slide):
     return `<div class="shape"${pick} style="${common};${rot}">${(s.children ?? []).map((c) => renderShape(c, pres)).join("")}</div>`;
   }  const style = [common, rot];
   if (s.geometry === "line") {
-    // A line is a zero-height box in the model; its stroke is drawn on that line.
+    // A straight connector is its box diagonal: `flipV`/`flipH` say which one, so a
+    // connector anchored bottom-left to top-right is not drawn flat along the top edge.
     const width = Math.max(1, s.lineWidth ?? 1);
     const color = s.lineColor ?? "#000000";
-    return `<div class="shape"${pick} style="${style.join(";")}"><div style="position:absolute;left:0;right:0;top:0;transform:translateY(-50%);border-top:${width}px solid ${color}"></div></div>`;
+    const length = Math.max(1, Math.hypot(s.width, s.height));
+    const slope = (s.flipV ? -1 : 1) * (s.flipH ? -1 : 1);
+    const angle = Math.round((Math.atan2(s.height, s.width) * 180 * slope * 100) / Math.PI) / 100;
+    return `<div class="shape"${pick} style="${style.join(";")}"><div style="position:absolute;left:50%;top:50%;width:${length}px;transform:translate(-50%,-50%) rotate(${angle}deg);border-top:${width}px ${dashStyle(s.dash)} ${color}"></div></div>`;
   }
   if (s.fill) style.push(`background:${s.fill}`);
-  if (s.lineColor) style.push(`border:${Math.max(1, s.lineWidth ?? 1)}px solid ${s.lineColor}`);
+  if (s.lineColor) style.push(`border:${Math.max(1, s.lineWidth ?? 1)}px ${dashStyle(s.dash)} ${s.lineColor}`);
   if (s.geometry && s.geometry !== "rect") style.push(`clip-path:${clipFor(s.geometry)}`);
   const inh = inheritedTextStyle(slide, s, pres);
   const body = !!s.placeholder && placeholderFamily(s.placeholder) === "body";
@@ -1640,6 +1644,18 @@ function renderShape(s: Shape, pres: Presentation, idx?: number, slide?: Slide):
   if (tb.noWrap) textCss.push("white-space:nowrap");
   const textStyle = textCss.length ? ` style="${textCss.join(";")}"` : "";
   return `<div class="shape"${pick} style="${style.join(";")}"><div class="shape-text"${textStyle}>${text}</div></div>`;
+}
+
+/**
+ * `a:prstDash` says the outline's dash pattern. CSS borders only offer solid, dashed and
+ * dotted, so the dot family maps to dotted and every other dashed pattern to dashed; the
+ * exact dash lengths of `sysDash`/`lgDash` are not expressible here.
+ */
+function dashStyle(dash: string | undefined): string {
+  if (!dash) return "solid";
+  if (dash === "dot" || dash === "sysDot") return "dotted";
+  if (dash === "solid") return "solid";
+  return "dashed";
 }
 
 function clipFor(geom: string): string {

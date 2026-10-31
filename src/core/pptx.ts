@@ -88,10 +88,15 @@ export interface Shape {
   width: number;
   height: number;
   rotation?: number;
+  /** `a:xfrm@flipH`/`flipV`: the content is mirrored inside its box. */
+  flipH?: boolean;
+  flipV?: boolean;
   geometry?: string;
   fill?: string;
   lineColor?: string;
   lineWidth?: number;
+  /** `a:ln/a:prstDash@val`: the outline's dash pattern, as the file states it. */
+  dash?: string;
   paragraphs?: SlideParagraph[];
   src?: string;
   rows?: SlideCell[][];
@@ -489,6 +494,7 @@ export class Presentation {
       fill: solidHex(find(spPr, "solidFill"), resolve),
       lineColor: solidHex(find(ln, "solidFill"), resolve),
       lineWidth: attr(ln, "w") ? Number(attr(ln, "w")) / EMU_PER_PX : undefined,
+      dash: attr(find(ln, "prstDash"), "val"),
       paragraphs: paragraphs(find(node, "txBody"), resolve),
       textLevels: textLevels?.some(hasLevel) ? textLevels : undefined,
       textBody: readTextBody(bodyPr),
@@ -498,15 +504,21 @@ export class Presentation {
     };
   }
 
-  private frame(xfrm: any): { x: number; y: number; width: number; height: number; rotation?: number } {
+  private frame(xfrm: any): { x: number; y: number; width: number; height: number; rotation?: number; flipH?: boolean; flipV?: boolean } {
     const off = find(xfrm, "off");
     const ext = find(xfrm, "ext");
+    const flipped = (name: string): boolean | undefined => {
+      const v = attr(xfrm, name);
+      return v === "1" || v === "true" ? true : undefined;
+    };
     return {
       x: Number(attr(off, "x") ?? 0) / EMU_PER_PX,
       y: Number(attr(off, "y") ?? 0) / EMU_PER_PX,
       width: Number(attr(ext, "cx") ?? 0) / EMU_PER_PX,
       height: Number(attr(ext, "cy") ?? 0) / EMU_PER_PX,
       rotation: attr(xfrm, "rot") ? Number(attr(xfrm, "rot")) / 60000 : undefined,
+      flipH: flipped("flipH"),
+      flipV: flipped("flipV"),
     };
   }
 

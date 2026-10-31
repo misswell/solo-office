@@ -2,8 +2,8 @@ import type { Block, BorderSet, Carried, CarriedInline, CellStyle, FormatRevisio
 import type { CommentAnchor, DocComment } from "../core/comments.js";
 import { bodyShape, commentTexts } from "../core/comments.js";
 import { DEFAULT_SECTION, EAST_ASIAN_TEXT, MARGIN_SIDES, RUN_STYLE_KEYS, applyFacePick, applyRunPatch, borderDelta, carriedShape, cellShapeOf, clearRunStyle, countTexts, hasLine, lineGridPitchTwips, ownParaStyle, ownRunStyle, paraSpacingPitch, paragraphTextsOf, rowShapeOf, runStyleOf, samePropValue, sectionEndsOf, signCellPlaceRevision, signCellRevision, signRowRevision, signTableRevision, stampNow, syncCellBox, syncCellVAlign, syncParaSlots, syncRowAlign, syncRowCantSplit, syncRowHeader, syncRowHeight, syncTableBox, syncTableProps, tableShapeOf, twipsToPx } from "../core/docx.js";
-import type { CellWhere, TableEdit } from "../core/doc-table-ops.js";
-import { allCells, applyRowHeights, cellOuterSides, cellRangeFor, cellRect, columnCells, cellsInRect, cellsInSweep, deleteCellHere, deleteColumnHere, deleteRowHere, deleteTableBlock, distributeColumns, distributeRows, gridColumns, gridWidths, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, setColumnWidth, splitHere, splitTableAt, tableToText, type RowHeightMove, type TableTextSeparator } from "../core/doc-table-ops.js";
+import type { CellWhere, TableEdit, TableSortKind, TableSortOrder } from "../core/doc-table-ops.js";
+import { allCells, applyRowHeights, cellCovering, cellOuterSides, cellRangeFor, cellRect, columnCells, columnStarts, cellsInRect, cellsInSweep, deleteCellHere, deleteColumnHere, deleteRowHere, deleteTableBlock, distributeColumns, distributeRows, gridColumns, gridWidths, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, setColumnWidth, sortRows, splitHere, splitTableAt, tableToText, type RowHeightMove, type TableTextSeparator } from "../core/doc-table-ops.js";
 import { IMAGE_EXT_BY_MIME } from "../core/media.js";
 import { BAND_SOURCE_CLASS, CARRY_CLASS, CARRY_STYLE, BAND_MASTER_CLASS, PAGE_BORDER_CLASS, PAGE_CORNER_CLASS, RUN_CARRY_CLASS, type RevisionView, fontStack, highlightColor, renderWord } from "../core/render.js";
 import { flatOf, inlineLength, isMark, keepRunIdentity, restampRunText } from "../core/run-identity.js";
@@ -22,6 +22,7 @@ import { showParaSpacingDialog } from "./doc-para-spacing.js";
 import type { ParaSpacingPatch, ParaSpacingState } from "./doc-para-spacing.js";
 import { showTabStopsDialog } from "./doc-tab-stops.js";
 import type { TabStopPatch, TabStopState } from "./doc-tab-stops.js";
+import type { TableSortChoice, TableSortState } from "./doc-table-sort.js";
 import { showTablePropsDialog, type TablePropsState } from "./doc-table-props.js";
 import { openWordCount, type WordCountReadout } from "./doc-word-count.js";
 import { openGoTo } from "./doc-goto.js";
@@ -4728,6 +4729,60 @@ export class DocEditor {
     let leading = 0;
     while (leading < rows.length && rows[leading]?.[0]?.row?.header) leading += 1;
     return target.where.row < leading;
+  }
+
+  /**
+   * 「排序」对话框开窗时问的那一份（`CT_TableTools.kuip:90` 的 `Sort`，RB_Data 最后一条）：列清单按网格列数，
+   * 每列的标题取顶部钉住的那几行里覆盖这一列的第一格——没钉标题行时只报「第 N 列」，不拿表体第一行冒充标题。
+   * 光标那一列与钉住的行数都按**纸上正在画的那一份**（`shownTable`）读，与「标题行重复」的回显同一个口径。
+   */
+  tableSortState(): TableSortState | undefined {
+    const target = this.tableAt(this.caretPath());
+    if (!target) return undefined;
+    const table = this.shownTable(target.table);
+    let headerRows = 0;
+    while (headerRows < table.rows.length && table.rows[headerRows]?.[0]?.row?.header) headerRows += 1;
+    const columns = [];
+    for (let index = 0; index < gridColumns(table); index += 1) {
+      let label = `第 ${index + 1} 列`;
+      if (headerRows) {
+        const at = cellCovering(table.rows[0] ?? [], index);
+        const text = at >= 0 ? paragraphTextsOf(table.rows[0]![at]!.paragraphs).join(" ").trim() : "";
+        if (text) label = `第 ${index + 1} 列：${text.length > 12 ? `${text.slice(0, 12)}…` : text}`;
+      }
+      columns.push({ index, label });
+    }
+    const where = target.where;
+    const column = columnStarts(table.rows[where.row] ?? [])[where.col] ?? 0;
+    return { columns, column, headerRows, order: "asc", kind: "auto" };
+  }
+
+  /**
+   * 「排序」的落笔处：把对话框选的那一列、那一档、那个方向交给 `sortRows`，成功就重画并把光标放到表体第一行
+   * 那一格。**开着修订时回绝**：OOXML 没有「一行挪了位置」这一条记录，排了会在审阅者眼里凭空重排。
+   * 排完次序与原来一模一样时把那一笔撤销登记退掉、也不重画——「按这一列排」不该把没变的件说成改了。
+   */
+  sortTableRows(choice: TableSortChoice): TableCommandAnswer {
+    const caret = this.caretPath();
+    const target = this.tableAt(caret);
+    if (!target) return { ok: false, reason: "光标不在表格里" };
+    if (this.trackRevisions) return { ok: false, reason: "修订模式下不排序：OOXML 没有「行换了位置」这一条修订，排了会绕过审阅" };
+    let leading = 0;
+    while (leading < target.table.rows.length && target.table.rows[leading]?.[0]?.row?.header) leading += 1;
+    const headerRows = choice.hasHeader ? Math.max(1, leading) : 0;
+    const before = [...target.table.rows];
+    const ran = this.tableCommand(caret, (table) =>
+      sortRows(table, { column: choice.column, order: choice.order, kind: choice.kind, headerRows }),
+    );
+    if (!ran) return { ok: false, reason: "光标不在表格里" };
+    if (!ran.ok) return { ok: false, reason: ran.reason };
+    const same = target.table.rows.length === before.length && target.table.rows.every((row, i) => row === before[i]);
+    if (same) {
+      this.undoStack.pop();
+      return { ok: false, reason: "按这一列排出来的次序和现在一样" };
+    }
+    this.settleTableEdit(ran.prefix, ran.at);
+    return { ok: true };
   }
 
   /**

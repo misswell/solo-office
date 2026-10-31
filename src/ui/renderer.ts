@@ -13,6 +13,7 @@ import { DocEditor, type DocPath, type TableCommandAnswer } from "./doc-edit.js"
 import type { RevisionView } from "../core/render.js";
 import { type BorderLeg, type CellLeg, cellLegPatch, legPatch, tableLegPatch, type TableLeg } from "./doc-para-border.js";
 import { DocStatusBar } from "./doc-status-bar.js";
+import { showTableSortDialog } from "./doc-table-sort.js";
 import { CUSTOM, PAPER, paperEdges, paperOf } from "./doc-page-setup.js";
 import { currentUnit, onUnitChange, twipText, twipsFromUnit } from "./doc-units.js";
 import { DeckEditor, type PresetGeometry } from "./deck-edit.js";
@@ -1140,6 +1141,16 @@ function buildDocRibbon(): void {
   chooser(data, "convertTable", "转换成文本（WPS：Convert Table to Text）", [["", "转换成文本"], ["tab", "制表符分隔"], ["comma", "逗号分隔"], ["paragraph", "段落标记分隔"]], (v) => {
     (ctl.convertTable as HTMLSelectElement).value = "";
     if (v) tableAction(editor?.convertTableToText(v as "tab" | "comma" | "paragraph"));
+  });
+  // RB_Data 的最后一条：`CT_TableTools.kuip:90` 的 `Sort`（命令本体在 `wpscommon.kuip`，`ksoCmd="Sort"`）。
+  // WPS 这一枚开的是对话框，家里照样开一张（`doc-table-sort.ts`）；形状不成立时由命令把理由带回来。
+  button(data, "sortRows", "排序", "按某一列重排表体行：标题行钉住，整行一起走（WPS：Sort）", () => {
+    const state = editor?.tableSortState();
+    if (!state) {
+      notify("光标不在表格里");
+      return;
+    }
+    showTableSortDialog(state, (choice) => tableAction(editor?.sortTableRows(choice)));
   });
 
   const picking = group("table");

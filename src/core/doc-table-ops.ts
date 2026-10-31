@@ -1,5 +1,5 @@
 import { childSpans, elementContent } from "./opc.js";
-import { rowShapeOf, syncRowHeight } from "./docx.js";
+import { paragraphTextsOf, rowShapeOf, syncRowHeight } from "./docx.js";
 import type { Block, Inline, Paragraph, PropSlot, RowInfo, RowStyle, Table, TableCell } from "./docx.js";
 
 /**
@@ -1394,4 +1394,82 @@ export function tableToText(t: Table, sep: TableTextSeparator): TableTextOutcome
   // `deleteTableBlock` follows, and the one that keeps two neighbouring blocks from being read as one.
   if (!out.length) out.push(blank());
   return { ok: true, paragraphs: out };
+}
+
+/**
+ * 表格「排序」: `CT_TableTools.kuip:90` 把 `Sort` 摆在 RB_Data 的最后一条（`wpscommon.kuip` 里那一枚是
+ * `KxLegacyTriggerCommand ... ksoCmd="Sort"`，不带 `idMso`，中文措辞未取证）。这里摆的是**行重排**本身：
+ *
+ * - `headerRows` 行钉在最上面，其余行按 `column`（网格列）那一格的字排。标题行由调用方给，因为它有两个来源
+ *   （件里的 `w:tblHeader` 与对话框里那个「有标题行」勾），这里不替它猜。
+ * - `kind` 三档：`number` 按数比，不是数的排在他们后面、彼此按文字；`text` 一律按文字；`auto` 两边都是数才按数。
+ *   文字次序问 `Intl.Collator("zh-Hans-CN")`——它给的是这一套 ICU 的默认次序（拼音一侧），WPS 对话框里
+ *   「笔画／拼音／日期」那几档选出来长什么样**未取证**，所以不摆那几档，也不假装这里是笔画序。
+ * - 排的是整行：`w:trHeight`、`w:tblHeader`、每格的 `w:tcPr`、每段自己的格式都跟着行走，因为模型里的行就是
+ *   这些格本身，挪位置不重拼任何格。相等时保持原次序（稳定），所以「排了跟没排一样」不会翻乱并列行。
+ *
+ * 拒绝的形状都是「挪了会丢东西」的那些，理由与 `tableToText` 同一族：待判的 `w:tblPrChange`、行间的
+ * 书签/范围标记（`betweenRows`，它们按行号记住位置）、竖合并（`w:vMerge` 按行相邻认领，行一挪就断）、
+ * 表体里还没裁决的行增删（`w:trPr/w:ins|w:del`，挪位置等于替审阅者改记录）。WPS 在这些形状上怎么办
+ * **未取证**，这里宁可不做，也不悄悄做坏。
+ */
+export type TableSortOrder = "asc" | "desc";
+export type TableSortKind = "auto" | "number" | "text";
+
+export interface TableSortSpec {
+  /** 网格列（`w:gridSpan` 展平后的列号），不是这一行第几个 `w:tc`。 */
+  column: number;
+  order: TableSortOrder;
+  kind: TableSortKind;
+  /** 顶部钉住不排的行数；0 = 全表都排。 */
+  headerRows: number;
+}
+
+/** 一句话的字面读数：一段一段接起来，段与段之间留一个换行。 */
+const cellSortText = (cell: TableCell): string => paragraphTextsOf(cell.paragraphs).join("\n");
+
+/** 认数字：整段就是一枚有符号十进制（不接受千分位、单位与百分号——那是另一种「说坏了」）。 */
+const sortNumber = (text: string): number | undefined => {
+  const t = text.trim();
+  if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(t)) return undefined;
+  return Number(t);
+};
+
+const sortCollator = new Intl.Collator("zh-Hans-CN", { sensitivity: "variant" });
+
+/** 排一张表；成功时把光标该去的那一格（表体第一行、排序依据那一列）交回来。 */
+export function sortRows(t: Table, spec: TableSortSpec): TableEdit {
+  if (t.revFormat) return refused("这张表上有一条待判的属性改动，排序会把它带走");
+  if (t.betweenRows?.length) return refused("表行之间夹着书签一类的标记，排序会把它们挪错位置");
+  for (const row of t.rows) {
+    if (row.some((cell) => cell.spanRows !== undefined)) return refused("表里有竖合并的格子，排序会把合并拆断");
+    if (row[0]?.row?.rev) return refused("表体里有还没裁决的行增删，排序会把审阅记录挪乱");
+  }
+  const headerRows = Math.max(0, Math.min(spec.headerRows, Math.max(0, t.rows.length - 1)));
+  const body = t.rows.slice(headerRows);
+  if (body.length < 2) return refused("表体只有一行，没有可排的内容");
+  const keyed = body.map((row, index) => {
+    const at = cellCovering(row, spec.column);
+    return { row, index, key: at >= 0 ? cellSortText(row[at]!) : "" };
+  });
+  const compare = (a: string, b: string): number => {
+    const na = spec.kind === "text" ? undefined : sortNumber(a);
+    const nb = spec.kind === "text" ? undefined : sortNumber(b);
+    if (na !== undefined && nb !== undefined) return na - nb;
+    if (spec.kind === "number") {
+      if (na !== undefined) return -1;
+      if (nb !== undefined) return 1;
+    }
+    return sortCollator.compare(a.trim(), b.trim());
+  };
+  keyed.sort((a, b) => {
+    const c = compare(a.key, b.key);
+    if (c !== 0) return spec.order === "asc" ? c : -c;
+    return a.index - b.index;
+  });
+  t.rows.splice(headerRows, body.length, ...keyed.map((k) => k.row));
+  // 光标落在表体第一行的排序依据那一格：`at` 是这一行的格序，不是网格列（跨列格之后两者不同）。
+  const first = t.rows[headerRows] ?? [];
+  const col = Math.max(0, cellCovering(first, spec.column));
+  return landed(headerRows, col);
 }

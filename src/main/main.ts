@@ -4089,6 +4089,116 @@ function smoke(): void {
             savedDirty: (document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0,
           };
         }
+        // #236 表格「排序」在装机壳里走一趟。件「排序-装机.docx」是一张带 w:tblHeader 的两列表（3/10/2），
+        // 三次开合问三件事：取消不动行序也不动光标；降序把整行挪走（第二格的名字跟着键走）；再升序排回。
+        // 行序与光标都从页面上读（光标是壳自己按模型落的，不是探针替它铺的），最终 save 由文件外的 python
+        // 读 document.xml 核对行序与标题行那句 w:tblHeader。别的腿把这件改脏过，所以起手先存一次把 ● 归零。
+        const sortDoc = (document.getElementById("title")?.textContent ?? "").includes("排序");
+        let sortLeg = null;
+        if (sortDoc) {
+          fire("solo:save");
+          await wait(900);
+          const sTable = () => [...document.querySelectorAll("#view .page table.doc-table")].find((t) => (t.textContent ?? "").includes("键"));
+          const sKeys = () => [...(sTable()?.querySelectorAll("tr") ?? [])].filter((tr) => !tr.classList.contains("solo-sheet-gap-row")).map((tr) => (tr.children[0]?.textContent ?? "").trim()).join(",");
+          const sCaret = () => {
+            const s = document.getSelection();
+            const r = s && s.rangeCount ? s.getRangeAt(0) : null;
+            if (!r) return { cell: "", collapsed: 0 };
+            const n = r.startContainer;
+            const el = n && n.nodeType === 1 ? n : n.parentElement;
+            const td = el && typeof el.closest === "function" ? el.closest("td") : null;
+            return { cell: td ? (td.textContent ?? "").trim() : "", collapsed: r.collapsed ? 1 : 0 };
+          };
+          const sPut = () => {
+            const cell = [...(sTable()?.querySelectorAll("td") ?? [])].find((c) => (c.textContent ?? "").trim() === "3");
+            const span = cell?.querySelector("span");
+            if (!cell || !span || !span.firstChild) return 0;
+            const r = document.createRange();
+            r.setStart(span.firstChild, 1);
+            r.collapse(true);
+            const s = document.getSelection();
+            s?.removeAllRanges();
+            if (s) s.addRange(r);
+            cell.focus?.();
+            document.dispatchEvent(new Event("selectionchange"));
+            return 1;
+          };
+          const sDlg = () => document.querySelector(".solo-sort-dialog");
+          const sOpen = async () => {
+            const bar = document.querySelector("#ribbon .rbar[data-tab='table']");
+            if (bar?.hidden === true) [...document.querySelectorAll(".rtabs button")].find((b) => b.textContent === "表格工具")?.click();
+            await wait(200);
+            const btn = [...document.querySelectorAll("#ribbon .rbar[data-tab='table'] button")].find((b) => b.textContent === "排序");
+            const present = btn ? 1 : 0;
+            const disabled = btn?.disabled === true ? 1 : 0;
+            if (btn) btn.click();
+            await wait(300);
+            return { present: present, disabled: disabled, open: sDlg()?.open === true ? 1 : 0 };
+          };
+          const sEcho = () => {
+            const d = sDlg();
+            if (!d) return { open: 0 };
+            const c = d.querySelector("[name='sort-column']");
+            const k = d.querySelector("[name='sort-kind']");
+            const o = d.querySelector("[name='sort-order']");
+            const h = d.querySelector("[name='sort-header']");
+            return { open: 1, cols: c ? c.options.length : 0, col: c ? c.value : "?", kind: k ? k.value : "?", order: o ? o.value : "?", header: h && h.checked ? 1 : 0 };
+          };
+          const sCancel = async () => {
+            const b = sDlg()?.querySelector(".solo-sort-cancel");
+            if (!b) return 0;
+            b.click();
+            await wait(260);
+            return sDlg() ? 0 : 1;
+          };
+          const sApply = async (order) => {
+            const o = sDlg()?.querySelector("[name='sort-order']");
+            if (!o) return 0;
+            o.value = order;
+            o.dispatchEvent(new Event("change", { bubbles: true }));
+            sDlg()?.querySelector(".solo-sort-apply")?.click();
+            await wait(560);
+            return sDlg() ? 0 : 1;
+          };
+          const sTrack = () => [...document.querySelectorAll("#ribbon button.rb")].find((b) => b.textContent === "修订");
+          const sTrack0 = sTrack()?.classList.contains("on") ? 1 : 0;
+          if (sTrack0) {
+            sTrack()?.click();
+            await wait(320);
+          }
+          const put = sPut();
+          await wait(280);
+          const orderBefore = sKeys();
+          const opened = await sOpen();
+          const echo = sEcho();
+          const cancelled = await sCancel();
+          const orderAfterCancel = sKeys();
+          const caretAfterCancel = sCaret();
+          const dirtyAfterCancel = dirtyNow();
+          const reopened = await sOpen();
+          const appliedDesc = await sApply("desc");
+          const orderDesc = sKeys();
+          const caretDesc = sCaret();
+          const dirtyDesc = dirtyNow();
+          const reopenedAsc = await sOpen();
+          const appliedAsc = await sApply("asc");
+          const orderAsc = sKeys();
+          const caretAsc = sCaret();
+          const dirtyAsc = dirtyNow();
+          fire("solo:save");
+          await wait(900);
+          sortLeg = {
+            table: sTable() ? 1 : 0, put: put, orderBefore: orderBefore, opened: opened, echo: echo,
+            cancelled: cancelled, orderAfterCancel: orderAfterCancel, caretAfterCancel: caretAfterCancel, dirtyAfterCancel: dirtyAfterCancel,
+            reopened: reopened, appliedDesc: appliedDesc, orderDesc: orderDesc, caretDesc: caretDesc, dirtyDesc: dirtyDesc,
+            reopenedAsc: reopenedAsc, appliedAsc: appliedAsc, orderAsc: orderAsc, caretAsc: caretAsc, dirtyAsc: dirtyAsc,
+            dialogsLeft: document.querySelectorAll(".solo-sort-dialog").length,
+          };
+          if (sTrack0) {
+            sTrack()?.click();
+            await wait(320);
+          }
+        }
         // 上面那些落点把光标留在了格里；后面那三条断命令与图片要按这一趟原本的位置落在正文里，所以先放回纸的末尾。
         const pageNow = document.querySelector("#view .page");
         const lastBlock = pageNow?.children[pageNow.children.length - 1];
@@ -4779,7 +4889,7 @@ function smoke(): void {
         const recovered = { cells: document.querySelectorAll(".sheet-wrap td").length, title: document.getElementById("title")?.textContent };
         // The run ends on a modified document, so quitting goes through the unsaved prompt.
         // A PDF the export asked for shows up in saveAsWrites, next to the pptx/xlsx saves.
-        return { docPart, bandLeg, bandTabsLeg, editMarksLeg, rulerLeg, painterLeg, leaderLeg, tabStopsLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, clearLeg, styleLeg, vertLeg, caseLeg, origLeg, origTableLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
+        return { docPart, bandLeg, bandTabsLeg, editMarksLeg, sortLeg, rulerLeg, painterLeg, leaderLeg, tabStopsLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, clearLeg, styleLeg, vertLeg, caseLeg, origLeg, origTableLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
       })()`;
       void last?.webContents
         .executeJavaScript(probe)

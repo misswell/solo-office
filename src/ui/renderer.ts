@@ -401,7 +401,20 @@ function buildRibbon(kind: "xlsx" | "docx" | "pptx"): void {
 
 function buildSheetRibbon(): void {
   const shell = ribbonTabs(SHEET_RIBBON_TABS);
-  const group = shell.group;
+  // 每组底下一行组名，次序与下面建组的次序一一对应（WPS 的组名在 `.qm` 里读不出来，这一行是我们自己的措辞）。
+  // 用队列而不是给每个调用点加参数：组一多，漏一个就错位一整页，队列少了会立刻少一条组名。
+  const caps: Record<string, string[]> = {
+    home: ["行列", "数字", "字体", "对齐", "单元格", "条件格式", "编辑"],
+    insert: ["插图", "图表"],
+    data: ["排序和筛选"],
+    view: ["窗口"],
+  };
+  const group = (tab: string): HTMLElement => {
+    const g = shell.group(tab);
+    const cap = caps[tab]?.shift();
+    if (cap) g.dataset.cap = cap;
+    return g;
+  };
   const button = (g: HTMLElement, key: string, label: string, tip: string, run: () => void): void => {
     const b = document.createElement("button");
     b.className = "rb";
@@ -758,7 +771,22 @@ function buildDocRibbon(): void {
   // 表格工具页是**上下文页**：`syncDocRibbon` 每趟按光标问它该不该露，露着的那一页在光标离开时要退回开始页。
   // 那个函数在模块那一层，所以开关得从这里交出去。
   tableTab = { button: shell.tabs.table!, shown: shell.shown, show: shell.showTab };
-  const group = shell.group;
+  // 组名按 WPS 的组归属写（`CT_Home.kuip` 的 RB_Clipboard/RB_Font/RB_Paragraph/RB_Style/RB_Editing 等），
+  // 中文措辞是我们自己的；次序与下面建组的次序一一对应。
+  const caps: Record<string, string[]> = {
+    home: ["常用", "字体", "段落", "列表", "样式", "编辑"],
+    insert: ["页面", "插图", "批注"],
+    table: ["表格", "行与列", "合并与拆分", "单元格尺寸", "字体", "对齐", "数据", "选择"],
+    review: ["校对", "批注", "修订", "更改"],
+    layout: ["页面设置", "页眉页脚"],
+    view: ["显示"],
+  };
+  const group = (tab: string): HTMLElement => {
+    const g = shell.group(tab);
+    const cap = caps[tab]?.shift();
+    if (cap) g.dataset.cap = cap;
+    return g;
+  };
   const button = (g: HTMLElement, key: string, label: string, tip: string, run: () => void): void => {
     const b = document.createElement("button");
     b.className = "rb";
@@ -1815,6 +1843,8 @@ function applyZoom(z: number): void {
 function zoomGroup(): HTMLElement {
   const g = document.createElement("div");
   g.className = "grp";
+  // 表格页与文字页的视图档都用这一组，组名照 WPS 的 `RB_Zoom`（`CT_View.kuip`）。演示那一条不分档，CSS 不显示组名。
+  g.dataset.cap = "缩放";
   const mk = (label: string, tip: string, run: () => void): HTMLButtonElement => {
     const b = document.createElement("button");
     b.className = "rb";

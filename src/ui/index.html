@@ -173,6 +173,22 @@
          箭头站在 `.rbar` 外面那一端，所以给行留一道右垫：滚到头的最后一枚不会被它压住。 */
       .ribbon.tabbed { position: relative; }
       .ribbon.tabbed .rbar { padding-right: 34px; }
+      /* 组名贴在组的脚下（WPS 功能区每组下面那行小字）。`.grp` 本是单行 flex，这里允许换行，
+         组名用 `flex-basis:100%` 独占末行；组名措辞是我们自己的，归属按 WPS 的组声明。 */
+      .ribbon.tabbed .rbar { align-items: stretch; height: auto; min-height: 64px; padding-top: 2px; }
+      .ribbon.tabbed .grp { flex: none; flex-wrap: wrap; align-content: center; justify-content: center; padding: 4px 9px 2px; }
+      .ribbon.tabbed .grp::after {
+        content: attr(data-cap);
+        flex-basis: 100%;
+        order: 999;
+        margin-top: 2px;
+        text-align: center;
+        font-size: 10px;
+        line-height: 12px;
+        color: #7c8592;
+        white-space: nowrap;
+      }
+      .ribbon.tabbed .grp:not([data-cap])::after { display: none; }
       .rover {
         position: absolute;
         right: 7px;

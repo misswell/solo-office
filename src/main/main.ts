@@ -672,7 +672,7 @@ function smoke(): void {
         marker?.click();
         await wait(150);
         const after = document.querySelector("#view .page");
-        const docPart = { title: document.getElementById("title")?.textContent, editable: after?.getAttribute("contenteditable"), blocksBefore: blocks, blocksAfter: after?.children.length, typed: after?.textContent?.includes("SMOKE"), bulletsBefore: bullets, bulletsWearingOwnFont: bulletWorn, bulletsOwnSize: bulletSized, bulletsOwnColor: bulletInked, bulletsAfter: after?.querySelectorAll(".bullet").length, ribbonGroups: document.querySelectorAll("#ribbon .grp").length, fontBoxSpans, fontBoxEcho, ribbonPair };
+        const docPart = { title: document.getElementById("title")?.textContent, editable: after?.getAttribute("contenteditable"), blocksBefore: blocks, blocksAfter: after?.children.length, typed: after?.textContent?.includes("SMOKE"), bulletsBefore: bullets, bulletsWearingOwnFont: bulletWorn, bulletsOwnSize: bulletSized, bulletsOwnColor: bulletInked, bulletsAfter: after?.querySelectorAll(".bullet").length, ribbonGroups: document.querySelectorAll("#ribbon .grp").length, fontBoxSpans, fontBoxEcho, ribbonPair, homeCaps: [...document.querySelectorAll("#ribbon .rbar[data-tab='home'] .grp")].map((g) => g.dataset.cap || "-").join("/"), tableCapGroups: document.querySelectorAll("#ribbon .rbar[data-tab='table'] .grp[data-cap]").length };
 
         // #210：w:u 那一族在装机那只盒子里画成什么样——这一腿一枚也不按，所以别的装机件字节账一字不动。
         // （探针整段是一枚模板字符串，这一段里既不写反引号也不写反斜杠。）
@@ -5013,6 +5013,11 @@ function smoke(): void {
         };
         sheetTabs[0]?.click();
         await wait(60);
+        // 组名不是只写在属性上：量一下 ::after 的 content 与带子高度，证明那行字真被排了出来。
+        const homeGrps = [...document.querySelectorAll("#ribbon .rbar[data-tab='home'] .grp")];
+        sheetRibbon.caps = homeGrps.map((g) => g.dataset.cap || "-").join("/");
+        sheetRibbon.capInk = homeGrps.map((g) => getComputedStyle(g, "::after").content.replace(/"/g, "")).join("/");
+        sheetRibbon.capBar = Math.round(document.querySelector("#ribbon .rbar[data-tab='home']").getBoundingClientRect().height);
         // Persist the fill, the picture and the zoom state, so the saved file can
         // be checked by an independent reader (openpyxl) after the run.
         fire("solo:save");

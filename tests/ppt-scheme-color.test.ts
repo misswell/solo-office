@@ -81,9 +81,14 @@ describe("主题色（a:schemeClr）落成具体色值", () => {
             schemeDecks.add(file);
             lineCount++;
             expect(s.lineColor, `${file}#${slide.index} ${s.name} 的描边`).toMatch(/^#[0-9A-F]{6}$/);
-            expect(html, `${file}#${slide.index} ${s.name} 的描边进渲染`).toMatch(
-              new RegExp(`border:[\\d.]+px (?:solid|dashed|dotted) ${s.lineColor}`),
-            );
+            if (s.geometry === "straightConnector1") {
+              // 连接符是 SVG 线，不是盒子边。
+              expect(html, `${file}#${slide.index} ${s.name} 的描边进渲染`).toContain(`stroke="${s.lineColor}"`);
+            } else {
+              expect(html, `${file}#${slide.index} ${s.name} 的描边进渲染`).toMatch(
+                new RegExp(`border:[\\d.]+px (?:solid|dashed|dotted) ${s.lineColor}`),
+              );
+            }
           }
         }
       }

@@ -1,7 +1,7 @@
 import type { Block, BandPlace, Carried, CarriedInline, HeaderFooter, IndentFields, Inline, NumberLevel, PageBorder, Paragraph, PropSlot, RowInfo, Section, Table, TableBorder, TableCell, TabStop, WordDocument } from "./docx.js";
 import { DEFAULT_SECTION, TAB_LEADER_TOKENS, hasLine, LINE_ONE, MARGIN_SIDES, PAGE_BORDER_SIDES, PBDR_ORDER, headingLevel, lineGridPitchTwips, twipsToPx } from "./docx.js";
 import type { CommentAnchor } from "./comments.js";
-import type { BodyLevel, LayoutPlaceholder, Presentation, Shape, Slide, SlideParagraph, TextBody } from "./pptx.js";
+import type { ArrowEnd, BodyLevel, LayoutPlaceholder, Presentation, Shape, Slide, SlideParagraph, TextBody } from "./pptx.js";
 
 const esc = (s: string): string =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -1608,6 +1608,7 @@ function renderShape(s: Shape, pres: Presentation, idx?: number, slide?: Slide):
   if (s.kind === "group") {
     return `<div class="shape"${pick} style="${common};${rot}">${(s.children ?? []).map((c) => renderShape(c, pres)).join("")}</div>`;
   }  const style = [common, rot];
+  if (s.geometry === "straightConnector1") return renderConnector(s, pick, style);
   if (s.geometry === "line") {
     // A straight connector is its box diagonal: `flipV`/`flipH` say which one, so a
     // connector anchored bottom-left to top-right is not drawn flat along the top edge.
@@ -1659,6 +1660,68 @@ function dashStyle(dash: string | undefined): string {
   if (dash === "dot" || dash === "sysDot") return "dotted";
   if (dash === "solid") return "solid";
   return "dashed";
+}
+
+const num = (v: number): string => String(Math.round(v * 100) / 100);
+
+/**
+ * A straight connector is the diagonal of its box plus `a:ln`'s end decorations. The two
+ * flips pick which diagonal, so a connector running bottom-left to top-right ends at the
+ * corner the file put its arrow on. `sm`/`med`/`lg` scale a decoration by 2/3/5 line widths
+ * for its width and length separately; the decoration's own outline is the preset's.
+ */
+function renderConnector(s: Shape, pick: string, style: string[]): string {
+  const w = Math.max(0, s.width);
+  const h = Math.max(0, s.height);
+  const x1 = s.flipH ? w : 0;
+  const y1 = s.flipV ? h : 0;
+  const x2 = s.flipH ? 0 : w;
+  const y2 = s.flipV ? 0 : h;
+  const stroke = Math.max(1, s.lineWidth ?? 1);
+  const color = s.lineColor ?? "#000000";
+  const length = Math.hypot(x2 - x1, y2 - y1);
+  const ux = length > 0 ? (x2 - x1) / length : 1;
+  const uy = length > 0 ? (y2 - y1) / length : 0;
+  const head = arrowMark(s.headEnd, x1, y1, ux, uy, stroke, color);
+  const tail = arrowMark(s.tailEnd, x2, y2, ux, uy, stroke, color);
+  const line = `<line x1="${num(x1)}" y1="${num(y1)}" x2="${num(x2)}" y2="${num(y2)}" stroke="${color}" stroke-width="${num(stroke)}"${dashArray(s.dash, stroke)}/>`;
+  const svg = `<svg width="${num(w)}" height="${num(h)}" style="position:absolute;left:0;top:0;overflow:visible">${line}${head}${tail}</svg>`;
+  return `<div class="shape"${pick} style="${style.join(";")};overflow:visible">${svg}</div>`;
+}
+
+/** The SVG line keeps the same three-step dash reading the border fallback gives. */
+function dashArray(dash: string | undefined, stroke: number): string {
+  if (!dash || dash === "solid") return "";
+  const [on, off] = dashStyle(dash) === "dotted" ? [1, 2] : [3, 2];
+  return ` stroke-dasharray="${num(on * stroke)} ${num(off * stroke)}"`;
+}
+
+function arrowMark(end: ArrowEnd | undefined, x: number, y: number, ux: number, uy: number, stroke: number, color: string): string {
+  const type = end?.type;
+  if (!type || type === "none") return "";
+  const mult = (v: string | undefined): number => (v === "sm" ? 2 : v === "lg" ? 5 : 3);
+  const len = mult(end?.length) * stroke;
+  const half = (mult(end?.width) * stroke) / 2;
+  const px = -uy;
+  const py = ux;
+  const bx = x - ux * len;
+  const by = y - uy * len;
+  const p = (a: number, b: number): string => `${num(a)},${num(b)}`;
+  switch (type) {
+    case "triangle":
+      return `<polygon points="${p(x, y)} ${p(bx + px * half, by + py * half)} ${p(bx - px * half, by - py * half)}" fill="${color}"/>`;
+    case "stealth":
+      // The back edge folds toward the tip, which is what separates a stealth arrow from a triangle.
+      return `<polygon points="${p(x, y)} ${p(bx + px * half, by + py * half)} ${p(x - ux * len * 0.6, y - uy * len * 0.6)} ${p(bx - px * half, by - py * half)}" fill="${color}"/>`;
+    case "oval":
+      return `<circle cx="${num(x - ux * half)}" cy="${num(y - uy * half)}" r="${num(half)}" fill="${color}"/>`;
+    case "diamond":
+      return `<polygon points="${p(x, y)} ${p(x - ux * (len / 2) + px * half, y - uy * (len / 2) + py * half)} ${p(bx, by)} ${p(x - ux * (len / 2) - px * half, y - uy * (len / 2) - py * half)}" fill="${color}"/>`;
+    case "arrow":
+      return `<polyline points="${p(bx + px * half, by + py * half)} ${p(x, y)} ${p(bx - px * half, by - py * half)}" fill="none" stroke="${color}" stroke-width="${num(stroke)}"/>`;
+    default:
+      return "";
+  }
 }
 
 /**

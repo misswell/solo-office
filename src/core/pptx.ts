@@ -80,6 +80,15 @@ export const WPS_BODY_LEVELS: BodyLevel[] = [18, 16, 16, 14, 14, 18, 18, 18, 18]
   bullet: ["●", "●", "●", "\u009f", "•", "•", "•", "•", "•"][i],
 }));
 
+/** `a:ln/a:headEnd`/`a:tailEnd`: a connector's end decoration, as the file states it. */
+export interface ArrowEnd {
+  /** `triangle`, `stealth`, `oval`, `diamond`, `arrow`, or `none`. */
+  type?: string;
+  /** `sm`/`med`/`lg`: the arrow's width, in multiples of the line width. */
+  width?: string;
+  length?: string;
+}
+
 export interface Shape {
   kind: "shape" | "picture" | "table" | "group";
   name: string;
@@ -99,6 +108,8 @@ export interface Shape {
   lineWidth?: number;
   /** `a:ln/a:prstDash@val`: the outline's dash pattern, as the file states it. */
   dash?: string;
+  headEnd?: ArrowEnd;
+  tailEnd?: ArrowEnd;
   paragraphs?: SlideParagraph[];
   src?: string;
   rows?: SlideCell[][];
@@ -503,6 +514,8 @@ export class Presentation {
       lineColor: solidHex(find(ln, "solidFill"), resolve),
       lineWidth: attr(ln, "w") ? Number(attr(ln, "w")) / EMU_PER_PX : undefined,
       dash: attr(find(ln, "prstDash"), "val"),
+      headEnd: arrowEnd(find(ln, "headEnd")),
+      tailEnd: arrowEnd(find(ln, "tailEnd")),
       paragraphs: paragraphs(find(node, "txBody"), resolve),
       textLevels: textLevels?.some(hasLevel) ? textLevels : undefined,
       textBody: readTextBody(bodyPr),
@@ -1038,8 +1051,14 @@ function textOf(t: any): string {
   return typeof t === "string" ? t : (t["#text"] ?? "");
 }
 
-function geom(spPr: any): string | undefined {
-  return attr(find(spPr, "prstGeom"), "prst");
+function arrowEnd(node: any): ArrowEnd | undefined {
+  const type = attr(node, "type");
+  const width = attr(node, "w");
+  const length = attr(node, "len");
+  return type !== undefined || width !== undefined || length !== undefined ? { type, width, length } : undefined;
+}
+
+function geom(spPr: any): string | undefined {  return attr(find(spPr, "prstGeom"), "prst");
 }
 
 /**

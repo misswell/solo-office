@@ -1,7 +1,7 @@
 import type { Block, BandPlace, Carried, CarriedInline, HeaderFooter, IndentFields, Inline, NumberLevel, PageBorder, Paragraph, PropSlot, RowInfo, Section, Table, TableBorder, TableCell, TabStop, WordDocument } from "./docx.js";
 import { DEFAULT_SECTION, TAB_LEADER_TOKENS, hasLine, LINE_ONE, MARGIN_SIDES, PAGE_BORDER_SIDES, PBDR_ORDER, headingLevel, lineGridPitchTwips, twipsToPx } from "./docx.js";
 import type { CommentAnchor } from "./comments.js";
-import type { BodyLevel, LayoutPlaceholder, Presentation, Shape, Slide, SlideParagraph } from "./pptx.js";
+import type { BodyLevel, LayoutPlaceholder, Presentation, Shape, Slide, SlideParagraph, TextBody } from "./pptx.js";
 
 const esc = (s: string): string =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -1437,12 +1437,13 @@ export function renderWord(doc: WordDocument, view: RevisionView = "marks"): str
 interface InhText {
   sizePt?: number;
   align?: string;
-  anchor?: string;
   /** Level-1 indents and bullet the layout states; the master's `p:bodyStyle` answers the rest. */
   marLEmu?: number;
   indentEmu?: number;
   bullet?: string;
   noBullet?: boolean;
+  /** The layout placeholder's `a:bodyPr`, already merged down from the master. */
+  textBody?: TextBody;
   lineSpacingPct?: number;
   spaceBeforePt?: number;
   spaceBeforePct?: number;
@@ -1462,7 +1463,7 @@ function inheritedTextStyle(slide: Slide | undefined, s: Shape, pres: Presentati
   return {
     sizePt: ph?.sizePt ?? (family === "title" ? pres.titleStylePt : pres.bodyStylePt),
     align: ph?.align,
-    anchor: ph?.anchor,
+    textBody: ph?.textBody,
     marLEmu: ph?.marLEmu,
     indentEmu: ph?.indentEmu,
     bullet: ph?.bullet,
@@ -1483,6 +1484,24 @@ export const isBodyPlaceholder = (s: Shape): boolean => !!s.placeholder && place
 
 /** The stylesheet's single-line metric; a file's `a:spcPct` scales this, so 100% keeps today's line. */
 const SLIDE_SINGLE_LINE = 1.3;
+
+/** ECMA-376's `a:bodyPr` defaults: 0.1in left/right, 0.05in top/bottom, top-anchored, wrapped. */
+const DEFAULT_TEXT_BODY: Required<Omit<TextBody, "noWrap">> = { lInsEmu: 91440, tInsEmu: 45720, rInsEmu: 91440, bInsEmu: 45720, anchor: "t" };
+
+/** The shape's own `a:bodyPr` first, the layout placeholder's next, then the schema defaults. */
+function textBodyOf(own: TextBody | undefined, inherited: TextBody | undefined): Required<Omit<TextBody, "noWrap">> & { noWrap: boolean } {
+  return {
+    lInsEmu: own?.lInsEmu ?? inherited?.lInsEmu ?? DEFAULT_TEXT_BODY.lInsEmu,
+    tInsEmu: own?.tInsEmu ?? inherited?.tInsEmu ?? DEFAULT_TEXT_BODY.tInsEmu,
+    rInsEmu: own?.rInsEmu ?? inherited?.rInsEmu ?? DEFAULT_TEXT_BODY.rInsEmu,
+    bInsEmu: own?.bInsEmu ?? inherited?.bInsEmu ?? DEFAULT_TEXT_BODY.bInsEmu,
+    anchor: own?.anchor ?? inherited?.anchor ?? DEFAULT_TEXT_BODY.anchor,
+    noWrap: own?.noWrap ?? inherited?.noWrap ?? false,
+  };
+}
+
+/** An inset travels in EMU at 9525 to the pixel; keep a tenth so 46800 lands on 4.9, not 5. */
+const insetPx = (emu: number): number => Math.round(emu / 952.5) / 10;
 
 /**
  * The paint a paragraph gets at its level. The ladder, most specific first: the shape's
@@ -1610,7 +1629,15 @@ function renderShape(s: Shape, pres: Presentation, idx?: number, slide?: Slide):
   const textCss: string[] = [];
   const textSize = own1?.sizePt ?? inh?.sizePt ?? (inh ? undefined : pres.otherStylePt);
   if (textSize !== undefined) textCss.push(`font-size:${scaledPt(textSize, s.fontScalePct)}pt`);
-  if (inh) textCss.push(`justify-content:${inh.anchor === "b" ? "flex-end" : inh.anchor === "ctr" ? "center" : "flex-start"}`);
+  // The text's box is the shape's own `a:bodyPr`; a placeholder that states none takes
+  // the layout's (which already carries the master's). WPS's default is 0.1in/0.05in
+  // insets anchored at the top, so a plain shape's text starts at the top, not centred.
+  const tb = textBodyOf(s.textBody, inh?.textBody);
+  textCss.push(
+    `padding:${insetPx(tb.tInsEmu)}px ${insetPx(tb.rInsEmu)}px ${insetPx(tb.bInsEmu)}px ${insetPx(tb.lInsEmu)}px`,
+    `justify-content:${tb.anchor === "b" ? "flex-end" : tb.anchor === "ctr" ? "center" : "flex-start"}`,
+  );
+  if (tb.noWrap) textCss.push("white-space:nowrap");
   const textStyle = textCss.length ? ` style="${textCss.join(";")}"` : "";
   return `<div class="shape"${pick} style="${style.join(";")}"><div class="shape-text"${textStyle}>${text}</div></div>`;
 }
@@ -1676,7 +1703,7 @@ function placeholderHints(slide: Slide): string {
       // size and anchor; the dashed box stays the full box either way.
       const size = ph.sizePt ? `;font-size:${ph.sizePt}pt` : "";
       const horizontal = `;justify-content:${ph.align === "center" ? "center" : ph.align === "right" ? "flex-end" : "flex-start"}`;
-      const vertical = `;align-items:${ph.anchor === "b" ? "flex-end" : ph.anchor === "ctr" ? "center" : "flex-start"}`;
+      const vertical = `;align-items:${ph.textBody?.anchor === "b" ? "flex-end" : ph.textBody?.anchor === "ctr" ? "center" : "flex-start"}`;
       // The prompt is also the keyboard entry to its placeholder: Tab reaches it, Enter or
       // Space claims it. Its own words are the accessible name, so nothing extra is spoken.
       const prompt = PLACEHOLDER_PROMPTS[ph.type ?? ""] ?? "";

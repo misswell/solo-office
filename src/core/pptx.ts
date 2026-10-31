@@ -3,6 +3,19 @@ import { dataUrl, IMAGE_EXT_BY_MIME, IMAGE_MIME_BY_EXT } from "./media.js";
 import { BLANK_LAYOUTS } from "./pptx-blank.js";
 import type { Inline } from "./docx.js";
 
+/** `a:bodyPr`: where a shape's text sits inside its box. */
+export interface TextBody {
+  /** `a:bodyPr@lIns` and friends, in EMU: the text's distance from each box edge. */
+  lInsEmu?: number;
+  tInsEmu?: number;
+  rInsEmu?: number;
+  bInsEmu?: number;
+  /** `a:bodyPr@anchor`: "t", "ctr" or "b". */
+  anchor?: string;
+  /** `a:bodyPr@wrap="none"`: lines do not wrap at the box edge. */
+  noWrap?: boolean;
+}
+
 /** A placeholder the slide inherits from its layout, geometry in slide pixels. */
 export interface LayoutPlaceholder {
   type?: string;
@@ -15,8 +28,8 @@ export interface LayoutPlaceholder {
   sizePt?: number;
   /** Level-1 paragraph alignment, in the editor's words. */
   align?: string;
-  /** `a:bodyPr@anchor`: "t", "ctr" or "b". */
-  anchor?: string;
+  /** The layout's `a:bodyPr`, with the master's own where the layout leaves one out. */
+  textBody?: TextBody;
   /** Level-1 `marL`/`indent`, in EMU; the hanging indent a bulleted line starts from. */
   marLEmu?: number;
   indentEmu?: number;
@@ -96,6 +109,8 @@ export interface Shape {
   raw?: any;
   /** `a:txBody/a:lstStyle` levels: what this shape's text inherits before the layout and master speak. */
   textLevels?: BodyLevel[];
+  /** The shape's own `a:bodyPr`: insets, vertical anchor and wrapping of its text. */
+  textBody?: TextBody;
   /** `a:bodyPr/a:normAutofit@fontScale`: the size to draw at, as a percent of the stated one. */
   fontScalePct?: number;
   /** `a:bodyPr/a:normAutofit@lnSpcReduction`: how much of the line height the fit gives back. */
@@ -476,6 +491,7 @@ export class Presentation {
       lineWidth: attr(ln, "w") ? Number(attr(ln, "w")) / EMU_PER_PX : undefined,
       paragraphs: paragraphs(find(node, "txBody"), resolve),
       textLevels: textLevels?.some(hasLevel) ? textLevels : undefined,
+      textBody: readTextBody(bodyPr),
       fontScalePct: Number.isFinite(fontScale) && fontScale > 0 ? fontScale / 1000 : undefined,
       lineSpacingReductionPct: Number.isFinite(reduction) && reduction > 0 ? reduction / 1000 : undefined,
       raw,
@@ -647,7 +663,7 @@ export class Presentation {
         height: (p.h ?? 0) / EMU_PER_PX,
         sizePt: p.szPt,
         align: p.algn ? ALGN_IN[p.algn] : undefined,
-        anchor: p.anchor,
+        textBody: p.anchor ? { anchor: p.anchor } : undefined,
         marLEmu: p.zeroIndent ? 0 : undefined,
         indentEmu: p.zeroIndent ? 0 : undefined,
         noBullet: p.noBullet,
@@ -865,6 +881,10 @@ function parseLayoutPlaceholders(xml: string, master?: LayoutPlaceholder[]): Lay
     const type = a["@_type"];
     const idx = a["@_idx"] !== undefined ? Number(a["@_idx"]) : undefined;
     const content = type === undefined || ["title", "ctrTitle", "subTitle", "body", "obj"].includes(type);
+    const masterHit = content
+      ? ((idx !== undefined ? master?.find((p) => p.idx === idx) : undefined) ??
+        master?.find((p) => (p.type ?? "obj") === (type ?? "obj")))
+      : undefined;
     const geometry =
       off && ext
         ? {
@@ -873,10 +893,7 @@ function parseLayoutPlaceholders(xml: string, master?: LayoutPlaceholder[]): Lay
             width: Number(rawAttrs(ext)["@_cx"] ?? 0) / EMU_PER_PX,
             height: Number(rawAttrs(ext)["@_cy"] ?? 0) / EMU_PER_PX,
           }
-        : content
-          ? ((idx !== undefined ? master?.find((p) => p.idx === idx) : undefined) ??
-            master?.find((p) => (p.type ?? "obj") === (type ?? "obj")))
-          : undefined;
+        : masterHit;
     if (!geometry) continue;
     const txBody = rawFind(rawChildren(entry), "txBody");
     const bodyPr = txBody ? rawFind(rawChildren(txBody), "bodyPr") : undefined;
@@ -892,7 +909,9 @@ function parseLayoutPlaceholders(xml: string, master?: LayoutPlaceholder[]): Lay
       height: geometry.height,
       sizePt: level.sizePt,
       align: level.align,
-      anchor: bodyPr ? rawAttrs(bodyPr)["@_anchor"] : undefined,
+      // `a:bodyPr` inherits attribute by attribute: the layout may anchor and leave the
+      // insets to the master, or the other way round.
+      textBody: mergeTextBody(readTextBody(bodyPr), masterHit?.textBody),
       marLEmu: level.marLEmu,
       indentEmu: level.indentEmu,
       bullet: level.bullet,
@@ -905,6 +924,40 @@ function parseLayoutPlaceholders(xml: string, master?: LayoutPlaceholder[]): Lay
     });
   }
   return out;
+}
+
+/** `a:bodyPr` attributes; an empty element states nothing and stays undefined. */
+function readTextBody(bodyPr: any): TextBody | undefined {
+  if (!bodyPr) return undefined;
+  const a = rawAttrs(bodyPr);
+  const emu = (name: string): number | undefined => {
+    const v = a[`@_${name}`];
+    return v !== undefined && Number.isFinite(Number(v)) ? Number(v) : undefined;
+  };
+  const body: TextBody = {
+    lInsEmu: emu("lIns"),
+    tInsEmu: emu("tIns"),
+    rInsEmu: emu("rIns"),
+    bInsEmu: emu("bIns"),
+    anchor: a["@_anchor"],
+    noWrap: a["@_wrap"] === "none" ? true : undefined,
+  };
+  return Object.values(body).some((v) => v !== undefined) ? body : undefined;
+}
+
+/** The nearer `a:bodyPr` answers each attribute it states; the master answers the rest. */
+function mergeTextBody(own: TextBody | undefined, fallback: TextBody | undefined): TextBody | undefined {
+  if (!own) return fallback;
+  if (!fallback) return own;
+  const merged: TextBody = {
+    lInsEmu: own.lInsEmu ?? fallback.lInsEmu,
+    tInsEmu: own.tInsEmu ?? fallback.tInsEmu,
+    rInsEmu: own.rInsEmu ?? fallback.rInsEmu,
+    bInsEmu: own.bInsEmu ?? fallback.bInsEmu,
+    anchor: own.anchor ?? fallback.anchor,
+    noWrap: own.noWrap ?? fallback.noWrap,
+  };
+  return merged;
 }
 
 /** A paragraph's own spacing from the parsed tree; zero is a declared "none", same as silence. */

@@ -140,9 +140,9 @@ describe("blank deck placeholder prompts", () => {
 describe("placeholder text inherits the layout's declared style", () => {
   it("carries the size, alignment and anchor the layout states", () => {
     const phs = Presentation.blank().slides[0].layoutPlaceholders ?? [];
-    expect(phs[0]).toMatchObject({ sizePt: 60, align: "center", anchor: "b" });
+    expect(phs[0]).toMatchObject({ sizePt: 60, align: "center", textBody: { anchor: "b" } });
     expect(phs[1]).toMatchObject({ sizePt: 24, align: "center" });
-    expect(phs[1].anchor).toBeUndefined();
+    expect(phs[1].textBody).toBeUndefined();
   });
 
   it("renders a claimed title at the layout's 60pt, centred, bottom-anchored", () => {
@@ -158,7 +158,7 @@ describe("placeholder text inherits the layout's declared style", () => {
       paragraphs: [{ level: 0, runs: [{ text: "季度汇报" }] }],
     });
     const html = renderSlideHtml(pres, 0);
-    expect(html).toMatch(/class="shape-text" style="font-size:60pt;justify-content:flex-end"/);
+    expect(html).toMatch(/class="shape-text" style="font-size:60pt;padding:4.8px 9.6px 4.8px 9.6px;justify-content:flex-end"/);
     expect(html).toContain("text-align:center");
     expect(html).toContain("季度汇报");
   });
@@ -166,7 +166,7 @@ describe("placeholder text inherits the layout's declared style", () => {
   it("leaves a silent layout to the master's size and alignment", () => {
     const pres = Presentation.blank();
     pres.slides[0].layoutPlaceholders = [
-      { type: "title", x: 64, y: 64, width: 1152, height: 74, anchor: "ctr" },
+      { type: "title", x: 64, y: 64, width: 1152, height: 74, textBody: { anchor: "ctr" } },
     ];
     pres.slides[0].shapes.push({
       kind: "shape",
@@ -179,7 +179,7 @@ describe("placeholder text inherits the layout's declared style", () => {
       paragraphs: [{ level: 0, runs: [{ text: "分析" }] }],
     });
     const html = renderSlideHtml(pres, 0);
-    expect(html).toMatch(/class="shape-text" style="font-size:36pt;justify-content:center"/);
+    expect(html).toMatch(/class="shape-text" style="font-size:36pt;padding:4.8px 9.6px 4.8px 9.6px;justify-content:center"/);
     expect(html).not.toContain("text-align:");
   });
 
@@ -192,7 +192,7 @@ describe("placeholder text inherits the layout's declared style", () => {
   it("reads the layout lstStyle and master txStyles back from the written package", () => {
     const back = open(writePptx(Presentation.blank()));
     const phs = back.slides[0].layoutPlaceholders ?? [];
-    expect(phs[0]).toMatchObject({ sizePt: 60, align: "center", anchor: "b" });
+    expect(phs[0]).toMatchObject({ sizePt: 60, align: "center", textBody: { anchor: "b" } });
     expect(phs[1]).toMatchObject({ sizePt: 24, align: "center" });
     expect(back.titleStylePt).toBe(36);
     expect(back.bodyStylePt).toBe(18);
@@ -216,7 +216,7 @@ describe("new slides choose a layout", () => {
     const added = pres.addSlide("ppt/slideLayouts/slideLayout3.xml");
     expect(added.layoutPath).toBe("ppt/slideLayouts/slideLayout3.xml");
     expect((added.layoutPlaceholders ?? []).map((p) => p.type)).toEqual(["title", "body"]);
-    expect(added.layoutPlaceholders?.[0]).toMatchObject({ sizePt: 44, anchor: "b" });
+    expect(added.layoutPlaceholders?.[0]).toMatchObject({ sizePt: 44, textBody: { anchor: "b" } });
     const pkg = pkgOf(pres);
     expect(pkg.text("ppt/slides/_rels/slide2.xml.rels")).toContain('Target="../slideLayouts/slideLayout3.xml"');
     const back = open(writePptx(pres));

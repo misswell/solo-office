@@ -601,12 +601,14 @@ export class DeckEditor {
         this.splitParagraph(body, pe, shape);
         return;
       }
-      // Tab / Shift+Tab demote and promote the caret's paragraph, as in WPS. Outside a
-      // body placeholder the key keeps its default (moving focus out of the field).
+      // Tab / Shift+Tab demote and promote every paragraph the selection touches, as in WPS;
+      // a collapsed caret counts as its own paragraph. Outside a body placeholder the key
+      // keeps its default (moving focus out of the field).
       if (e.key === "Tab") {
-        if (!pe) return;
+        const pes = this.paragraphsInSelection(body, window.getSelection());
+        if (!pes.length) return;
         e.preventDefault();
-        this.shiftLevel(body, pe, shape, e.shiftKey);
+        this.shiftLevels(body, pes, shape, e.shiftKey);
       }
     };
     plainPaste(body);
@@ -639,14 +641,41 @@ export class DeckEditor {
     return 0;
   }
 
-  private shiftLevel(body: HTMLElement, pe: HTMLElement, shape: Shape, promote: boolean): void {
+  /** The paragraphs the selection touches, in document order; a collapsed caret owns one. */
+  private paragraphsInSelection(body: HTMLElement, sel: Selection | null): HTMLElement[] {
+    const ps = [...body.children].filter(
+      (c): c is HTMLElement => c instanceof HTMLElement && c.tagName === "DIV" && c.classList.contains("sp-p"),
+    );
+    if (!sel?.rangeCount) return [];
+    const range = sel.getRangeAt(0);
+    const a = this.paragraphAt(body, range.startContainer);
+    const b = this.paragraphAt(body, range.endContainer);
+    if (!a && !b) return [];
+    const i = a ? ps.indexOf(a) : -1;
+    const j = b ? ps.indexOf(b) : -1;
+    if (i < 0 && j < 0) return [];
+    if (i < 0) return [ps[j]!];
+    if (j < 0) return [ps[i]!];
+    return ps.slice(Math.min(i, j), Math.max(i, j) + 1);
+  }
+
+  private shiftLevels(body: HTMLElement, pes: HTMLElement[], shape: Shape, promote: boolean): void {
     const last = Math.max(0, this.pres.bodyLevels.length - 1);
-    const level = Math.max(0, Math.min(last, this.levelOf(pe, shape) + (promote ? -1 : 1)));
-    this.paintLevel(pe, shape, level);
-    // Keep the caret in the paragraph after restyling.
+    for (const pe of pes) {
+      const level = Math.max(0, Math.min(last, this.levelOf(pe, shape) + (promote ? -1 : 1)));
+      this.paintLevel(pe, shape, level);
+    }
+    // Keep the selection (or the caret) on the paragraphs after restyling.
     const range = document.createRange();
-    range.selectNodeContents(pe);
-    range.collapse(false);
+    if (pes.length === 1) {
+      range.selectNodeContents(pes[0]!);
+      range.collapse(false);
+    } else {
+      const first = pes[0]!;
+      const lastPe = pes[pes.length - 1]!;
+      range.setStart(first, 0);
+      range.setEnd(lastPe, lastPe.childNodes.length);
+    }
     const sel = window.getSelection();
     sel?.removeAllRanges();
     sel?.addRange(range);

@@ -4725,7 +4725,7 @@ function smoke(): void {
 
         fire("solo:new", { kind: "pptx" });
         await wait(150);
-        const pptPart = { slides: document.querySelectorAll("#view .thumb").length, stage: !!document.querySelector("#view .stage"), title: document.getElementById("title")?.textContent };
+        const pptPart = { slides: document.querySelectorAll("#view .thumb").length, stage: !!document.querySelector("#view .stage"), title: document.getElementById("title")?.textContent, tabs: [...document.querySelectorAll("#ribbon .rtabs button")].map((t) => t.textContent).join("/"), homeCaps: [...document.querySelectorAll("#ribbon .rbar[data-tab='home'] .grp")].map((g) => g.dataset.cap || "-").join("/"), homeIcons: document.querySelectorAll("#ribbon .rbar[data-tab='home'] button.rb.ico .ic svg path").length, homeIconText: [...document.querySelectorAll("#ribbon .rbar[data-tab='home'] button.rb.ico")].every((b) => b.textContent === b.querySelector(".lb")?.textContent), undoInRibbon: [...document.querySelectorAll("#ribbon .rbar button.rb")].filter((b) => b.textContent === "撤销" || b.textContent === "重做").length };
         // Insert a text box, type into it, restyle it through the ribbon, then
         // insert a shape and a picture through the shell picker.
         const stage = () => document.querySelector("#view .stage .slide");

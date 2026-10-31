@@ -447,6 +447,24 @@ const RIBBON_ICONS: Record<string, string> = {
   comment: "<path d='M4 5h16v11H9l-4 4v-4H4z'/><path d='M12 8v5M9.5 10.5h5'/>",
   trackChanges: "<path d='M4 9a8 8 0 0 1 14-3'/><path d='M18 4v5h-5'/><path d='M20 15a8 8 0 0 1-14 3'/><path d='M6 20v-5h5'/>",
   wordCount: "<path d='M4 6h10M4 12h8M4 18h6'/><path d='M15 17l2 2 3-4'/>",
+  slideAdd: "<path d='M3 5h18v11H3z'/><path d='M12 16v4M9 20h6'/><path d='M12 7v6M9 10h6'/>",
+  slideDelete: "<path d='M3 5h18v11H3z'/><path d='M12 16v4M9 20h6'/><path d='M9 8l6 6M15 8l-6 6'/>",
+  slideUp: "<path d='M7 3h10v5H7z'/><path d='M12 21v-7'/><path d='M8.5 17.5 12 14l3.5 3.5'/>",
+  slideDown: "<path d='M7 16h10v5H7z'/><path d='M12 3v7'/><path d='M8.5 6.5 12 10l3.5-3.5'/>",
+  textBox: "<path d='M3 5h18v14H3z'/><path d='M8 9h8M12 9v6'/>",
+  deleteShape: "<path d='M4 4h9v9H4z' stroke-dasharray='2 2'/><path d='M13 13l7 7M20 13l-7 7'/>",
+  play: "<path d='M7 4l12 8-12 8z'/>",
+  playHere: "<path d='M5 4l11 8-11 8z'/><path d='M19 5v14'/>",
+  shapeRect: "<path d='M4 6h16v12H4z'/>",
+  shapeRoundRect: "<path d='M8 6h8a4 4 0 0 1 4 4v4a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4v-4a4 4 0 0 1 4-4z'/>",
+  shapeEllipse: "<path d='M12 5c4.4 0 8 3.1 8 7s-3.6 7-8 7-8-3.1-8-7 3.6-7 8-7z'/>",
+  shapeTriangle: "<path d='M12 4l9 16H3z'/>",
+  shapeLine: "<path d='M4 20 20 4'/><path d='M4 20h.01M20 4h.01'/>",
+  shapeDiamond: "<path d='M12 3l9 9-9 9-9-9z'/>",
+  shapeParallelogram: "<path d='M7 6h14l-4 12H3z'/>",
+  shapeRightArrow: "<path d='M3 9h11V5l7 7-7 7v-4H3z'/>",
+  shapeStar: "<path d='M12 3.5l2.6 5.6 6.1.7-4.6 4.2 1.3 6-5.4-3.1-5.4 3.1 1.3-6L3.3 9.8l6.1-.7z'/>",
+  shapeChevron: "<path d='M4 6h13l4 6-4 6H4l4-6z'/>",
 };
 
 /** 哪条命令挂哪枚图标。认不出的命令不挂——纯文字的小钮（小数位、上下对齐箭头那些）保持原样。 */
@@ -511,6 +529,24 @@ const RIBBON_ICON_IDS: Record<string, string> = {
   新建批注: "comment",
   修订: "trackChanges",
   字数统计: "wordCount",
+  "＋新页": "slideAdd",
+  删除页: "slideDelete",
+  上移: "slideUp",
+  下移: "slideDown",
+  文本框: "textBox",
+  删除形状: "deleteShape",
+  放映: "play",
+  本页放映: "playHere",
+  矩形: "shapeRect",
+  圆角: "shapeRoundRect",
+  椭圆: "shapeEllipse",
+  三角: "shapeTriangle",
+  直线: "shapeLine",
+  菱形: "shapeDiamond",
+  平行四边形: "shapeParallelogram",
+  右箭头: "shapeRightArrow",
+  五角星: "shapeStar",
+  燕尾形: "shapeChevron",
 };
 
 /**
@@ -536,9 +572,9 @@ function buildRibbon(kind: "xlsx" | "docx" | "pptx"): void {
   if (ribbon.dataset.built === kind) return;
   ribbon.dataset.built = kind;
   ribbon.innerHTML = "";
-  // 文字与表格两页都按 WPS 自己的页签条分页（`wpsongmani.kui` / `etongmani.kui` 的 `KRbTabWidgetCommand`
-  // 各声明一套）；演示那一页还是一条行。
-  ribbon.classList.toggle("tabbed", kind !== "pptx");
+  // 三页都按 WPS 自己的页签条分页（`wpsongmani.kui` / `etongmani.kui` / `wppongmani.kui` 的
+  // `KRbTabWidgetCommand` 各声明一套）。
+  ribbon.classList.add("tabbed");
   for (const key of Object.keys(ctl)) delete ctl[key];
   if (kind === "xlsx") buildSheetRibbon();
   else if (kind === "docx") buildDocRibbon();
@@ -748,6 +784,21 @@ const SHEET_RIBBON_TABS: [string, string][] = [
   ["home", "开始"],
   ["insert", "插入"],
   ["data", "数据"],
+  ["view", "视图"],
+];
+
+/**
+ * 演示页的页签，照 `res/wppongmani.kui:86` 的 `<KRbTabWidgetCommand id="tabwidget">`：
+ * `CT_Home → CT_Insert → CT_Design → CT_SlideTrans → CT_Animation → CT_SlideShow → CT_Review → CT_View → …`。
+ * 只摆有命令的四档（设计/切换/动画/审阅今天没有命令，空页只是给人一条按不动的路）。
+ * 组归哪页按 `res/commands/wpp/ongmani/CT_*.kuip` 的组 id：`RB_Slide`/`RB_Font`/`RB_Paragraph`/`RB_Drawing`
+ * 在开始页；`RB_Text`/`RB_Shape`/`RB_Media` 在插入页；`RB_StartSlideShow` 在放映页；`RB_Zoom` 在视图页。
+ * 中文页名与组名一样是自家措辞——`.kuip` 只给英文 source（`text="@Home"`），界面字面在读不出来的 `.qm` 里。
+ */
+const DECK_RIBBON_TABS: [string, string][] = [
+  ["home", "开始"],
+  ["insert", "插入"],
+  ["show", "放映"],
   ["view", "视图"],
 ];
 
@@ -1865,10 +1916,11 @@ function echoChoice(s: HTMLSelectElement, value: string | undefined, presets: st
 
 /** Deck operations; text styles act on the selection being typed into. */
 function buildDeckRibbon(): void {
-  const group = (): HTMLElement => {
-    const g = document.createElement("div");
-    g.className = "grp";
-    ribbon.append(g);
+  const shell = ribbonTabs(DECK_RIBBON_TABS);
+  /** 组名是自家措辞：`.kuip` 只有 `text="@Slide"` 这类英文占位，中文在 `.qm` 里读不出（与表格页同一口径）。 */
+  const group = (tab: string, cap: string): HTMLElement => {
+    const g = shell.group(tab);
+    g.dataset.cap = cap;
     return g;
   };
   const button = (g: HTMLElement, key: string, label: string, tip: string, run: () => void): void => {
@@ -1876,6 +1928,7 @@ function buildDeckRibbon(): void {
     b.className = "rb";
     b.textContent = label;
     b.title = tip;
+    decorateRibbonButton(b, label);
     b.onclick = run;
     ctl[key] = b;
     g.append(b);
@@ -1909,18 +1962,35 @@ function buildDeckRibbon(): void {
     g.append(i);
   };
 
-  const nav = group();
-  button(nav, "undo", "撤销", "撤销 ⌘Z", () => undo());
-  button(nav, "redo", "重做", "重做 ⌘⇧Z", () => redo());
-
-  const pages = group();
+  // 撤销/重做只在顶栏 QAT 那一处（`undo()` 已按 `current.kind` 派发到演示的历史），开始页不再摆第二份。
+  const pages = group("home", "幻灯片");
   button(pages, "", "＋新页", "在当前页后新建一页", () => deck?.addSlide());
   button(pages, "", "删除页", "删除当前页", () => deck?.removeSlide());
   button(pages, "", "上移", "当前页前移一位", () => deck?.moveSlide(-1));
   button(pages, "", "下移", "当前页后移一位", () => deck?.moveSlide(1));
 
-  const insert = group();
-  button(insert, "", "文本框", "在当前页插入文本框", () => deck?.insertTextBox());
+  const font = group("home", "字体");
+  button(font, "bold", "粗", "加粗 ⌘B", () => style("bold"));
+  button(font, "italic", "斜", "斜体 ⌘I", () => style("italic"));
+  button(font, "under", "线", "下划线 ⌘U", () => style("underline"));
+  chooser(font, "size", "字号", DECK_SIZES.map((s): [string, string] => [String(s), String(s)]), (v) => {
+    deck?.applySize(Number(v));
+    syncDeckRibbon();
+  });
+  swatch(font, "color", "字体颜色", "#c00000", (v) => {
+    deck?.applyRunColor(v);
+    syncDeckRibbon();
+  });
+
+  const align = group("home", "段落");
+  button(align, "aleft", "左", "左对齐", () => deck?.applyAlign("left"));
+  button(align, "acenter", "中", "居中", () => deck?.applyAlign("center"));
+  button(align, "aright", "右", "右对齐", () => deck?.applyAlign("right"));
+  button(align, "aboth", "两", "两端对齐", () => deck?.applyAlign("justify"));
+
+  // 开始页 `RB_Drawing`（`CT_Home.kuip`：`ksoCmd="FormatObject"`，组里是 `DynamicShape` 的形状画廊与
+  // `InsertTextboxHorizontal`）。形状画廊归这一组，插入页那一档就不再摆第二份。
+  const draw = group("home", "绘图");
   for (const [label, geometry] of [
     ["矩形", "rect"],
     ["圆角", "roundRect"],
@@ -1933,45 +2003,29 @@ function buildDeckRibbon(): void {
     ["五角星", "star5"],
     ["燕尾形", "chevron"],
   ] as [string, PresetGeometry][]) {
-    button(insert, "", label, `插入${label}`, () => deck?.insertPreset(geometry));
+    button(draw, "", label, `插入${label}`, () => deck?.insertPreset(geometry));
   }
-  button(insert, "", "图片", "插入本地图片", pickDeckPicture);
-
-  const shape = group();
-  button(shape, "", "删除形状", "删除选中的形状、图片或表格", () => deck?.deleteShape());
-
-  const align = group();
-  button(align, "aleft", "左", "左对齐", () => deck?.applyAlign("left"));
-  button(align, "acenter", "中", "居中", () => deck?.applyAlign("center"));
-  button(align, "aright", "右", "右对齐", () => deck?.applyAlign("right"));
-  button(align, "aboth", "两", "两端对齐", () => deck?.applyAlign("justify"));
-
-  ribbon.append(zoomGroup());
-
-  const show = group();
-  button(show, "", "▶ 放映", "全屏放映，从头开始（F5）", () => startShow(false));
-  button(show, "", "本页放映", "从当前页开始放映（⇧F5）", () => startShow(true));
-
-  const font = group();
-  button(font, "bold", "粗", "加粗 ⌘B", () => style("bold"));
-  button(font, "italic", "斜", "斜体 ⌘I", () => style("italic"));
-  button(font, "under", "线", "下划线 ⌘U", () => style("underline"));
-  chooser(font, "size", "字号", DECK_SIZES.map((s): [string, string] => [String(s), String(s)]), (v) => {
-    deck?.applySize(Number(v));
-    syncDeckRibbon();
-  });
-  swatch(font, "color", "字体颜色", "#c00000", (v) => {
-    deck?.applyRunColor(v);
-    syncDeckRibbon();
-  });
-  swatch(font, "fill", "形状填充", "#dce6f1", (v) => {
+  button(draw, "", "删除形状", "删除选中的形状、图片或表格", () => deck?.deleteShape());
+  swatch(draw, "fill", "形状填充", "#dce6f1", (v) => {
     deck?.applyShapeFill(v);
     syncDeckRibbon();
   });
-  swatch(font, "line", "形状边框", "#4472c4", (v) => {
+  swatch(draw, "line", "形状边框", "#4472c4", (v) => {
     deck?.applyShapeLine(v);
     syncDeckRibbon();
   });
+
+  // 插入页：`RB_Text`（`InsertTextboxHorizontal`）与 `RB_Shape`（`text="@Graph And Image"`，组里第一枚就是
+  // `InsertPictureFromFile`）。WPS 的 `RB_Media` 是联机音频/视频，这两条今天没有命令，不摆空组。
+  button(group("insert", "文本"), "", "文本框", "在当前页插入文本框", () => deck?.insertTextBox());
+  button(group("insert", "图形和图片"), "", "图片", "插入本地图片", pickDeckPicture);
+
+  const show = group("show", "开始放映");
+  button(show, "", "放映", "全屏放映，从头开始（F5）", () => startShow(false));
+  button(show, "", "本页放映", "从当前页开始放映（⇧F5）", () => startShow(true));
+
+  shell.bars["view"]!.append(zoomGroup());
+  shell.sync();
 }
 
 // ------------------------------------------------------------- shared chrome
@@ -1991,7 +2045,7 @@ function applyZoom(z: number): void {
 function zoomGroup(): HTMLElement {
   const g = document.createElement("div");
   g.className = "grp";
-  // 表格页与文字页的视图档都用这一组，组名照 WPS 的 `RB_Zoom`（`CT_View.kuip`）。演示那一条不分档，CSS 不显示组名。
+  // 三页的视图档都用这一组，组名照 WPS 的 `RB_Zoom`（各家的 `CT_View.kuip`）。
   g.dataset.cap = "缩放";
   const mk = (label: string, tip: string, run: () => void): HTMLButtonElement => {
     const b = document.createElement("button");
@@ -2185,10 +2239,6 @@ function syncDeckRibbon(): void {
   }
   if (shape?.fill) (ctl.fill as HTMLInputElement | undefined)!.value = shape.fill.slice(0, 7);
   if (shape?.line) (ctl.line as HTMLInputElement | undefined)!.value = shape.line.slice(0, 7);
-  const undoBtn = ctl.undo as HTMLButtonElement | undefined;
-  const redoBtn = ctl.redo as HTMLButtonElement | undefined;
-  if (undoBtn) undoBtn.disabled = !deck?.canUndo();
-  if (redoBtn) redoBtn.disabled = !deck?.canRedo();
 }
 
 function selectAllDoc(): void {

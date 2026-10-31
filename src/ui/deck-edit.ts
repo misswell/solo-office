@@ -24,6 +24,14 @@ const RULER_PX = 16;
 const CM_PX = 360000 / 9525;
 /** Placeholder prompts belong to the editing surfaces; 放映 and 阅读视图 show the slide as it plays. */
 const PROMPTS = { placeholders: true };
+/** Names a claimed placeholder the way the layouts do. */
+const PLACEHOLDER_NAMES: Record<string, string> = {
+  title: "标题",
+  ctrTitle: "标题",
+  subTitle: "副标题",
+  body: "文本占位符",
+  pic: "图片占位符",
+};
 
 /** Insert defaults, close to what a fresh shape looks like in an office suite. */
 const SHAPE_FILL = "#dce6f1";
@@ -59,6 +67,8 @@ export class DeckEditor {
   private selected: number | null = null;
   private drag: { mode: "move" | "resize"; dir?: Dir; sx: number; sy: number; moved: boolean; box: { x: number; y: number; width: number; height: number }; el: HTMLElement } | null = null;
   private editing: HTMLElement | null = null;
+  /** The placeholder just claimed from a prompt; leaving it empty puts the prompt back. */
+  private placeholderDraft: Shape | null = null;
   private burst = 0;
   private fit = 1;
   private viewMode: DeckViewMode = "normal";
@@ -415,6 +425,12 @@ export class DeckEditor {
   private stageDown(e: PointerEvent, slideEl: HTMLElement): void {
     if (this.editing) return;
     if (e.button !== 0) return;
+    const hint = (e.target as HTMLElement).closest<HTMLElement>(".ph-hint");
+    if (hint && slideEl.contains(hint)) {
+      e.preventDefault();
+      this.claimPlaceholder(Number(hint.dataset.ph));
+      return;
+    }
     const el = (e.target as HTMLElement).closest<HTMLElement>("[data-idx]");
     if (!el || !slideEl.contains(el)) {
       this.select(null);
@@ -614,11 +630,25 @@ export class DeckEditor {
         };
       });
     const next = paragraphs.length ? paragraphs : [{ level: 0, runs: [] }];
-    if (JSON.stringify(next) === JSON.stringify(shape.paragraphs ?? [])) {
+    const claimed = this.placeholderDraft === shape;
+    this.placeholderDraft = null;
+    const untouched = JSON.stringify(next) === JSON.stringify(shape.paragraphs ?? []);
+    // An empty paragraph paints a line break, so "still empty" is about visible text.
+    const blank = next.every((p) => p.runs.every((r) => !r.text.trim()));
+    if (claimed && blank && this.slide) {
+      // A prompt that was clicked but never typed into leaves no shape and no undo step.
+      this.slide.shapes.splice(index, 1);
+      this.selected = null;
+      this.stack.pop();
       this.render();
       return;
     }
-    this.pushUndo();
+    if (untouched) {
+      this.render();
+      return;
+    }
+    // The claim itself is the undo step, so one undo takes the first text back to the prompt.
+    if (!claimed) this.pushUndo();
     shape.paragraphs = next;
     shape.textDirty = true;
     if (this.slide) this.pres.markDirty(this.slide);
@@ -810,6 +840,39 @@ export class DeckEditor {
     this.selectedSlide = Math.max(0, Math.min(this.selectedSlide + delta, this.pres.slides.length - 1));
     this.hooks.changed();
     this.render();
+  }
+
+  /**
+   * Turns an empty layout placeholder's prompt into the shape that fills it, typing.
+   * Like WPS, the click does not touch the deck until something is typed: leaving the
+   * placeholder empty puts the prompt back and keeps the title unmarked.
+   */
+  private claimPlaceholder(index: number): void {
+    const slide = this.slide;
+    const ph = slide?.layoutPlaceholders?.[index];
+    if (!slide || !ph || !Number.isFinite(index)) return;
+    this.commitEditing();
+    this.pushUndo();
+    const type = ph.type || "body";
+    const shape: Shape = {
+      kind: "shape",
+      name: PLACEHOLDER_NAMES[type] ?? "占位符",
+      geometry: "rect",
+      x: Math.round(ph.x),
+      y: Math.round(ph.y),
+      width: Math.round(ph.width),
+      height: Math.round(ph.height),
+      placeholder: type,
+      placeholderIdx: ph.idx,
+      paragraphs: [{ level: 0, runs: [] }],
+    };
+    slide.shapes.push(shape);
+    this.selected = slide.shapes.length - 1;
+    this.placeholderDraft = shape;
+    this.render();
+    const body = this.elementFor(this.selected)?.querySelector<HTMLElement>(".shape-text");
+    if (body) this.editText(body, shape);
+    else this.placeholderDraft = null;
   }
 
   /** Inserts an empty text box centred on the slide and starts typing in it. */

@@ -1525,11 +1525,12 @@ function placeholderFilled(shape: Shape, ph: LayoutPlaceholder): boolean {
 /** Prompts for the layout placeholders no shape on the slide has claimed. */
 function placeholderHints(slide: Slide): string {
   return (slide.layoutPlaceholders ?? [])
-    .filter((ph) => placeholderFamily(ph.type) !== undefined)
-    .filter((ph) => !slide.shapes.some((shape) => placeholderFilled(shape, ph)))
-    .map((ph) => {
+    .map((ph, i) => ({ ph, i }))
+    .filter(({ ph }) => placeholderFamily(ph.type) !== undefined)
+    .filter(({ ph }) => !slide.shapes.some((shape) => placeholderFilled(shape, ph)))
+    .map(({ ph, i }) => {
       const box = `position:absolute;left:${ph.x}px;top:${ph.y}px;width:${ph.width}px;height:${ph.height}px`;
-      return `<div class="ph-hint" aria-hidden="true" style="${box}">${PLACEHOLDER_PROMPTS[ph.type ?? ""]}</div>`;
+      return `<div class="ph-hint" data-ph="${i}" aria-hidden="true" style="${box}">${PLACEHOLDER_PROMPTS[ph.type ?? ""]}</div>`;
     })
     .join("");
 }

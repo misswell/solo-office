@@ -98,8 +98,27 @@ describe("blank deck placeholder prompts", () => {
     const editing = renderSlideHtml(pres, 0, { placeholders: true });
     expect(editing).toContain("单击此处添加标题");
     expect(editing).toContain("单击此处添加副标题");
+    expect(editing).toContain('data-ph="0"');
+    expect(editing).toContain('data-ph="1"');
     expect(renderSlideHtml(pres, 0)).not.toContain("ph-hint");
     expect(renderSlideHtml(pres, 0)).not.toContain("单击此处");
+  });
+
+  it("writes a claimed placeholder as p:ph so a save keeps its identity", () => {
+    const pres = Presentation.blank();
+    pres.slides[0].shapes.push(
+      { kind: "shape", name: "标题 1", x: 100, y: 100, width: 400, height: 80, placeholder: "ctrTitle", paragraphs: [] },
+      { kind: "shape", name: "副标题 2", x: 100, y: 200, width: 400, height: 80, placeholder: "subTitle", placeholderIdx: 1, paragraphs: [] },
+    );
+    pres.markDirty(pres.slides[0]);
+    const xml = pkgOf(pres).text("ppt/slides/slide1.xml")!;
+    expect(xml).toContain('name="标题 1"');
+    expect(xml).toContain('type="ctrTitle"');
+    expect(xml).toContain('idx="1"');
+    const back = open(writePptx(pres));
+    const shapes = back.slides[0].shapes;
+    expect(shapes.find((s) => s.name === "标题 1")?.placeholder).toBe("ctrTitle");
+    expect(shapes.find((s) => s.name === "副标题 2")).toMatchObject({ placeholder: "subTitle", placeholderIdx: 1 });
   });
 
   it("drops a prompt once a shape claims that placeholder", () => {

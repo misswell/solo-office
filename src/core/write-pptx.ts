@@ -118,13 +118,18 @@ function shapeElement(shape: Shape, id: number): any | undefined {
     });
   }
   const txBody: any[] = [{ "a:bodyPr": [] }, { "a:lstStyle": [] }, ...(shape.paragraphs ?? []).map(paragraphNode)];
+  // A shape that fills a layout placeholder keeps its identity, or PowerPoint draws
+  // the prompt again over the text the user typed.
+  const phAttrs: Record<string, string> = {};
+  if (shape.placeholder) phAttrs["@_type"] = shape.placeholder;
+  if (shape.placeholderIdx !== undefined) phAttrs["@_idx"] = String(shape.placeholderIdx);
   return {
     "p:sp": [
       {
         "p:nvSpPr": [
           { "p:cNvPr": [], ":@": { "@_id": String(id), "@_name": shape.name || "形状" } },
           { "p:cNvSpPr": [], ":@": shape.textBox ? { "@_txBox": "1" } : {} },
-          { "p:nvPr": [] },
+          { "p:nvPr": shape.placeholder ? [{ "p:ph": [], ":@": phAttrs }] : [] },
         ],
       },
       { "p:spPr": spPr },

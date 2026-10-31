@@ -888,7 +888,7 @@ function tableAlign(t: Table): string {
  * 那两句说的是「相对谁居中」，没有一处数可以量。锚不是 `page`/`margin`（`text` 那两档）也不画：留在流里至少
  * 还是文件里那一张表，按猜出来的坐标摆才是替文件说话。
  */
-function floatingOf(t: Table): { x: number; y: number; vert: string; horz: string } | undefined {
+export function floatingOf(t: Table): { x: number; y: number; vert: string; horz: string } | undefined {
   const el = /<w:tblpPr\b[^>]*\/?>/.exec(t.tblPrXml ?? "")?.[0];
   if (!el || /\bw:tblp[XY]Spec=/.test(el)) return undefined;
   const num = (name: string): number | undefined => {

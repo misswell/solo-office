@@ -1177,6 +1177,14 @@ function buildDocRibbon(): void {
     syncDocRibbon();
   });
 
+  // 「更新目录」（#248）：WPS 把这条命令摆在 TOC 的右键菜单与「引用」页的 `UpdateTable` 里（入口位置
+  // **未取证**，`.kuip` 只给 idMso）。自家没有「引用」页，摆进插入页与目录同一族；件里没有目录时灰着
+  // （`hasToc`）——按下去什么都不做的按钮比没有更糊涂。
+  button(pages, "tocUpdate", "更新目录", "按当前分页重算目录里的页码缓存（只动缓存、不动域名与书签）", () => {
+    editor?.updateToc();
+    syncDocRibbon();
+  });
+
   // 审阅那一簇按 WPS 自己声明的组序排（`office6/res/commands/wps/ongmani/CT_Review.kuip:199-207`：
   // `RB_Proofing` → `RB_Comments` → `RB_Review` → `RB_Changes`，组与组之间是 `<separator/>`）。这一条是实据，
   // 不是印象：WPS 的批注簇在修订簇**之前**，接受/拒绝单独成一组，字数统计挂在校对那一组里（`WordCountToolBar`，
@@ -1402,6 +1410,9 @@ function syncDocRibbon(force = false): void {
   editor?.setRulerShown(showRuler);
   // 格式刷亮着＝还举着一趟没用完（按下后到刷上之前，按钮亮着，纸上的指针也换成 `copy`）。
   mark("painter", editor?.painterArmed() ?? false);
+  // 「更新目录」只在件里真有目录（只带容器里有 PAGEREF）时可用：按下去什么都不做的按钮比没有更糊涂。
+  const tocBtn = ctl.tocUpdate as HTMLButtonElement | undefined;
+  if (tocBtn) tocBtn.disabled = !(editor?.hasToc() ?? false);
   // 「没说」与「明说 left」画的是一件事（§17.3.1.13 默认左；授权 46 份里 88 段明说 left，
   // `.scratch/authorized-jc-echo.ts`），两档都该亮「左」——只亮 `undefined` 那一档，停在那 88 段上时
   // 纸面靠左、按钮上一枚都不亮，说的是谎话。

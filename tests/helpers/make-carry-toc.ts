@@ -80,9 +80,9 @@ const pack = (extra: string): Uint8Array =>
     { level: 6 },
   );
 
-/** 目录那份件：sdt（gallery 型目录）+ 一段正文 + sectPr。 */
-export function makeTocDocx(): Uint8Array {
-  return pack(TOC_SDT);
+/** 目录那份件：sdt（gallery 型目录）+ 调用方追加的正文 + 一段正文 + sectPr。 */
+export function makeTocDocx(extra = ""): Uint8Array {
+  return pack(TOC_SDT + extra);
 }
 
 /** 混合内容那份件：sdtContent 里有一段加一张表。 */

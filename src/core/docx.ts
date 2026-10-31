@@ -1,6 +1,7 @@
 import { OpcPackage, asArray, childSpans, children, decodeEntities, elementContent } from "./opc.js";
 import { ThemeFonts, themeFontScript } from "./theme-fonts.js";
 import { isMark } from "./run-identity.js";
+import { rewriteTocCachedPages } from "./doc-toc.js";
 import { dataUrl } from "./media.js";
 import { TABLE_RECORD_TAGS, changeRecordXml, coversWholeSet, decideSetXml, decideSlots, isPropertyRecord, placeRecordXml, recordedSlots, setChildren } from "./doc-table-revisions.js";
 import { cellCovering, columnStarts, deleteColumn, gridColumns, removeCell, repairMerges, restateColumnFromCells } from "./doc-table-ops.js";
@@ -2833,6 +2834,66 @@ export class WordDocument {
    */
   bodyTexts(): string[] {
     return paragraphTextsOf(this.blocks);
+  }
+
+  /**
+   * 书签名 → 它所在的**顶层块**下标（`blocks` 的顺序；表格里的书签归它那一张表的块）。
+   *
+   * 只认 `bookmarkStart` 那一枚（`bookmarkEnd` 不带名）。同名只记第一次——一份件里重名书签是坏件，
+   * 但「先出现的那一处」是读者会跳去的地方，也是 WPS 更新目录时取的地方（同名重定义的行为未取证，
+   * 这里按先到先得，不另编）。
+   */
+  bookmarkBlocks(): Map<string, number> {
+    const out = new Map<string, number>();
+    const scanParas = (blocks: readonly Block[], top: number): void => {
+      for (const b of blocks) {
+        if (b.kind === "paragraph") {
+          for (const i of b.inlines) {
+            if (i.carry?.tag === "bookmarkStart" && i.carry.name && !out.has(i.carry.name)) out.set(i.carry.name, top);
+          }
+          continue;
+        }
+        if (b.kind === "table") {
+          for (const row of b.rows) for (const cell of row) scanParas(cell.paragraphs, top);
+        }
+      }
+    };
+    this.blocks.forEach((b, i) => scanParas([b], i));
+    return out;
+  }
+
+  /**
+   * 「更新目录」：把每条 `PAGEREF` 域的结果缓存换成 `resolve` 算出的页码（#248）。
+   *
+   * 只动**结果**、不动指令（`doc-toc.ts` 头注）：书签名与开关是文件说的话，缓存是上次算出的数——
+   * 更新目录改的正是后者。`resolve` 交 `undefined` 的条目原样留着（算不出的页码不拿 1 去填）。
+   *
+   * 返回改掉的条数；一条没改时**一个字节都不动**（调用方据此不重铺、不报脏）。改过的块按新字节重读
+   * 逐段落显示（`carriedParas`），纸面下次重铺时显示新页码。
+   */
+  updateToc(resolve: (bookmark: string) => number | undefined): number {
+    let changed = 0;
+    const walk = (blocks: Block[]): void => {
+      for (let i = 0; i < blocks.length; i++) {
+        const b = blocks[i]!;
+        if (b.kind === "table") {
+          for (const row of b.rows) for (const cell of row) walk(cell.paragraphs);
+          continue;
+        }
+        if (b.kind !== "carried" || !b.paras) continue;
+        const next = rewriteTocCachedPages(b.xml, resolve);
+        if (!next.changed) continue;
+        changed += next.changed;
+        blocks[i] = {
+          ...b,
+          xml: next.xml,
+          text: carriedText(next.xml),
+          paras: this.carriedParas({ tag: b.tag, xml: next.xml }) ?? b.paras,
+        };
+      }
+    };
+    walk(this.blocks);
+    return changed;
   }
 
   /**

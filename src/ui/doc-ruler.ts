@@ -174,7 +174,8 @@ const geomOf = (ruler: HTMLElement): RulerDragGeometry | null => {
 };
 
 const zoomOf = (ruler: HTMLElement): number => {
-  const z = parseFloat(ruler.style.zoom);
+  const m = /scale\(([\d.]+)\)/.exec(ruler.style.transform);
+  const z = m ? Number(m[1]) : 1;
   return Number.isFinite(z) && z > 0 ? z : 1;
 };
 
@@ -290,7 +291,14 @@ export function drawRuler(ruler: HTMLElement, page: HTMLElement, paint: RulerPai
   const padR = pxOf(page.style.getPropertyValue("--pad-r"));
   const textWidth = Math.max(0, width - padL - padR);
   ruler.style.width = `${width}px`;
-  ruler.style.zoom = String(paint.zoom > 0 ? paint.zoom : 1);
+  // 纸是 `transform: scale` 放大的（`applyPageScale`，原点 0 0，还按放大后的宽度留了右边距），标尺必须用同一套：
+  // 用 `zoom` 的话纸的放大位移进不了尺子，比例一换尺和纸就差半个字形。留白原样抄纸的那两只，居中才算同一格。
+  const z = paint.zoom > 0 ? paint.zoom : 1;
+  const pcs = getComputedStyle(page);
+  ruler.style.marginLeft = pcs.marginLeft;
+  ruler.style.marginRight = pcs.marginRight;
+  ruler.style.transform = z === 1 ? "" : `scale(${z})`;
+  ruler.style.transformOrigin = "0 0";
   ruler.dataset.rulerUnit = paint.unit;
   ruler.dataset.rulerPage = String(Math.round(width * 10) / 10);
   ruler.dataset.rulerText = String(Math.round(textWidth * 10) / 10);

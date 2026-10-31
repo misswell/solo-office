@@ -8,8 +8,9 @@ import { IMAGE_EXT_BY_MIME } from "../core/media.js";
 import { BAND_SOURCE_CLASS, CARRY_CLASS, CARRY_STYLE, BAND_MASTER_CLASS, PAGE_BORDER_CLASS, PAGE_CORNER_CLASS, RUN_CARRY_CLASS, type RevisionView, fontStack, highlightColor, renderWord } from "../core/render.js";
 import { flatOf, inlineLength, isMark, keepRunIdentity, restampRunText } from "../core/run-identity.js";
 import { caseText, changedRanges, type CaseMode } from "../core/doc-case.js";
+import { tocPageRefs } from "../core/doc-toc.js";
 import { CommentPanel } from "./doc-comments.js";
-import { applyBandYield, applyFitText, applySheetGaps, applyTabStops, BAND_CLONE_CLASS, caretCharTop, caretStatusOf, lineCaretAnchor, lineNumberAt, measurePageLayout, pageAtCaret, pageCaretAnchor, pagePositionAt, REPEAT_HEADER_ROW_CLASS, rowColumnAt, sectionCaretAnchor, SHEET_GAP_ROW_CLASS, SHEET_STRIP_CLASS, type CaretLine, type CaretStatus, type PageAnchor, type PageMeasure, type PagePlacement, type SheetStrip } from "./doc-layout.js";
+import { applyBandYield, applyFitText, applySheetGaps, applyTabStops, BAND_CLONE_CLASS, blockPagesOf, caretCharTop, caretStatusOf, lineCaretAnchor, lineNumberAt, measurePageLayout, pageAtCaret, pageCaretAnchor, pagePositionAt, REPEAT_HEADER_ROW_CLASS, rowColumnAt, sectionCaretAnchor, SHEET_GAP_PX, SHEET_GAP_ROW_CLASS, SHEET_STRIP_CLASS, type CaretLine, type CaretStatus, type PageAnchor, type PageMeasure, type PagePlacement, type SheetStrip } from "./doc-layout.js";
 import { ReviewPanel } from "./doc-review.js";
 import { OutlinePanel } from "./doc-outline.js";
 import { openPageSetup as showPageSetupDialog } from "./doc-page-setup.js";
@@ -902,8 +903,6 @@ export class DocEditor {
     // clientWidth 是布局像素（.page 坐标系本身），CSS 层画在同一个坐标系里，不随 zoom 再除一次。
     const paperW = page.clientWidth;
     const ARM = 16;
-    const tops: number[] = [0];
-    for (const st of strips) tops.push(st.top + st.height);
     const imgs: string[] = [];
     const pos: string[] = [];
     const siz: string[] = [];
@@ -912,10 +911,23 @@ export class DocEditor {
       pos.push(`${Math.round(x * 10) / 10}px ${Math.round(y * 10) / 10}px`);
       siz.push(`${Math.round(w * 10) / 10}px ${Math.round(h * 10) / 10}px`);
     };
+    // 条带不是一张纸一条：`applySheetGaps` 遇到「这一张的正文本来就落在开始线上」时那道缝不垫东西
+    // （`h <= 0` 就不插垫片、也不发条带），张数却照旧。所以页顶与页所属的节不能拿 `strips[i-1]` 硬对位——
+    // 少了那一条时按上一张自己的页高往下推，节沿用上一张那一节。
+    let top = 0;
+    let sectionIdx = 0;
     for (let i = 0; i < laid.pages; i++) {
-      const idx = i === 0 ? 0 : strips[i - 1]!.nextSection;
-      const sec = sections[Math.min(idx, sections.length - 1)] ?? DEFAULT_SECTION;
-      const top = tops[i] ?? 0;
+      if (i > 0) {
+        const st = strips[i - 1];
+        if (st) {
+          sectionIdx = st.nextSection;
+          top = st.top + st.height;
+        } else {
+          const sec = sections[Math.min(sectionIdx, sections.length - 1)] ?? DEFAULT_SECTION;
+          top += twipsToPx(sec.pageHeightTwips) + SHEET_GAP_PX;
+        }
+      }
+      const sec = sections[Math.min(sectionIdx, sections.length - 1)] ?? DEFAULT_SECTION;
       const paperH = twipsToPx(sec.pageHeightTwips);
       const gutter = sec.margins.gutter ?? 0;
       const xL = twipsToPx(sec.margins.left + gutter);
@@ -2239,6 +2251,45 @@ export class DocEditor {
     const lines = this.layout()?.lines;
     if (line === undefined || lines === undefined) return undefined;
     return { line, lines };
+  }
+
+  /**
+   * 「更新目录」：按**当前分页**重算目录里每条 `PAGEREF` 的缓存页码（#248）。
+   *
+   * 三句话：① 书签在哪一块（`doc.bookmarkBlocks`）；② 那一块落在第几页（`blockPagesOf`——与铺排同一份
+   * 装箱答案）；③ 把缓存换成新数（`doc.updateToc`，只动结果不动指令）。一条没变时不重铺、不报脏——
+   * 目录已经是对的，按一下不该在文件里留痕。
+   *
+   * 交回的数是改掉的条目数；`0` 既可能是「已经对」也可能是「件里没有目录/没有 PAGEREF」，
+   * 后者由调用方按「有没有目录」另问一声（ribbon 那枚按钮的可用性）。
+   */
+  updateToc(): number {
+    const page = this.page;
+    if (!page) return 0;
+    const pages = blockPagesOf(page, this.doc);
+    if (!pages) return 0;
+    const where = this.doc.bookmarkBlocks();
+    const changed = this.doc.updateToc((name) => {
+      const block = where.get(name);
+      return block === undefined ? undefined : pages[block];
+    });
+    if (changed) {
+      // 目录块的字节变了：整篇重铺一次（页码与条目文字都是渲染期画的），并由这一步报脏——与其它编辑同一规矩。
+      this.render();
+      this.hooks.changed();
+    }
+    return changed;
+  }
+
+  /** 件里有没有可更新的目录（只带容器里有 PAGEREF 的条目）。ribbon 那枚按钮据此亮着/灰着。 */
+  hasToc(): boolean {
+    const some = (blocks: readonly Block[]): boolean =>
+      blocks.some((b) =>
+        b.kind === "table"
+          ? b.rows.some((row) => row.some((c) => some(c.paragraphs)))
+          : b.kind === "carried" && !!b.paras && tocPageRefs(b.xml).length > 0,
+      );
+    return some(this.doc.blocks);
   }
 
   /**

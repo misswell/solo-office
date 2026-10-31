@@ -96,7 +96,7 @@
  * （字体度量、行盒取整、页眉占位、孤行控制都不一样，这些也都**未取证**），所以这里不写「与 WPS 一致」。
  */
 import { DEFAULT_SECTION, TAB_LEADER_TOKENS, sectionEndsOf, twipsToPx, type Section, type WordDocument } from "../core/docx.js";
-import { BAND_MASTER_CLASS, BAND_SOURCE_CLASS, CARRY_CLASS, PAGE_BORDER_CLASS, PAGE_CORNER_CLASS, TBL_HEADER_ATTR, TBLP_HORZ_ATTR, TBLP_VERT_ATTR, TBLP_X_ATTR, TBLP_Y_ATTR } from "../core/render.js";
+import { BAND_MASTER_CLASS, BAND_SOURCE_CLASS, CARRY_CLASS, PAGE_BORDER_CLASS, PAGE_CORNER_CLASS, TBL_HEADER_ATTR, TBLP_HORZ_ATTR, TBLP_VERT_ATTR, TBLP_X_ATTR, TBLP_Y_ATTR, floatingOf } from "../core/render.js";
 
 /**
  * 铺在纸上的一枚单位：一个行盒，或一枚不能拆的东西（表格的一行、一个只读容器）。
@@ -861,6 +861,34 @@ function planOf(page: HTMLElement, doc: WordDocument): PagePlan | undefined {
   });
   const places = placementsAcrossSections(units, unitSections, sheets);
   return { blocks, units, unitSections, places, pages: places.length ? places[places.length - 1]! : 1, contentHeightPx };
+}
+
+/**
+ * 每一**顶层块**落在第几页（下标与 `doc.blocks` 同序）。「更新目录」用它把书签所在的块换成页码（#248）：
+ * 目录条目的 PAGEREF 缓存要的就是这个数。
+ *
+ * 块 → 页的归属与 `applySheetGaps` 的 `places` 同一个口径（按枚的行盒上沿装箱，`planOf` 那一趟的答案），
+ * 不另算第二份。`plan.blocks` 比 `doc.blocks` 少了浮动表（`unitBlocksOf` 让它们离流，不产单位）——这里
+ * 按同一句话跳过它们，剩下的逐块对齐。浮动表里的书标记成 `undefined`：它没有流里的位置，算不出的页码
+ * 不拿 1 去填。量不出纸时整份交回 `undefined`——调用方据此不更新，而不是拿 1 去填。
+ */
+export function blockPagesOf(page: HTMLElement, doc: WordDocument): (number | undefined)[] | undefined {
+  const plan = planOf(page, doc);
+  if (!plan) return undefined;
+  const out: (number | undefined)[] = [];
+  let at = 0;
+  let bi = 0;
+  for (const b of doc.blocks) {
+    if (b.kind === "table" && floatingOf(b)) {
+      out.push(undefined);
+      continue;
+    }
+    // 0 枚的块（没有行盒的空记号）在流里不占位置：它落在紧跟着的那一枚的页上，末尾那种落在上一枚的页上。
+    out.push(plan.places[at] ?? plan.places[Math.max(0, at - 1)] ?? 1);
+    at += plan.blocks[bi]?.units.length ?? 0;
+    bi += 1;
+  }
+  return out;
 }
 
 /**

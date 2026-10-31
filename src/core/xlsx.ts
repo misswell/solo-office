@@ -367,29 +367,8 @@ export class Spreadsheet implements CellSource {
     for (const nf of asArray(st.styleSheet?.numFmts?.numFmt)) {
       custom.set(Number(nf["@_numFmtId"]), nf["@_formatCode"]);
     }
-    const fonts = asArray(st.styleSheet?.fonts?.font).map((f: any) => ({
-      bold: f.b !== undefined && f["@_val"] !== "0",
-      italic: f.i !== undefined && f["@_val"] !== "0",
-      underline: f.u !== undefined && f["@_val"] !== "none",
-      size: f.sz ? Number(f.sz["@_val"]) : 11,
-      name: f.name?.["@_val"] ? String(f.name["@_val"]) : undefined,
-      color: f.color?.["@_rgb"] ? String(f.color["@_rgb"]).slice(-6) : undefined,
-    }));
-    const fills = asArray(st.styleSheet?.fills?.fill).map((f: any) => {
-      const pf = f.patternFill;
-      const type = pf?.["@_patternType"];
-      if (!pf || type === "none") return undefined;
-      // Solid fills carry the colour as a child element: <fgColor rgb="FFFFF2CC"/>.
-      const rgb = pf.fgColor?.["@_rgb"] ?? pf.bgColor?.["@_rgb"];
-      return typeof rgb === "string" && /^[0-9A-Fa-f]{6,8}$/.test(rgb) ? String(rgb).slice(-6).toUpperCase() : undefined;
-    });
-    const borders = asArray(st.styleSheet?.borders?.border);
-    const rawFonts = asArray(st.styleSheet?.fonts?.font);
-    const rawFills = asArray(st.styleSheet?.fills?.fill);
-    // A side's own `@_style` is what draws it: `<left/>` and `style="none"` are both "no line" (the earlier
-    // rule read an absent `style` as a drawn side, so a bottom-only rule also boxed the cell's other three).
-    // The ink is a child `<color>`: an RGB literal, or a theme slot (often with a tint) the workbook's own
-    // clrScheme resolves. `auto`/`indexed` name the app's ink, which this model leaves to the renderer.
+    // `@_rgb` is a literal; `@_theme` names a slot in the workbook's own clrScheme, with an optional tint.
+    // Font and fill inks share this rule with borders, which is why the scheme is read once up here.
     const scheme = (() => {
       const path = [...pkg.parts.keys()].find((p) => /^xl\/theme\/[^/]+\.xml$/i.test(p));
       const root = path ? parseOrderedXml(pkg.text(path) ?? "") : undefined;
@@ -399,7 +378,8 @@ export class Spreadsheet implements CellSource {
       // Preserve-order entries keep attributes under `ATTRS`, not at the top level.
       const hex = (entry: any): string | undefined => {
         const attrs = entry?.[ATTRS];
-        const v = attrs?.["@_val"] ?? attrs?.["@_lastClr"];
+        // `sysClr@val` is a system-colour name; its concrete ink is `lastClr`.
+        const v = attrs?.["@_lastClr"] ?? attrs?.["@_val"];
         return typeof v === "string" && /^[0-9A-Fa-f]{6}$/.test(v) ? v.toUpperCase() : undefined;
       };
       const found = new Map<string, string>();
@@ -410,15 +390,37 @@ export class Spreadsheet implements CellSource {
       }
       return order.map((name) => found.get(name));
     })();
+    const inkOf = (c: any): string | undefined => {
+      const rgb = c?.["@_rgb"];
+      if (typeof rgb === "string" && /^[0-9A-Fa-f]{6,8}$/.test(rgb)) return rgb.slice(-6).toUpperCase();
+      if (c?.["@_theme"] !== undefined) return schemeColor(scheme, Number(c["@_theme"]), Number(c["@_tint"] ?? 0));
+      return undefined;
+    };
+    const fonts = asArray(st.styleSheet?.fonts?.font).map((f: any) => ({
+      bold: f.b !== undefined && f["@_val"] !== "0",
+      italic: f.i !== undefined && f["@_val"] !== "0",
+      underline: f.u !== undefined && f["@_val"] !== "none",
+      size: f.sz ? Number(f.sz["@_val"]) : 11,
+      name: f.name?.["@_val"] ? String(f.name["@_val"]) : undefined,
+      color: inkOf(f.color),
+    }));
+    const fills = asArray(st.styleSheet?.fills?.fill).map((f: any) => {
+      const pf = f.patternFill;
+      const type = pf?.["@_patternType"];
+      if (!pf || type === "none") return undefined;
+      // Solid fills carry the colour as a child element: <fgColor rgb="FFFFF2CC"/> or <fgColor theme="4"/>.
+      return inkOf(pf.fgColor) ?? inkOf(pf.bgColor);
+    });
+    const borders = asArray(st.styleSheet?.borders?.border);
+    const rawFonts = asArray(st.styleSheet?.fonts?.font);
+    const rawFills = asArray(st.styleSheet?.fills?.fill);
+    // A side's own `@_style` is what draws it: `<left/>` and `style="none"` are both "no line" (the earlier
+    // rule read an absent `style` as a drawn side, so a bottom-only rule also boxed the cell's other three).
     const borderLine = (bd: any, which: string): BorderLine | undefined => {
       const el = bd?.[which];
       const style = el?.["@_style"];
       if (!el || typeof style !== "string" || style === "none") return undefined;
-      const c = el.color;
-      let color: string | undefined;
-      const rgb = c?.["@_rgb"];
-      if (typeof rgb === "string" && /^[0-9A-Fa-f]{6,8}$/.test(rgb)) color = rgb.slice(-6).toUpperCase();
-      else if (c?.["@_theme"] !== undefined) color = schemeColor(scheme, Number(c["@_theme"]), Number(c["@_tint"] ?? 0));
+      const color = inkOf(el.color);
       return color ? { style, color } : { style };
     };
     // The file's xf indices are not ours: identical records collapse into one entry.

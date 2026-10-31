@@ -969,6 +969,12 @@ function buildDocRibbon(): void {
   // 这一条按下开的是**一张对话框**，不是一个开关。这张页面上没有可回显的「哪一档」：一段的制表位是一列位置，
   // 说不出单选，所以这一枚不认领 `ctl`（同查找替换那两枚）。
   button(align, "", "制表位", "制表位：这一段那一列位置、对齐与前导符，加件级的默认制表位", () => editor?.openTabStops());
+  // WPS 的 `m_ShowHideEditMark`（`CT_Home.kuip:337`，与制表位同一组）声明了三条子项：段落标记、段落布局、小十字。
+  // 只接了第一条：段落标记是**视图档**（见 `showEditMarks`），后两条画成什么样未取证，不摆。
+  button(align, "editmarks", "¶", "显示或隐藏编辑标记：段落末尾的 ¶（WPS：显示/隐藏编辑标记 · 段落标记）；只影响屏幕，不改文件", () => {
+    showEditMarks = !showEditMarks;
+    syncDocRibbon();
+  });
 
   const lists = group("home");
   button(lists, "bullet", "• 符号", "项目符号", () => editor?.setParagraph({ list: "bullet" }));
@@ -1378,6 +1384,14 @@ let showGridlines = true;
 let showRuler = true;
 
 /**
+ * 编辑标记画不画（WPS `m_ShowHideEditMark` 的第一条子项「段落标记」）。与「查看网格线」「标尺」同一条性质：
+ * 它挂在工作台上，文件里没有「显示段落标记」这一位——所以不改字节、不进撤销栈、也不报脏。
+ * 墨本身在 `index.html` 的 `#view.edit-marks .page .para::after`（零宽，不动铺排）；这里只管挂不挂那一枚类。
+ * WPS 默认显示还是隐藏**未取证**；家里默认隐藏，与 WPS 新开一档的观感一致（排版标记不该默认糊在纸上）。
+ */
+let showEditMarks = false;
+
+/**
  * ribbon 跟着文档读的那一趟。`force` 只在**换文档**那一趟给：上一份里打了还没落笔的那串字属于上一份文件，
  * 不搬进这一份（`buildRibbon` 同种类不重建，那几格是同一批元素，所以这一条得由这里说）。
  */
@@ -1408,6 +1422,9 @@ function syncDocRibbon(force = false): void {
   // （`DocEditor.setRulerShown` 同值不动，所以每趟 `syncDocRibbon` 都可以走这一句）。
   mark("ruler", showRuler);
   editor?.setRulerShown(showRuler);
+  // 编辑标记与上面两条同一条：回显问视图档、不问文档；类挂在同一个容器上，换文件/重排都走这一条路。
+  mark("editmarks", showEditMarks);
+  view.classList.toggle("edit-marks", showEditMarks);
   // 格式刷亮着＝还举着一趟没用完（按下后到刷上之前，按钮亮着，纸上的指针也换成 `copy`）。
   mark("painter", editor?.painterArmed() ?? false);
   // 「更新目录」只在件里真有目录（只带容器里有 PAGEREF）时可用：按下去什么都不做的按钮比没有更糊涂。

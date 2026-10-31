@@ -540,6 +540,24 @@
       }
       .page .tab[data-leader="line"]::after { height: 1px; background-color: currentColor; }
       .page .tab[data-leader="heavy"]::after { height: 2.5px; background-color: currentColor; }
+      /* 显示/隐藏编辑标记（WPS `m_ShowHideEditMark` 的第一条子项「段落标记」，`CT_Home.kuip:337` 挂在段落组）。
+         它挂在工作台上，`w:p` 没有「显示段落标记」这一位——所以这一档不改字节、不进撤销栈、不参与「件改了没有」。
+         墨挂在 `::after` 上且**零宽**（`inline-block; width:0; overflow:visible`）：字面落在最后一行文字之后，
+         却不占一个字的宽度——开与关之间行盒、表宽、页数与每一块的 rect 都不动（装机烟测 `editMarksLeg` 逐条量）。
+         字号与行高不另说，跟着段落自己那份（段落的格式只有文件一个主人，`tests/doc-line-spacing.test.ts` 里那条
+         护栏就是量这一句的）；墨色是屏幕标记，不是文件里的字色。
+         `w:tab` 的箭头与空格点**没画**：`.tab` 那枚 `::after` 已经归前导符（`data-leader`），一枚伪元素说不了
+         两件事；WPS 画成什么样也**未取证**。第二条、第三条子项（段落布局、小十字）同样未取证，不摆。 */
+      #view.edit-marks .page .para::after {
+        content: "¶";
+        display: inline-block;
+        width: 0;
+        overflow: visible;
+        color: #b03a2e;
+        vertical-align: baseline;
+        pointer-events: none;
+        user-select: none;
+      }
       .page a { color: #2b62a8; }
 
       /* ---- header / footer areas ---- */

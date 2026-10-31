@@ -315,6 +315,49 @@ function smoke(): void {
             kids: [...page.children].map((e) => e.tagName + "." + String(e.className).split(" ")[0]).join("|"),
           };
         }
+        // 编辑标记（WPS m_ShowHideEditMark 的第一条子项「段落标记」）：视图档，文件里没有这一位。
+        // 问三样：① 点一下 ::after 的字面从 none 变 ¶、按钮点亮；② 页数与段/表的 rect 一个都不动（零宽墨）；
+        // ③ 再点回去字面回到 none、脏标仍是 0（不进撤销栈、不改字节）。这一腿不碰正文，位置在打字那一腿之前。
+        let editMarksLeg = null;
+        {
+          const emBtn = () => [...document.querySelectorAll("#ribbon button.rb")].find((b) => b.textContent === "¶");
+          const emPara = view.querySelector(".page .para");
+          const emTable = view.querySelector(".page table.doc-table");
+          const emRead = () => {
+            const pr = emPara ? emPara.getBoundingClientRect() : null;
+            const tr = emTable ? emTable.getBoundingClientRect() : null;
+            return {
+              pages: view.querySelectorAll(".page").length,
+              para: pr ? [round1(pr.width), round1(pr.height), round1(pr.top)] : null,
+              table: tr ? [round1(tr.width), round1(tr.height), round1(tr.top)] : null,
+              ink: emPara ? getComputedStyle(emPara, "::after").content : "",
+              dirty: (document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0,
+              lit: emBtn()?.classList.contains("on") ? 1 : 0,
+              cls: view.classList.contains("edit-marks") ? 1 : 0,
+            };
+          };
+          const emBefore = emRead();
+          emBtn()?.click();
+          await wait(240);
+          const emOn = emRead();
+          emBtn()?.click();
+          await wait(240);
+          const emOff = emRead();
+          editMarksLeg = {
+            present: emBtn() ? 1 : 0,
+            paras: view.querySelectorAll(".page .para").length,
+            before: emBefore,
+            on: emOn,
+            off: emOff,
+            sameBox: JSON.stringify([emBefore.pages, emBefore.para, emBefore.table]) === JSON.stringify([emOn.pages, emOn.para, emOn.table]),
+            ink: emBefore.ink === "none" && emOn.ink.indexOf("¶") >= 0 && emOff.ink === "none",
+            noDirty: emBefore.dirty === 0 && emOn.dirty === 0 && emOff.dirty === 0,
+            falseLegs: [
+              emBefore.lit === 0 && emOn.lit === 1 && emOff.lit === 0 ? "" : "lit",
+              emBefore.cls === 0 && emOn.cls === 1 && emOff.cls === 0 ? "" : "cls",
+            ].filter(Boolean),
+          };
+        }
         // #235：带子里制表符的落点在装机壳里长什么样。同一只只读腿、同一跳里量：位是 BandPlace.tabStops
         // 合过样式链的那一份（渲染器写进 data-tab-stops），applyTabStops 把每一枚 span.tab 垫到该停的那一格；
         // 字面 \t 装在 span 里，所以每段的 textContent 里制表符还在（只报计数，不出文档内容——bandLeg 的老规矩）。
@@ -4736,7 +4779,7 @@ function smoke(): void {
         const recovered = { cells: document.querySelectorAll(".sheet-wrap td").length, title: document.getElementById("title")?.textContent };
         // The run ends on a modified document, so quitting goes through the unsaved prompt.
         // A PDF the export asked for shows up in saveAsWrites, next to the pptx/xlsx saves.
-        return { docPart, bandLeg, bandTabsLeg, rulerLeg, painterLeg, leaderLeg, tabStopsLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, clearLeg, styleLeg, vertLeg, caseLeg, origLeg, origTableLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
+        return { docPart, bandLeg, bandTabsLeg, editMarksLeg, rulerLeg, painterLeg, leaderLeg, tabStopsLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, clearLeg, styleLeg, vertLeg, caseLeg, origLeg, origTableLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
       })()`;
       void last?.webContents
         .executeJavaScript(probe)

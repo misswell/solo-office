@@ -168,11 +168,32 @@ export class DeckEditor {
       return b;
     };
     bar.append(
-      btn("＋", "在当前页后新建一页", () => this.addSlide()),
+      btn("＋", "在当前页后新建一页（沿用本页版式）", () => this.addSlide()),
       btn("🗑", "删除当前页", () => this.removeSlide()),
       btn("↑", "上移当前页", () => this.moveSlide(-1)),
       btn("↓", "下移当前页", () => this.moveSlide(1)),
     );
+    // WPS's 新建幻灯片 arrow: picking a layout creates a slide that inherits from it.
+    const layouts = document.createElement("select");
+    layouts.className = "rail-layout";
+    layouts.title = "新建幻灯片：选择版式";
+    layouts.style.cssText = "width:100%;margin-top:4px;font-size:12px";
+    const first = document.createElement("option");
+    first.value = "";
+    first.textContent = "新建幻灯片";
+    layouts.append(first);
+    for (const { path, name } of this.pres.layoutChoices()) {
+      const o = document.createElement("option");
+      o.value = path;
+      o.textContent = name;
+      layouts.append(o);
+    }
+    layouts.onchange = () => {
+      if (!layouts.value) return;
+      this.addSlide(layouts.value);
+      layouts.value = "";
+    };
+    bar.append(layouts);
     rail.append(bar);
     const scale = 148 / this.pres.slideWidthPx;
     this.pres.slides.forEach((s, i) => {
@@ -810,10 +831,10 @@ export class DeckEditor {
 
   // --------------------------------------------------------------- commands
 
-  addSlide(): void {
+  addSlide(layoutPath?: string): void {
     this.commitEditing();
     this.pushUndo();
-    this.pres.addSlide();
+    this.pres.addSlide(layoutPath);
     const last = this.pres.slides.length - 1;
     this.pres.moveSlide(last, this.selectedSlide + 1 - last);
     this.selectedSlide += 1;

@@ -77,6 +77,8 @@ export interface Slide {
   relId: string;
   /** Ordered nodes of `p:sld`, patched in place by a save. */
   tree: any[];
+  /** The layout part this slide inherits from; a save writes the relationship to it. */
+  layoutPath?: string;
   /** Placeholders inherited from the layout; the editor draws a prompt where no shape fills one. */
   layoutPlaceholders?: LayoutPlaceholder[];
   /** Set by an edit; a clean slide is written back byte-identical. */
@@ -109,6 +111,8 @@ export class Presentation {
   presDirty = false;
   /** Layout a new slide references, as a package path. */
   newSlideLayoutPath?: string;
+  /** `layoutChoices()` parses every layout part's name once; the deck's layouts do not change. */
+  private layoutCache?: { path: string; name: string }[];
   /** First relationship id a blank deck may hand to a slide; its presentation rels hold the rest. */
   private blankRelBase = 0;
   /**
@@ -210,6 +214,7 @@ export class Presentation {
     if (layoutRel) {
       const layoutPath = pkg.resolve(path, layoutRel);
       if (!this.newSlideLayoutPath) this.newSlideLayoutPath = layoutPath;
+      slide.layoutPath = layoutPath;
       slide.layoutPlaceholders = this.layoutPlaceholdersOf(layoutPath);
     }
 
@@ -400,6 +405,25 @@ export class Presentation {
     if (body !== undefined) this.bodyStylePt = body;
   }
 
+  /**
+   * The layouts a new slide can use, as the deck names them (`p:cSld@name`), in part
+   * order. A blank deck offers the eleven layouts its writer generates.
+   */
+  layoutChoices(): { path: string; name: string }[] {
+    if (this.layoutCache) return this.layoutCache;
+    if (!this.pkg) {
+      return (this.layoutCache = BLANK_LAYOUTS.map((l, i) => ({ path: `ppt/slideLayouts/slideLayout${i + 1}.xml`, name: l.name })));
+    }
+    const paths: string[] = [];
+    for (const path of this.pkg.parts.keys()) if (/^ppt\/slideLayouts\/slideLayout\d+\.xml$/.test(path)) paths.push(path);
+    paths.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    return (this.layoutCache = paths.map((path, i) => {
+      const tree = parseOrderedXml(this.pkg!.text(path) ?? "");
+      const name = rawAttrs(rawFind(tree, "cSld") ?? {})["@_name"];
+      return { path, name: name ?? `版式 ${i + 1}` };
+    }));
+  }
+
   private firstSlideLayout(): string | undefined {    let found: string | undefined;
     if (!this.pkg) return undefined;
     for (const path of this.pkg.parts.keys()) {
@@ -409,8 +433,8 @@ export class Presentation {
     return found;
   }
 
-  /** Appends a blank slide that inherits from an existing layout. */
-  addSlide(): Slide {
+  /** Appends a blank slide that inherits from a layout; the argument overrides the default. */
+  addSlide(layoutPath?: string): Slide {
     // Slides added in this session are not in the source package yet, so the
     // next free number and relationship id have to count them too.
     const used = new Set<number>();
@@ -433,6 +457,7 @@ export class Presentation {
     const maxId = this.slides.reduce((max, s) => Math.max(max, Number(s.sldId) || 0), 0);
     // A new slide must inherit from a layout; prefer the one existing slides use.
     if (!this.newSlideLayoutPath) this.newSlideLayoutPath = this.firstSlideLayout();
+    const chosen = layoutPath ?? this.newSlideLayoutPath;
     const slide: Slide = {
       index: this.slides.length,
       name: `第 ${this.slides.length + 1} 页`,
@@ -441,10 +466,11 @@ export class Presentation {
       sldId: String(Math.max(256, maxId + 1)),
       relId: `rId${maxRel + 1}`,
       tree: parseOrderedXml(SLIDE_TEMPLATE),
+      layoutPath: chosen,
       dirty: true,
       notesDirty: false,
     };
-    slide.layoutPlaceholders = this.layoutPlaceholdersOf(this.newSlideLayoutPath);
+    slide.layoutPlaceholders = this.layoutPlaceholdersOf(chosen);
     this.slides.push(slide);
     this.presDirty = true;
     return slide;

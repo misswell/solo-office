@@ -201,3 +201,34 @@ describe("placeholder text inherits the layout's declared style", () => {
     expect(pkg.text("ppt/slideLayouts/slideLayout1.xml")).toContain('<a:lvl1pPr algn="ctr"><a:defRPr sz="6000"/>');
   });
 });
+
+describe("new slides choose a layout", () => {
+  it("offers the eleven blank layouts under the names WPS gives them", () => {
+    const choices = Presentation.blank().layoutChoices();
+    expect(choices).toHaveLength(11);
+    expect(choices[0]).toEqual({ path: "ppt/slideLayouts/slideLayout1.xml", name: "标题幻灯片" });
+    expect(choices[2]).toEqual({ path: "ppt/slideLayouts/slideLayout3.xml", name: "节标题" });
+    expect(choices[6].name).toBe("空白");
+  });
+
+  it("adds a slide on the chosen layout, and a save names that layout in its relationship", () => {
+    const pres = Presentation.blank();
+    const added = pres.addSlide("ppt/slideLayouts/slideLayout3.xml");
+    expect(added.layoutPath).toBe("ppt/slideLayouts/slideLayout3.xml");
+    expect((added.layoutPlaceholders ?? []).map((p) => p.type)).toEqual(["title", "body"]);
+    expect(added.layoutPlaceholders?.[0]).toMatchObject({ sizePt: 44, anchor: "b" });
+    const pkg = pkgOf(pres);
+    expect(pkg.text("ppt/slides/_rels/slide2.xml.rels")).toContain('Target="../slideLayouts/slideLayout3.xml"');
+    const back = open(writePptx(pres));
+    expect(back.slides[1].layoutPath).toBe("ppt/slideLayouts/slideLayout3.xml");
+    expect(back.slides[1].layoutPlaceholders?.map((p) => p.type)).toEqual(["title", "body"]);
+  });
+
+  it("keeps the default layout when no choice is given, and names layouts of a read deck", () => {
+    const pres = Presentation.blank();
+    expect(pres.addSlide().layoutPath).toBe("ppt/slideLayouts/slideLayout1.xml");
+    const back = open(writePptx(pres));
+    expect(back.layoutChoices().map((c) => c.name)).toEqual(pres.layoutChoices().map((c) => c.name));
+    expect(back.slides[1].layoutPath).toBe("ppt/slideLayouts/slideLayout1.xml");
+  });
+});

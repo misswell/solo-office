@@ -41,7 +41,7 @@ export function writePptx(pres: Presentation): Uint8Array {
     if (addedNotes) slide.notesPath = createNotesPart(slide, files);
     // A picture the editor inserted needs a relationship in the slide part, which
     // the id must take before the shape node naming that id is built.
-    const extra = rewritten ? assignPictureRels(pres, slide, !files[relsPath] && !!pres.newSlideLayoutPath) : [];
+    const extra = rewritten ? assignPictureRels(pres, slide, !files[relsPath] && !!(slide.layoutPath ?? pres.newSlideLayoutPath)) : [];
     if (rewritten) {
       for (const shape of slide.shapes) patchShape(shape);
       syncShapeTree(rawFind(slide.tree, "spTree"), slide.shapes);
@@ -392,8 +392,8 @@ function slideRels(pres: Presentation, slide: Slide, extra: { id: string; path: 
         `<Relationship Id="${XML_ESC(id)}" Type="${XML_ESC(rel.type)}" Target="${XML_ESC(rel.target)}"${rel.targetMode === "External" ? ' TargetMode="External"' : ""}/>`,
       );
     }
-  } else if (pres.newSlideLayoutPath) {
-    const target = relativeTarget(slide.partPath, pres.newSlideLayoutPath);
+  } else if (slide.layoutPath ?? pres.newSlideLayoutPath) {
+    const target = relativeTarget(slide.partPath, slide.layoutPath ?? pres.newSlideLayoutPath!);
     rels.push(`<Relationship Id="rId1" Type="${NS_R}/slideLayout" Target="${XML_ESC(target)}"/>`);
   }
   for (const e of extra) {

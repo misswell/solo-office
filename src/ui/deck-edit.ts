@@ -444,6 +444,26 @@ export class DeckEditor {
   // ------------------------------------------------------------ interaction
 
   private stageDown(e: PointerEvent, slideEl: HTMLElement): void {
+    // A click outside the open editor commits it first, then acts on whatever is under
+    // the pointer now — the commit repaints the slide, so the original target is stale.
+    if (this.editing && !this.editing.contains(e.target as Node)) {
+      this.commitEditing();
+      const under = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+      const fresh = this.host.querySelector(".stage .slide");
+      if (under && fresh?.contains(under)) {
+        under.dispatchEvent(
+          new PointerEvent("pointerdown", {
+            bubbles: true,
+            cancelable: true,
+            button: 0,
+            clientX: e.clientX,
+            clientY: e.clientY,
+            pointerId: e.pointerId,
+          }),
+        );
+      }
+      return;
+    }
     if (this.editing) return;
     if (e.button !== 0) return;
     const hint = (e.target as HTMLElement).closest<HTMLElement>(".ph-hint");

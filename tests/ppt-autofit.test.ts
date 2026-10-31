@@ -9,7 +9,7 @@ import { makePptx } from "./helpers/make.js";
 import { writePptx } from "../src/core/write-pptx.js";
 
 /**
- * 授权语料照子：35 份演示模板里 normAutofit 说了 65 处，其中 61 处不带 `fontScale`
+ * 授权语料照子：35 份演示模板的幻灯片里 normAutofit 说了 73 处，其中 69 处不带 `fontScale`
  * ——「溢出时缩字号」是给渲染器现场量的，没有落在文件里；只有 2 份模板的 4 个形状把
  * 挑好的比例写进了档：一张版式的 3 个对角圆角矩形 `fontScale="90000"`（run 自己写 36 磅，
  * 页面得按 32.4 磅画），另一张版式组里的「空心弧 10」是 `82500`（空段落，无字可缩）。
@@ -135,20 +135,35 @@ describe("溢出缩字号（a:normAutofit）", () => {
     expect(shape.lineSpacingReductionPct).toBe(20);
     expect(shape.paragraphs?.[0]?.lineSpacingPct).toBe(200);
     const html = renderSlideHtml(pres, 0);
-    expect(shapeSlice(html, pres.slides[0].shapes.indexOf(shape))).toContain("font-size:16pt");
+    const slice = shapeSlice(html, pres.slides[0].shapes.indexOf(shape));
+    expect(slice).toContain("font-size:16pt");
+    expect(slice).not.toContain("data-shrink");
     // 1.3（单行）× 200% × (1 − 20%) = 2.08
-    expect(shapeSlice(html, pres.slides[0].shapes.indexOf(shape))).toContain("line-height:2.08");
+    expect(slice).toContain("line-height:2.08");
     expect(shape.paragraphs?.[0]?.lineSpacingPct).toBe(200);
   });
 
-  it("只写了 normAutofit 没写 fontScale 时不改字号（渲染器现场量，文件没说）", () => {
+  it("只写了 normAutofit 没写 fontScale：文件没说比例，标记文本体交给页面现场量", () => {
     const pres = deckWith(
       fitShape("待缩框", "<a:normAutofit/>", '<a:p><a:r><a:rPr sz="2000"/><a:t>原字号</a:t></a:r></a:p>'),
     );
     const shape = pres.slides[0].shapes.find((s) => s.name === "待缩框")!;
     expect(shape.fontScalePct).toBeUndefined();
+    // 渲染层不改字号，只留标记；量高与二分在 DOM 里做（src/ui/text-fit.ts）。
+    expect(shape.autoFit).toBe("shrink");
     const html = renderSlideHtml(pres, 0);
-    expect(shapeSlice(html, pres.slides[0].shapes.indexOf(shape))).toContain("font-size:20pt");
+    const slice = shapeSlice(html, pres.slides[0].shapes.indexOf(shape));
+    expect(slice).toContain("font-size:20pt");
+    expect(slice).toContain('class="shape-text" data-shrink="1"');
+
+    // 改字只重写段落，bodyPr 原样留盘：裸写的 normAutofit 不能因为编辑就丢。
+    shape.paragraphs = [{ level: 0, runs: [{ text: "已改" }] }];
+    shape.textDirty = true;
+    pres.markDirty(pres.slides[0]);
+    const xml = OpcPackage.from(writePptx(pres)).text("ppt/slides/slide1.xml")!;
+    expect(xml).toContain("<a:normAutofit/>");
+    const back = Presentation.openBytes(writePptx(pres));
+    expect(back.slides[0].shapes.find((s) => s.name === "待缩框")?.autoFit).toBe("shrink");
   });
 
   it("改字保存：bodyPr 里的两个属性原样带回", () => {

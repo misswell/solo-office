@@ -1658,7 +1658,10 @@ function renderShape(s: Shape, pres: Presentation, idx?: number, slide?: Slide):
   );
   if (tb.noWrap) textCss.push("white-space:nowrap");
   const textStyle = textCss.length ? ` style="${textCss.join(";")}"` : "";
-  return `<div class="shape"${pick} style="${style.join(";")}"><div class="shape-text"${textStyle}>${text}</div></div>`;
+  // `a:normAutofit` with no percentage asks for a measured fit; the editor marks the body and
+  // shrinks it after mount (`fitShrunkText`). A stated `fontScale` is already baked into the sizes.
+  const shrink = s.autoFit === "shrink" ? ' data-shrink="1"' : "";
+  return `<div class="shape"${pick} style="${style.join(";")}"><div class="shape-text"${shrink}${textStyle}>${text}</div></div>`;
 }
 
 /**

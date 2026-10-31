@@ -1,5 +1,6 @@
 import type { Presentation } from "../core/pptx.js";
 import { renderSlideHtml } from "../core/render.js";
+import { fitShrunkText } from "./text-fit.js";
 
 /**
  * Full-screen slideshow: a black overlay over the whole window, one slide at a
@@ -68,6 +69,7 @@ export class DeckShow {
     this.holder.style.transform = `scale(${scale})`;
     this.holder.replaceChildren();
     this.holder.innerHTML = renderSlideHtml(this.pres, this.index);
+    fitShrunkText(this.holder);
     this.counter.textContent = `${this.index + 1} / ${this.pres.slides.length}`;
     this.wake();
   }

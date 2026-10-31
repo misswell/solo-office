@@ -2,6 +2,7 @@ import type { Inline } from "../core/docx.js";
 import { hasLine } from "../core/docx.js";
 import type { Presentation, Shape, Slide } from "../core/pptx.js";
 import { bodyLevelStyle, bulletGlyph, isBodyPlaceholder, renderSlideHtml } from "../core/render.js";
+import { fitShrunkText } from "./text-fit.js";
 
 /**
  * Editing layer over a presentation: slide rail, stage with selectable shapes,
@@ -202,6 +203,7 @@ export class DeckEditor {
       holder.style.width = "148px";
       holder.style.height = `${this.pres.slideHeightPx * scale}px`;
       holder.innerHTML = `<span>${i + 1}</span><div style="transform:scale(${scale});transform-origin:0 0;width:${this.pres.slideWidthPx}px;height:${this.pres.slideHeightPx}px">${renderSlideHtml(this.pres, i, PROMPTS)}</div>`;
+      fitShrunkText(holder);
       holder.onclick = () => {
         this.commitEditing();
         this.selectedSlide = i;
@@ -227,6 +229,7 @@ export class DeckEditor {
     wrap.style.width = `${this.pres.slideWidthPx}px`;
     wrap.style.height = `${this.pres.slideHeightPx}px`;
     wrap.innerHTML = renderSlideHtml(this.pres, this.selectedSlide, PROMPTS);
+    fitShrunkText(wrap);
     if (this.showGrid) {
       const grid = document.createElement("div");
       grid.className = "sdeck-grid";
@@ -296,6 +299,7 @@ export class DeckEditor {
       box.style.width = `${width}px`;
       box.style.height = `${this.pres.slideHeightPx * scale}px`;
       box.innerHTML = `<div style="transform:scale(${scale});transform-origin:0 0;width:${this.pres.slideWidthPx}px;height:${this.pres.slideHeightPx}px">${renderSlideHtml(this.pres, i, PROMPTS)}</div>`;
+      fitShrunkText(box);
       cell.append(num, box);
       // 单击只挪选中（就地改类，不重画）：重画会把刚点中的格子从文档里摘掉，双击便到不了第二下。
       cell.onclick = () => {
@@ -329,6 +333,7 @@ export class DeckEditor {
     frame.style.width = `${width}px`;
     frame.style.height = `${this.pres.slideHeightPx * scale}px`;
     frame.innerHTML = `<div style="transform:scale(${scale});transform-origin:0 0;width:${this.pres.slideWidthPx}px;height:${this.pres.slideHeightPx}px">${renderSlideHtml(this.pres, this.selectedSlide, PROMPTS)}</div>`;
+    fitShrunkText(frame);
     const body = document.createElement("div");
     body.className = "notes-sheet-text";
     body.contentEditable = "plaintext-only";
@@ -358,6 +363,7 @@ export class DeckEditor {
     const holder = document.createElement("div");
     holder.className = "reading-slide";
     holder.innerHTML = renderSlideHtml(this.pres, this.selectedSlide);
+    fitShrunkText(holder);
     stage.append(holder);
     const bar = document.createElement("div");
     bar.className = "reading-bar";

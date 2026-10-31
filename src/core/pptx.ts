@@ -142,6 +142,9 @@ export interface Shape {
   fontScalePct?: number;
   /** `a:bodyPr/a:normAutofit@lnSpcReduction`: how much of the line height the fit gives back. */
   lineSpacingReductionPct?: number;
+  /** `a:bodyPr/a:normAutofit` with no `fontScale`: the producer asks the renderer to shrink
+   * the text until it fits its box. There is no percentage to read, so the page measures. */
+  autoFit?: "shrink";
   /** Text was edited; a save rebuilds this shape's text body from the model. */
   textDirty?: boolean;
 }
@@ -576,6 +579,7 @@ export class Presentation {
       textBody: readTextBody(bodyPr),
       fontScalePct: Number.isFinite(fontScale) && fontScale > 0 ? fontScale / 1000 : undefined,
       lineSpacingReductionPct: Number.isFinite(reduction) && reduction > 0 ? reduction / 1000 : undefined,
+      autoFit: norm && !(Number.isFinite(fontScale) && fontScale > 0) ? "shrink" : undefined,
       raw,
     };
   }

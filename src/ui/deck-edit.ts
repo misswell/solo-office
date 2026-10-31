@@ -594,11 +594,49 @@ export class DeckEditor {
       const pe = this.paragraphAt(body, window.getSelection()?.anchorNode ?? (e.target as Node));
       if (e.key === "Enter" && !e.shiftKey) {
         const sel = window.getSelection();
-        if (e.isComposing || !pe || !sel?.rangeCount || !sel.isCollapsed) return;
+        if (e.isComposing || !sel?.rangeCount) return;
+        // A selection is replaced by the new line, as in WPS: drop it, then split where it began.
+        const range = sel.getRangeAt(0);
+        e.preventDefault();
+        // Blink may collapse the range to either end of the deleted span, and the merged tail
+        // moves the end anyway, so the split point is recorded before the deletion runs.
+        const splitNode = range.startContainer;
+        const splitOffset = range.startOffset;
+        let at = pe;
+        if (!range.collapsed) {
+          const startPe = this.paragraphAt(body, splitNode);
+          const endPe = this.paragraphAt(body, range.endContainer);
+          at = startPe ?? pe;
+          range.deleteContents();
+          // Chrome drops the lines a selection fully covers but leaves the tail paragraph
+          // standing; the office suites merge that tail back into the line it started in.
+          if (startPe && endPe && startPe !== endPe && startPe.isConnected && endPe.isConnected) {
+            for (const n of [...endPe.childNodes]) {
+              if (n instanceof HTMLElement && n.classList.contains("bullet")) continue;
+              startPe.append(n);
+            }
+            endPe.remove();
+          }
+        }
+        if (!at || !at.isConnected) at = this.paragraphAt(body, sel.anchorNode ?? body);
+        if (!at) {
+          this.inheritLevels(body, shape);
+          return;
+        }
+        const r = document.createRange();
+        if (at.contains(splitNode)) {
+          const limit = splitNode.nodeType === Node.TEXT_NODE ? (splitNode as Text).length : splitNode.childNodes.length;
+          r.setStart(splitNode, Math.min(splitOffset, limit));
+          r.collapse(true);
+        } else {
+          r.selectNodeContents(at);
+          r.collapse(false);
+        }
+        sel.removeAllRanges();
+        sel.addRange(r);
         // Split here instead of letting the browser clone the block: it keeps the tag but
         // drops the inline level marks, and cloning an inline bullet span misplaces it.
-        e.preventDefault();
-        this.splitParagraph(body, pe, shape);
+        this.splitParagraph(body, at, shape);
         return;
       }
       // Tab / Shift+Tab demote and promote every paragraph the selection touches, as in WPS;

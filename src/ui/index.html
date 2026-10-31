@@ -718,6 +718,17 @@
       .notes-sheet-text { margin-top: 26px; min-height: 150px; outline: none; white-space: pre-wrap; font-size: 13px; line-height: 1.6; color: #2c3138; }
       .notes-sheet-text[data-empty="1"]::before { content: attr(data-placeholder); color: #98a0ac; }
 
+      /* 阅读视图：满窗一张幻灯片压一条翻页条，功能区还在，不接管全屏。 */
+      .deck.reading { display: flex; flex-direction: column; height: 100%; background: #3b3f45; }
+      .reading-stage { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+      .reading-slide { flex: none; background: #fff; box-shadow: 0 6px 40px #0006; transform-origin: center center; }
+      .reading-bar { flex: none; display: flex; align-items: center; justify-content: center; gap: 10px; height: 42px; background: #2b2f35; color: #d8dce2; font-size: 12.5px; }
+      .reading-btn { height: 26px; padding: 0 12px; border: 1px solid #4a5058; border-radius: 4px; background: #383d44; color: #e8eaed; font: inherit; cursor: pointer; }
+      .reading-btn:hover:not(:disabled) { border-color: #6f7883; background: #434952; }
+      .reading-btn:disabled { opacity: .4; cursor: default; }
+      .reading-count { min-width: 58px; text-align: center; letter-spacing: .06em; }
+      .reading-exit { margin-left: 14px; }
+
       /* ---- slideshow ---- */
       .show {
         position: fixed;

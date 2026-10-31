@@ -24,11 +24,12 @@ const SHAPE_FILL = "#dce6f1";
 const SHAPE_LINE = "#4472c4";
 export type PresetGeometry = "rect" | "roundRect" | "ellipse" | "triangle" | "line" | "diamond" | "parallelogram" | "rightArrow" | "star5" | "chevron";
 /**
- * The three views this editor can actually paint. WPS's `CT_View.kuip` `RB_PresView`
- * declares a fourth (`Reading View`) and `RB_MasterView` three master layouts; neither has
- * a model here yet, so the ribbon only offers the three below.
+ * The four views WPS's `CT_View.kuip` `RB_PresView` declares for a deck: Normal,
+ * SlideSorter, SlideShowReading and NotesPage. Reading paints one slide in the window
+ * with a paging bar, unlike 放映 which takes over the screen; `RB_MasterView`'s three
+ * master layouts still have no model, so the ribbon offers these four only.
  */
-export type DeckViewMode = "normal" | "sorter" | "notes";
+export type DeckViewMode = "normal" | "sorter" | "notes" | "reading";
 const SHAPE_NAMES: Record<PresetGeometry, string> = {
   rect: "矩形",
   roundRect: "圆角矩形",
@@ -55,8 +56,10 @@ export class DeckEditor {
   private burst = 0;
   private fit = 1;
   private viewMode: DeckViewMode = "normal";
+  private readingFit?: () => void;
 
   constructor(private host: HTMLElement, private pres: Presentation, private selectedSlide: number, private hooks: { changed(): void; selected?(): void }) {
+    liveDeck = this;
     this.render();
   }
 
@@ -84,6 +87,7 @@ export class DeckEditor {
     this.selBox = undefined;
     if (this.viewMode === "sorter") this.renderSorter();
     else if (this.viewMode === "notes") this.renderNotesPage();
+    else if (this.viewMode === "reading") this.renderReading();
     else this.renderNormal();
     this.placeSelection();
     this.hooks.selected?.();
@@ -256,6 +260,91 @@ export class DeckEditor {
     sheet.append(frame, body);
     page.append(sheet);
     this.host.append(page);
+  }
+
+  /**
+   * 阅读视图: one slide filling the window, with a paging bar. Unlike 放映 it keeps the
+   * ribbon and window chrome, so Esc and the bar both return to the normal view.
+   */
+  private renderReading(): void {
+    this.notesEl = undefined;
+    const page = document.createElement("div");
+    page.className = "deck reading";
+    const stage = document.createElement("div");
+    stage.className = "reading-stage";
+    const holder = document.createElement("div");
+    holder.className = "reading-slide";
+    holder.innerHTML = renderSlideHtml(this.pres, this.selectedSlide);
+    stage.append(holder);
+    const bar = document.createElement("div");
+    bar.className = "reading-bar";
+    const nav = (label: string, title: string, delta: number, disabled: boolean): HTMLButtonElement => {
+      const b = document.createElement("button");
+      b.className = "reading-btn";
+      b.textContent = label;
+      b.title = title;
+      b.disabled = disabled;
+      b.onclick = () => this.readingGo(delta);
+      return b;
+    };
+    const count = document.createElement("span");
+    count.className = "reading-count";
+    count.textContent = `${this.selectedSlide + 1} / ${this.pres.slides.length}`;
+    const exit = document.createElement("button");
+    exit.className = "reading-btn reading-exit";
+    exit.textContent = "结束阅读";
+    exit.title = "回到普通视图（Esc）";
+    exit.onclick = () => this.setView("normal");
+    bar.append(nav("上一页", "上一张（←）", -1, this.selectedSlide === 0), count, nav("下一页", "下一张（→）", 1, this.selectedSlide >= this.pres.slides.length - 1), exit);
+    page.append(stage, bar);
+    this.host.append(page);
+    const fit = (): void => {
+      const w = this.pres.slideWidthPx;
+      const h = this.pres.slideHeightPx;
+      const scale = Math.min((stage.clientWidth - 48) / w, (stage.clientHeight - 24) / h);
+      holder.style.width = `${w}px`;
+      holder.style.height = `${h}px`;
+      holder.style.transform = `scale(${Math.max(0.05, scale)})`;
+    };
+    fit();
+    this.readingFit = fit;
+  }
+
+  private readingGo(delta: number): void {
+    const next = Math.max(0, Math.min(this.selectedSlide + delta, this.pres.slides.length - 1));
+    if (next === this.selectedSlide) return;
+    this.selectedSlide = next;
+    this.render();
+  }
+
+  /** Keys the reading view owns while this deck is the live editor. */
+  handleReadingKey(e: KeyboardEvent): boolean {
+    if (this.viewMode !== "reading" || !this.host.isConnected) return false;
+    if (e.metaKey || e.ctrlKey || e.altKey) return false;
+    const next = ["ArrowRight", "ArrowDown", "PageDown", "Enter", " "];
+    const prev = ["ArrowLeft", "ArrowUp", "PageUp", "Backspace"];
+    if (e.key === "Escape") {
+      this.setView("normal");
+      return true;
+    }
+    if (next.includes(e.key)) {
+      this.readingGo(1);
+      return true;
+    }
+    if (prev.includes(e.key)) {
+      this.readingGo(-1);
+      return true;
+    }
+    if (e.key === "Home" || e.key === "End") {
+      this.selectedSlide = e.key === "Home" ? 0 : this.pres.slides.length - 1;
+      this.render();
+      return true;
+    }
+    return false;
+  }
+
+  refitReading(): void {
+    if (this.viewMode === "reading") this.readingFit?.();
   }
 
   private wireStage(wrap: HTMLElement): void {
@@ -1029,6 +1118,16 @@ export class DeckEditor {
     if (this.notesEl?.isConnected) this.commitNotes(this.notesEl);
   }
 }
+
+/**
+ * The editor that owns the open deck. Reading-view keys and the fit-on-resize
+ * belong to the window, so they are wired once and answered by the live editor.
+ */
+let liveDeck: DeckEditor | null = null;
+window.addEventListener("keydown", (e) => {
+  if (liveDeck?.handleReadingKey(e)) e.preventDefault();
+});
+window.addEventListener("resize", () => liveDeck?.refitReading());
 
 /** Natural pixel size of an image, with a fallback when the browser cannot decode it. */
 function imageSize(url: string): Promise<{ width: number; height: number }> {

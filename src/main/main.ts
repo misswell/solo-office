@@ -4812,9 +4812,26 @@ function smoke(): void {
           notesView.text = notesBody.textContent;
           notesView.empty = notesBody.dataset.empty;
         }
-        viewBtn("普通视图")?.click();
+        // Reading view: one slide fills the stage, the bar pages it, and Esc returns.
+        viewBtn("阅读视图")?.click();
         await wait(220);
-        const pptViews = { sorter: sorterView, back: sorterBack, notes: notesView, normal: !!document.querySelector("#view .stage"), pressed: viewBtn("普通视图")?.getAttribute("aria-pressed") };
+        const readingSlide = document.querySelector("#view .reading-slide");
+        const readingStage = document.querySelector("#view .reading-stage");
+        const hs = readingSlide?.getBoundingClientRect();
+        const st = readingStage?.getBoundingClientRect();
+        const readingView = {
+          painted: !!document.querySelector("#view .deck.reading"),
+          pressed: viewBtn("阅读视图")?.getAttribute("aria-pressed"),
+          count: document.querySelector("#view .reading-count")?.textContent,
+          fitted: !!hs && !!st && hs.width <= st.width && hs.width > st.width * 0.3,
+        };
+        window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight" }));
+        await wait(150);
+        readingView.next = document.querySelector("#view .reading-count")?.textContent;
+        window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+        await wait(220);
+        readingView.left = !!document.querySelector("#view .stage");
+        const pptViews = { sorter: sorterView, back: sorterBack, notes: notesView, reading: readingView, normal: !!document.querySelector("#view .stage"), pressed: viewBtn("普通视图")?.getAttribute("aria-pressed") };
         fire("solo:save");
         await wait(600);
         const pptSaved = { title: document.getElementById("title")?.textContent };

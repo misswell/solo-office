@@ -457,6 +457,7 @@ const RIBBON_ICONS: Record<string, string> = {
   playHere: "<path d='M5 4l11 8-11 8z'/><path d='M19 5v14'/>",
   viewNormal: "<path d='M3 5h18v14H3z'/><path d='M8 5v14'/><path d='M11 10h7M11 14h5'/>",
   viewSorter: "<path d='M3 5h8v6H3zM13 5h8v6h-8zM3 13h8v6H3zM13 13h8v6h-8z'/>",
+  viewReading: "<path d='M3 4h18v16H3z'/><path d='M7 9h10M7 13h10M7 17h6'/>",
   viewNotes: "<path d='M4 3h16v9H4z'/><path d='M4 16h16M4 20h10'/>",
   shapeRect: "<path d='M4 6h16v12H4z'/>",
   shapeRoundRect: "<path d='M8 6h8a4 4 0 0 1 4 4v4a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4v-4a4 4 0 0 1 4-4z'/>",
@@ -542,6 +543,7 @@ const RIBBON_ICON_IDS: Record<string, string> = {
   本页放映: "playHere",
   普通视图: "viewNormal",
   幻灯片浏览: "viewSorter",
+  阅读视图: "viewReading",
   备注页: "viewNotes",
   矩形: "shapeRect",
   圆角: "shapeRoundRect",
@@ -2031,8 +2033,8 @@ function buildDeckRibbon(): void {
   button(show, "", "本页放映", "从当前页开始放映（⇧F5）", () => startShow(true));
 
   // 视图页：`CT_View.kuip` 的 `RB_PresView`（`text="@Presentation View"`）声明四条 —— `Normal` /
-  // `SlideSorter` / `SlideShowReading` / `NotesPage`。阅读视图要的是满窗单页加一条翻页条，与放映共用
-  // 一套绘制却换了外壳，这一片不做；母版三档（`RB_MasterView`）没有母版模型，不摆空腿。
+  // `SlideSorter` / `SlideShowReading` / `NotesPage`，按声明的先后摆。阅读视图是满窗单页加一条翻页条，
+  // 不接管全屏，与放映共用同一套绘制；母版三档（`RB_MasterView`）没有母版模型，不摆空腿。
   const presView = group("view", "演示视图");
   const viewButton = (label: string, mode: DeckViewMode, tip: string): void => {
     const b = document.createElement("button");
@@ -2050,6 +2052,7 @@ function buildDeckRibbon(): void {
   };
   viewButton("普通视图", "normal", "编辑幻灯片的普通视图");
   viewButton("幻灯片浏览", "sorter", "所有幻灯片排成一页；双击某页进入普通视图");
+  viewButton("阅读视图", "reading", "满窗单页阅读，翻页条换页；Esc 回到普通视图");
   viewButton("备注页", "notes", "上方是幻灯片，下方是演讲者备注");
 
   shell.bars["view"]!.append(zoomGroup());
@@ -2267,8 +2270,8 @@ function syncDeckRibbon(): void {
   }
   if (shape?.fill) (ctl.fill as HTMLInputElement | undefined)!.value = shape.fill.slice(0, 7);
   if (shape?.line) (ctl.line as HTMLInputElement | undefined)!.value = shape.line.slice(0, 7);
-  // 视图那一组三枚互斥：`aria-pressed` 给探针读，`.on` 是看得见的那一份。
-  for (const mode of ["normal", "sorter", "notes"] as const) {
+  // 视图那一组四枚互斥：`aria-pressed` 给探针读，`.on` 是看得见的那一份。
+  for (const mode of ["normal", "sorter", "reading", "notes"] as const) {
     const b = ctl[`view:${mode}`] as HTMLButtonElement | undefined;
     if (!b) continue;
     const on = (deck?.view ?? "normal") === mode;

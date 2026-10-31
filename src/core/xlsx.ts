@@ -17,10 +17,12 @@ export const DEFAULT_COL_CHARS = 8.43;
 export const DEFAULT_ROW_PT = 15;
 
 export const colWidthPx = (sheet: Sheet, col: number): number =>
-  sheet.hiddenCols.has(col) ? 0 : sheet.colWidths.has(col) ? Math.round(sheet.colWidths.get(col)! * 7.2) : Math.round(DEFAULT_COL_CHARS * 7.2);
+  sheet.hiddenCols.has(col) ? 0 : Math.round((sheet.colWidths.get(col) ?? sheet.defaultColWidth ?? DEFAULT_COL_CHARS) * 7.2);
 
 export const rowHeightPx = (sheet: Sheet, row: number): number =>
-  sheet.hiddenRows?.has(row) || sheet.filteredRows?.has(row) ? 0 : sheet.rowHeights.has(row) ? Math.round((sheet.rowHeights.get(row)! * 4) / 3) : Math.round((DEFAULT_ROW_PT * 4) / 3);
+  sheet.hiddenRows?.has(row) || sheet.filteredRows?.has(row)
+    ? 0
+    : Math.round(((sheet.rowHeights.get(row) ?? sheet.defaultRowHeight ?? DEFAULT_ROW_PT) * 4) / 3);
 
 function spanEmu(sheet: Sheet, line: number, axis: "col" | "row"): number {
   return Math.round(axis === "col" ? colWidthPx(sheet, line) : rowHeightPx(sheet, line)) * EMU_PX;
@@ -97,6 +99,10 @@ export interface Sheet {
   autoFilter?: AutoFilter;
   filterAtRead?: string;
   rowHeights: Map<number, number>;
+  /** `sheetFormatPr@defaultRowHeight` in points; absent means the OOXML default of 15. */
+  defaultRowHeight?: number;
+  /** `sheetFormatPr@defaultColWidth` in characters; absent means the OOXML default of 8.43. */
+  defaultColWidth?: number;
   /** Floating pictures anchored to cells, as read or as the editor inserted them. */
   images: SheetImage[];
   /** Charts anchored to cells, as read or as the editor inserted them. */
@@ -545,6 +551,10 @@ export class Spreadsheet implements CellSource {
     sheet.autoFilter = readAutoFilter(x.worksheet?.autoFilter);
     sheet.filterAtRead = filterFingerprint(sheet.autoFilter);
     sheet.hiddenRows = new Set();
+    // The sheet's own default row height / column width; every sheet in the authorized corpus has one.
+    const fmt = x.worksheet?.sheetFormatPr;
+    if (fmt?.["@_defaultRowHeight"] !== undefined) sheet.defaultRowHeight = Number(fmt["@_defaultRowHeight"]);
+    if (fmt?.["@_defaultColWidth"] !== undefined) sheet.defaultColWidth = Number(fmt["@_defaultColWidth"]);
     for (const c of asArray(x.worksheet?.cols?.col)) {
       const min = Number(c["@_min"]);
       const max = Number(c["@_max"]);
@@ -1607,6 +1617,8 @@ function cloneSheet(s: Sheet): Sheet {
     autoFilter: s.autoFilter ? structuredClone(s.autoFilter) : undefined,
     filterAtRead: s.filterAtRead,
     rowHeights: new Map(s.rowHeights),
+    defaultRowHeight: s.defaultRowHeight,
+    defaultColWidth: s.defaultColWidth,
     images: s.images.map((i) => ({ ...i })),
     charts: s.charts.map((c) => ({ ...c, colors: c.colors ? [...c.colors] : undefined, editFields: c.editFields ? [...c.editFields] : undefined, series: c.series.map((ser) => ({ ...ser, cats: [...ser.cats], vals: [...ser.vals] })) })),
     comments: s.comments.map((c) => ({ ...c })),

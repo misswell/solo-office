@@ -88,6 +88,10 @@ export interface Shape {
   raw?: any;
   /** `a:txBody/a:lstStyle` levels: what this shape's text inherits before the layout and master speak. */
   textLevels?: BodyLevel[];
+  /** `a:bodyPr/a:normAutofit@fontScale`: the size to draw at, as a percent of the stated one. */
+  fontScalePct?: number;
+  /** `a:bodyPr/a:normAutofit@lnSpcReduction`: how much of the line height the fit gives back. */
+  lineSpacingReductionPct?: number;
   /** Text was edited; a save rebuilds this shape's text body from the model. */
   textDirty?: boolean;
 }
@@ -377,7 +381,10 @@ export class Presentation {
     if (name === "grpSp") {
       const xfrm = find(find(node, "grpSpPr"), "xfrm");
       const base = this.frame(xfrm);
-      const groupTree = raw ? rawFind(rawChildren(raw), "spTree") : undefined;
+      // A group's members sit directly under `p:grpSp`; only a slide carries `p:spTree`. The
+      // parse side already fell back to the group node, so the raw side must index the same
+      // list or every member loses its part nodes (and with them its `a:lstStyle` and `bodyPr`).
+      const groupTree = raw ? rawChildren(raw).find((c) => tagLocalOf(c) === "spTree") ?? raw : undefined;
       const rawKids = groupTree ? rawChildren(groupTree).filter((c) => !!tagOf(c)) : [];
       const children: Shape[] = [];
       let child = 0;
@@ -432,6 +439,14 @@ export class Presentation {
     const rawTxBody = raw ? rawFind(rawChildren(raw), "txBody") : undefined;
     const lstStyle = rawTxBody ? rawFind(rawChildren(rawTxBody), "lstStyle") : undefined;
     const textLevels = lstStyle ? readLevels(lstStyle) : undefined;
+    // "Shrink text on overflow" leaves the size it picked in `a:normAutofit`; without a
+    // `fontScale` the producer expects the renderer to fit at draw time, which this model
+    // does not measure. Only the stated percentage is a fact the file carries.
+    const bodyPr = rawTxBody ? rawFind(rawChildren(rawTxBody), "bodyPr") : undefined;
+    const norm = bodyPr ? rawChildren(bodyPr).find((c) => tagLocalOf(c) === "normAutofit") : undefined;
+    const normAttrs = rawAttrs(norm ?? {});
+    const fontScale = Number(normAttrs["@_fontScale"]);
+    const reduction = Number(normAttrs["@_lnSpcReduction"]);
     return {
       kind: "shape",
       ...base,
@@ -442,6 +457,8 @@ export class Presentation {
       lineWidth: attr(ln, "w") ? Number(attr(ln, "w")) / EMU_PER_PX : undefined,
       paragraphs: paragraphs(find(node, "txBody"), resolve),
       textLevels: textLevels?.some(hasLevel) ? textLevels : undefined,
+      fontScalePct: Number.isFinite(fontScale) && fontScale > 0 ? fontScale / 1000 : undefined,
+      lineSpacingReductionPct: Number.isFinite(reduction) && reduction > 0 ? reduction / 1000 : undefined,
       raw,
     };
   }

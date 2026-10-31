@@ -1510,7 +1510,13 @@ export function bodyLevelStyle(slide: Slide | undefined, s: Shape, level: number
   return levelPaint({ level, runs: [] }, inheritedTextStyle(slide, s, pres), pres.bodyLevels, isBodyPlaceholder(s), own);
 }
 
-function renderSlideParagraph(p: SlideParagraph, inh?: InhText, levels?: BodyLevel[], body = false, own?: BodyLevel): string {
+/** Point sizes travel in tenths: a 36pt run at 90% is 32.4pt, not a re-rounded 32. */
+const scaledPt = (pt: number, pct?: number): number => (pct === undefined ? pt : Math.round((pt * pct) / 10) / 10);
+
+/** A run's own size is stated in the file too, so the fit scales it on the way to the page. */
+const scaledRun = (r: Inline, pct?: number): Inline => (pct !== undefined && r.sizePt !== undefined ? { ...r, sizePt: scaledPt(r.sizePt, pct) } : r);
+
+function renderSlideParagraph(p: SlideParagraph, inh?: InhText, levels?: BodyLevel[], body = false, own?: BodyLevel, fit?: { fontScalePct?: number; lineSpacingReductionPct?: number }): string {
   const css: string[] = [];
   const style = levelPaint(p, inh, levels ?? [], body, own);
   const align = p.align ?? style.align;
@@ -1529,13 +1535,19 @@ function renderSlideParagraph(p: SlideParagraph, inh?: InhText, levels?: BodyLev
   }
   // The stylesheet's 14px is a fallback for plain shapes; a body placeholder draws at
   // the master's size for its level (18pt on the first), never at that fallback.
-  if (style.sizePt) css.push(`font-size:${style.sizePt}pt`);
+  if (style.sizePt) css.push(`font-size:${scaledPt(style.sizePt, fit?.fontScalePct)}pt`);
   // A slide's own `a:buChar` wins; otherwise the style's bullet, unless `a:buNone` suppresses it.
   if (!bullet && !style.noBullet) bullet = style.bullet;
-  if (style.lineSpacingPct) css.push(`line-height:${Math.round(SLIDE_SINGLE_LINE * style.lineSpacingPct) / 100}`);
+  // `a:normAutofit` gives back a share of the line height as well; a paragraph that states
+  // no percentage is still drawn at the editor's single line, so the reduction applies to it.
+  const linePct = style.lineSpacingPct ?? (fit?.lineSpacingReductionPct !== undefined ? 100 : undefined);
+  if (linePct) {
+    const keep = fit?.lineSpacingReductionPct !== undefined ? 1 - fit.lineSpacingReductionPct / 100 : 1;
+    css.push(`line-height:${Math.round(SLIDE_SINGLE_LINE * linePct * keep) / 100}`);
+  }
   if (style.spaceBeforePt) css.push(`margin-top:${style.spaceBeforePt}pt`);
   if (style.spaceAfterPt) css.push(`margin-bottom:${style.spaceAfterPt}pt`);
-  const runs = p.runs.map(renderInline).join("");
+  const runs = p.runs.map((r) => renderInline(scaledRun(r, fit?.fontScalePct))).join("");
   return `<div class="sp-p" data-lvl="${p.level}" style="${css.join(";")}">${bullet ? `<span class="bullet">${esc(bulletGlyph(bullet))}</span>` : ""}${runs || "<br>"}</div>`;
 }
 
@@ -1571,16 +1583,16 @@ function renderShape(s: Shape, pres: Presentation, idx?: number, slide?: Slide):
   const own1 = s.textLevels?.[0];
   const ownAt = (lvl: number): BodyLevel | undefined =>
     s.textLevels?.[Math.max(0, Math.min(s.textLevels.length - 1, lvl))];
-  const text = (s.paragraphs ?? []).map((p) => renderSlideParagraph(p, inh, pres.bodyLevels, body, ownAt(p.level))).join("");
+  const fit = s.fontScalePct !== undefined || s.lineSpacingReductionPct !== undefined ? { fontScalePct: s.fontScalePct, lineSpacingReductionPct: s.lineSpacingReductionPct } : undefined;
+  const text = (s.paragraphs ?? []).map((p) => renderSlideParagraph(p, inh, pres.bodyLevels, body, ownAt(p.level), fit)).join("");
   // A placeholder's paragraph is drawn at the size its layout states (a run may state its
   // own), and its box stacks from the layout's bodyPr anchor — the title slide anchors the
   // title at the bottom, so an 18px default would put the clicked-in text in the wrong place.
   // Text in a shape that is not a placeholder takes the master's `p:otherStyle` instead,
   // unless the shape's own `a:lstStyle` names a size first.
   const textCss: string[] = [];
-  if (own1?.sizePt) textCss.push(`font-size:${own1.sizePt}pt`);
-  else if (inh?.sizePt) textCss.push(`font-size:${inh.sizePt}pt`);
-  else if (!inh) textCss.push(`font-size:${pres.otherStylePt}pt`);
+  const textSize = own1?.sizePt ?? inh?.sizePt ?? (inh ? undefined : pres.otherStylePt);
+  if (textSize !== undefined) textCss.push(`font-size:${scaledPt(textSize, s.fontScalePct)}pt`);
   if (inh) textCss.push(`justify-content:${inh.anchor === "b" ? "flex-end" : inh.anchor === "ctr" ? "center" : "flex-start"}`);
   const textStyle = textCss.length ? ` style="${textCss.join(";")}"` : "";
   return `<div class="shape"${pick} style="${style.join(";")}"><div class="shape-text"${textStyle}>${text}</div></div>`;

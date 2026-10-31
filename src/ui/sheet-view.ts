@@ -1,4 +1,4 @@
-import type { Cell, CellStyle, CondStyle, Sheet, SheetImage, Spreadsheet } from "../core/xlsx.js";
+import type { Border, BorderLine, Cell, CellStyle, CondStyle, Sheet, SheetImage, Spreadsheet } from "../core/xlsx.js";
 import { DEFAULT_COL_CHARS, DEFAULT_ROW_PT, cfCompare, colWidthPx, imageBoxPx, rowHeightPx, scaleColorAt, shiftFormulaRefs, type CondRule, type ChartModel } from "../core/xlsx.js";
 import { openChartEditor } from "./chart-edit.js";
 import { openFilterEditor } from "./filter-edit.js";
@@ -28,6 +28,32 @@ const colPx = (s: Sheet, c: number): number => colWidthPx(s, c);
 /** Row heights are stored in points; CSS gets whole pixels so our own arithmetic matches layout. */
 const rowPx = (s: Sheet, r: number): number => rowHeightPx(s, r);
 const css = (v: string | undefined): string | undefined => (v ? `#${v.replace(/^#/, "")}` : undefined);
+
+/**
+ * How a file's `ST_BorderStyle` token draws on screen: the width and CSS line style. Excel/WPS keep every
+ * weight below 1.5pt inside one pixel and step the heavier ones up; dashes keep their weight.
+ */
+const BORDER_CSS: Record<string, [number, string]> = {
+  hair: [1, "dotted"],
+  dotted: [1, "dotted"],
+  dashed: [1, "dashed"],
+  dashDot: [1, "dashed"],
+  dashDotDot: [1, "dashed"],
+  slantDashDot: [1, "dashed"],
+  thin: [1, "solid"],
+  medium: [2, "solid"],
+  mediumDashed: [2, "dashed"],
+  mediumDashDot: [2, "dashed"],
+  mediumDashDotDot: [2, "dashed"],
+  thick: [3, "solid"],
+  double: [3, "double"],
+};
+
+/** The CSS line for one border side; a side with no colour uses the grid's usual ink. */
+export function borderLineCss(line: BorderLine): string {
+  const [width, style] = BORDER_CSS[line.style] ?? [1, "solid"];
+  return `${width}px ${style} ${line.color ? `#${line.color}` : "#40464f"}`;
+}
 
 export class SheetView {
   readonly wrap = document.createElement("div");
@@ -831,18 +857,26 @@ export class SheetView {
 
   setBorder(kind: "box" | "all" | "none"): void {
     this.hooks.edited();
+    // Adding a side keeps the line the cell already draws there (a double rule stays double); a side that had
+    // none gets the default single line, which is what the ribbon's three presets mean.
+    const ink = (cur: BorderLine | undefined): BorderLine => cur ?? { style: "thin" };
     for (const at of eachCell(this.sel)) {
-      const cur = this.wb.styleAt(this.sheet.name, at.c, at.r).border ?? { top: false, right: false, bottom: false, left: false };
-      const next = { ...cur };
-      if (kind === "none") next.top = next.right = next.bottom = next.left = false;
-      else if (kind === "all") next.top = next.right = next.bottom = next.left = true;
-      else {
-        if (at.r === this.sel.r1) next.top = true;
-        if (at.r === this.sel.r2) next.bottom = true;
-        if (at.c === this.sel.c1) next.left = true;
-        if (at.c === this.sel.c2) next.right = true;
+      const cur: Border = { ...this.wb.styleAt(this.sheet.name, at.c, at.r).border };
+      const next: Border = { ...cur };
+      if (kind === "none") {
+        next.top = next.right = next.bottom = next.left = undefined;
+      } else if (kind === "all") {
+        next.top = ink(cur.top);
+        next.right = ink(cur.right);
+        next.bottom = ink(cur.bottom);
+        next.left = ink(cur.left);
+      } else {
+        if (at.r === this.sel.r1) next.top = ink(cur.top);
+        if (at.r === this.sel.r2) next.bottom = ink(cur.bottom);
+        if (at.c === this.sel.c1) next.left = ink(cur.left);
+        if (at.c === this.sel.c2) next.right = ink(cur.right);
       }
-      this.wb.setStyle(this.sheet.name, rect(at.c, at.r, at.c, at.r), { border: next });
+      this.wb.setStyle(this.sheet.name, rect(at.c, at.r, at.c, at.r), next.top || next.right || next.bottom || next.left ? { border: next } : { border: undefined });
     }
     this.render();
   }
@@ -1120,11 +1154,12 @@ function applyStyle(td: HTMLElement, st: CellStyle): void {
   if (st.wrap) td.classList.add("wrap");
   const b = st.border;
   if (b) {
-    const line = "1px solid #40464f";
-    if (b.top) td.style.borderTop = line;
-    if (b.bottom) td.style.borderBottom = line;
-    if (b.left) td.style.borderLeft = line;
-    if (b.right) td.style.borderRight = line;
+    for (const side of ["top", "right", "bottom", "left"] as const) {
+      const line = b[side];
+      if (!line) continue;
+      const prop = `border${side[0]!.toUpperCase()}${side.slice(1)}` as "borderTop" | "borderRight" | "borderBottom" | "borderLeft";
+      td.style[prop] = borderLineCss(line);
+    }
   }
   // Numbers sit right unless the format says otherwise; explicit alignment wins.
   if (st.align === "left") td.style.textAlign = "left";

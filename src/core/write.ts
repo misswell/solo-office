@@ -54,10 +54,16 @@ const fillXmlOf = (s: CellStyle): string | undefined =>
     ? `<fill><patternFill patternType="solid"><fgColor rgb="FF${s.bgColor.toUpperCase()}"/><bgColor indexed="64"/></patternFill></fill>`
     : undefined;
 
+const BORDER_SIDES = ["left", "right", "top", "bottom"] as const;
+
+/** A side keeps the file's own line token and ink; a side with neither is written as "no line". */
 const borderXmlOf = (b: Border): string =>
-  `<border>${(["left", "right", "top", "bottom"] as const)
-    .map((side) => (b[side] ? `<${side} style="thin"/>` : `<${side}/>`))
-    .join("")}<diagonal/></border>`;
+  `<border>${BORDER_SIDES.map((side) => {
+    const line = b[side];
+    if (!line) return `<${side}/>`;
+    const style = XML_ESC(line.style || "thin");
+    return `<${side} style="${style}">${line.color ? `<color rgb="FF${XML_ESC(line.color.toUpperCase())}"/>` : ""}</${side}>`;
+  }).join("")}<diagonal/></border>`;
 
 /** The `xf` record tying a style to font/fill/border/numFmt records already in the file. */
 const xfTagOf = (s: CellStyle, ids: { numFmt: number; font: number; fill: number; border: number }): string => {
@@ -141,7 +147,13 @@ function buildStyles(styles: CellStyle[]): StyleTables {
   return { fonts, fills, borders, numFmts, xf };
 }
 
-const keyOfBorder = (b: Border | undefined): string => (b ? `${b.top}${b.right}${b.bottom}${b.left}` : "");
+const keyOfBorder = (b: Border | undefined): string =>
+  b
+    ? JSON.stringify(BORDER_SIDES.map((side) => {
+        const line = b[side];
+        return line ? [line.style || "thin", (line.color ?? "").toUpperCase()] : null;
+      }))
+    : "";
 
 /** A differential format record for an editor-created conditional rule. */
 function dxfXmlOf(st: { bgColor?: string; fontColor?: string; bold?: boolean; italic?: boolean; strike?: boolean; underline?: boolean }): any {

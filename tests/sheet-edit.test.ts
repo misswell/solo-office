@@ -210,7 +210,7 @@ describe("xlsx writer round trip", () => {
       fontColor: "1F3864",
       bgColor: "FFF2CC",
       align: "center",
-      border: { top: true, right: true, bottom: true, left: true },
+      border: { top: { style: "thin" }, right: { style: "thin" }, bottom: { style: "thin" }, left: { style: "thin" } },
     });
     expect(again.styleAt("汇总", 2, 1).numFmt).toBe("0.00%");
     expect(again.styleAt("汇总", 2, 4).fontColor).toBe("C00000");

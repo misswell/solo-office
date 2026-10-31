@@ -1,4 +1,4 @@
-import { OpcPackage, asArray, decodeEntities, text } from "./opc.js";
+import { ATTRS, OpcPackage, asArray, decodeEntities, parseOrderedXml, rawAttrs, rawChildren, rawFind, tagLocalOf, text } from "./opc.js";
 import { dataUrl } from "./media.js";
 import { chartPartXml, rewriteChartSourceReferences } from "./chart.js";
 import { chartRange, chartRef, chartSeriesForRange, chartDataFingerprint, chartSourceRange, shiftChartRef } from "./chart-data.js";
@@ -233,11 +233,53 @@ export function colsFingerprint(sheet: Sheet): string {
   ]);
 }
 
+/**
+ * A theme colour slot's ink, with the `tint` Excel stores next to it applied. OOXML tints move a colour's
+ * HSL lightness by that fraction (`tint<0` darker, `tint>0` lighter); the hue and saturation are kept.
+ */
+export function schemeColor(scheme: (string | undefined)[] | undefined, index: number, tint: number): string | undefined {
+  const base = scheme?.[index];
+  if (!base) return undefined;
+  if (!tint) return base;
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(base.slice(i, i + 2), 16) / 255);
+  const max = Math.max(r!, g!, b!), min = Math.min(r!, g!, b!);
+  let h = 0;
+  const l = (max + min) / 2;
+  const d = max - min;
+  const s = d === 0 ? 0 : l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  if (d !== 0) {
+    if (max === r) h = (g! - b!) / d + (g! < b! ? 6 : 0);
+    else if (max === g) h = (b! - r!) / d + 2;
+    else h = (r! - g!) / d + 4;
+    h /= 6;
+  }
+  const l2 = tint < 0 ? l * (1 + tint) : l * (1 - tint) + tint;
+  const channel = (p: number, q: number, t: number): number => {
+    const tt = t < 0 ? t + 1 : t > 1 ? t - 1 : t;
+    if (tt < 1 / 6) return p + (q - p) * 6 * tt;
+    if (tt < 1 / 2) return q;
+    if (tt < 2 / 3) return p + (q - p) * (2 / 3 - tt) * 6;
+    return p;
+  };
+  const q = l2 < 0.5 ? l2 * (1 + s) : l2 + s - l2 * s;
+  const p = 2 * l2 - q;
+  const out = s === 0 ? [l2, l2, l2] : [channel(p, q, h + 1 / 3), channel(p, q, h), channel(p, q, h - 1 / 3)];
+  return out.map((v) => Math.round(Math.min(1, Math.max(0, v)) * 255).toString(16).padStart(2, "0")).join("").toUpperCase();
+}
+
+/** One side of a cell's border: the file's `ST_BorderStyle` token and the ink it carries. */
+export interface BorderLine {
+  /** `thin`, `medium`, `double`, `dashed`, … — the token the writer puts back in `@_style`. */
+  style: string;
+  /** Six hex digits without `#`; absent means the app's default ink (a side that names no colour). */
+  color?: string;
+}
+
 export interface Border {
-  top: boolean;
-  right: boolean;
-  bottom: boolean;
-  left: boolean;
+  top?: BorderLine;
+  right?: BorderLine;
+  bottom?: BorderLine;
+  left?: BorderLine;
 }
 
 export interface CellStyle {
@@ -344,10 +386,40 @@ export class Spreadsheet implements CellSource {
     const borders = asArray(st.styleSheet?.borders?.border);
     const rawFonts = asArray(st.styleSheet?.fonts?.font);
     const rawFills = asArray(st.styleSheet?.fills?.fill);
-    const drawn = (bd: any, which: string): boolean => {
+    // A side's own `@_style` is what draws it: `<left/>` and `style="none"` are both "no line" (the earlier
+    // rule read an absent `style` as a drawn side, so a bottom-only rule also boxed the cell's other three).
+    // The ink is a child `<color>`: an RGB literal, or a theme slot (often with a tint) the workbook's own
+    // clrScheme resolves. `auto`/`indexed` name the app's ink, which this model leaves to the renderer.
+    const scheme = (() => {
+      const path = [...pkg.parts.keys()].find((p) => /^xl\/theme\/[^/]+\.xml$/i.test(p));
+      const root = path ? parseOrderedXml(pkg.text(path) ?? "") : undefined;
+      const clr = root ? rawFind(root, "clrScheme") : undefined;
+      if (!clr) return undefined;
+      const order = ["lt1", "dk1", "lt2", "dk2", "accent1", "accent2", "accent3", "accent4", "accent5", "accent6", "hlink", "folHlink"];
+      // Preserve-order entries keep attributes under `ATTRS`, not at the top level.
+      const hex = (entry: any): string | undefined => {
+        const attrs = entry?.[ATTRS];
+        const v = attrs?.["@_val"] ?? attrs?.["@_lastClr"];
+        return typeof v === "string" && /^[0-9A-Fa-f]{6}$/.test(v) ? v.toUpperCase() : undefined;
+      };
+      const found = new Map<string, string>();
+      for (const child of rawChildren(clr)) {
+        const tag = tagLocalOf(child);
+        const color = tag ? hex(rawChildren(child)[0]) : undefined;
+        if (tag && color) found.set(tag, color);
+      }
+      return order.map((name) => found.get(name));
+    })();
+    const borderLine = (bd: any, which: string): BorderLine | undefined => {
       const el = bd?.[which];
-      if (el === undefined) return false;
-      return el?.["@_style"] === undefined ? true : el["@_style"] !== "none";
+      const style = el?.["@_style"];
+      if (!el || typeof style !== "string" || style === "none") return undefined;
+      const c = el.color;
+      let color: string | undefined;
+      const rgb = c?.["@_rgb"];
+      if (typeof rgb === "string" && /^[0-9A-Fa-f]{6,8}$/.test(rgb)) color = rgb.slice(-6).toUpperCase();
+      else if (c?.["@_theme"] !== undefined) color = schemeColor(scheme, Number(c["@_theme"]), Number(c["@_tint"] ?? 0));
+      return color ? { style, color } : { style };
     };
     // The file's xf indices are not ours: identical records collapse into one entry.
     // Each entry remembers the record it came from, so a save can put a cell back
@@ -359,9 +431,11 @@ export class Spreadsheet implements CellSource {
       const font = fonts[fontId];
       const al = xf.alignment;
       const bd = borders[borderId];
+      const sides = ["left", "right", "top", "bottom"] as const;
+      const lines = sides.map((side) => borderLine(bd, side));
       const border: Border | undefined =
-        borderId > 0 && (drawn(bd, "left") || drawn(bd, "right") || drawn(bd, "top") || drawn(bd, "bottom"))
-          ? { left: drawn(bd, "left"), right: drawn(bd, "right"), top: drawn(bd, "top"), bottom: drawn(bd, "bottom") }
+        borderId > 0 && lines.some(Boolean)
+          ? Object.fromEntries(sides.map((side, i) => [side, lines[i]])) as Border
           : undefined;
       const style: CellStyle = {
         numFmt: custom.get(fmtId) ?? BUILTIN[fmtId] ?? "General",
@@ -966,7 +1040,10 @@ export class Spreadsheet implements CellSource {
       style.align ?? "",
       style.valign ?? "",
       style.wrap,
-      style.border ? [style.border.top, style.border.right, style.border.bottom, style.border.left] : null,
+      style.border ? (["left", "right", "top", "bottom"] as const).map((side) => {
+        const line = style.border![side];
+        return line ? [line.style, line.color ?? ""] : null;
+      }) : null,
     ]);
   }
 

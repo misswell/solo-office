@@ -28,6 +28,12 @@ interface Ph {
   y?: number;
   w?: number;
   h?: number;
+  /** Level-1 size the layout's `a:lstStyle` declares, in points (60/2400 is what the template writes). */
+  szPt?: number;
+  /** Level-1 alignment the layout declares; empty means the master's own (left) answers. */
+  algn?: "l" | "ctr";
+  /** `a:bodyPr@anchor`; empty means top. */
+  anchor?: "t" | "ctr" | "b";
 }
 
 interface LayoutDef {
@@ -38,7 +44,7 @@ interface LayoutDef {
   placeholders: Ph[];
 }
 
-const title = (x: number, y: number, w: number, h: number, custom = false): Ph => ({ type: "title", custom, x, y, w, h });
+const title = (x: number, y: number, w: number, h: number, custom = false, extra: Partial<Ph> = {}): Ph => ({ type: "title", custom, x, y, w, h, ...extra });
 const body = (idx: number, x: number, y: number, w: number, h: number, extra: Partial<Ph> = {}): Ph => ({ type: "body", idx, x, y, w, h, ...extra });
 const content = (idx: number, x: number, y: number, w: number, h: number, extra: Partial<Ph> = {}): Ph => ({ idx, x, y, w, h, ...extra });
 const footer = (): Ph[] => [
@@ -47,32 +53,36 @@ const footer = (): Ph[] => [
   { type: "sldNum", sz: "quarter", idx: 12 },
 ];
 
-/** The eleven layouts of the WPS blank template, name/type and placeholder geometry as written there. */
+/** The eleven layouts of the WPS blank template, with the placeholder styles its `a:lstStyle` states. */
 export const BLANK_LAYOUTS: LayoutDef[] = [
   {
     name: "标题幻灯片",
     type: "title",
     placeholders: [
-      { type: "ctrTitle", x: 1198800, y: 914400, w: 9799200, h: 2570400 },
-      { type: "subTitle", idx: 1, x: 1198800, y: 3560400, w: 9799200, h: 1472400 },
+      { type: "ctrTitle", x: 1198800, y: 914400, w: 9799200, h: 2570400, szPt: 60, algn: "ctr", anchor: "b" },
+      { type: "subTitle", idx: 1, x: 1198800, y: 3560400, w: 9799200, h: 1472400, szPt: 24, algn: "ctr" },
       ...footer(),
     ],
   },
   {
     name: "标题和内容",
     type: "obj",
-    placeholders: [title(608400, 608400, 10969200, 705600), content(1, 608400, 1490400, 10969200, 4759200), ...footer()],
+    placeholders: [title(608400, 608400, 10969200, 705600, false, { anchor: "ctr" }), content(1, 608400, 1490400, 10969200, 4759200), ...footer()],
   },
   {
     name: "节标题",
     type: "secHead",
-    placeholders: [title(1990800, 3848400, 7768800, 766800, true), body(1, 1990800, 4615200, 7768800, 867600, { custom: true }), ...footer()],
+    placeholders: [
+      title(1990800, 3848400, 7768800, 766800, true, { szPt: 44, anchor: "b" }),
+      body(1, 1990800, 4615200, 7768800, 867600, { custom: true, szPt: 18 }),
+      ...footer(),
+    ],
   },
   {
     name: "两栏内容",
     type: "twoObj",
     placeholders: [
-      title(608400, 608400, 10969200, 705600),
+      title(608400, 608400, 10969200, 705600, false, { anchor: "ctr" }),
       content(1, 608400, 1501200, 5176800, 4748400, { sz: "half" }),
       content(2, 6411600, 1501200, 5176800, 4748400, { sz: "half" }),
       ...footer(),
@@ -82,10 +92,10 @@ export const BLANK_LAYOUTS: LayoutDef[] = [
     name: "比较",
     type: "twoTxTwoObj",
     placeholders: [
-      title(608400, 608400, 10969200, 705600),
-      body(1, 608400, 1429200, 5342400, 381600, { custom: true }),
+      title(608400, 608400, 10969200, 705600, false, { anchor: "ctr" }),
+      body(1, 608400, 1429200, 5342400, 381600, { custom: true, szPt: 20, anchor: "t" }),
       content(2, 608400, 1854000, 5342400, 4395600, { sz: "half" }),
-      body(3, 6235750, 1421729, 5342400, 381600, { sz: "quarter", custom: true }),
+      body(3, 6235750, 1421729, 5342400, 381600, { sz: "quarter", custom: true, szPt: 20, anchor: "t" }),
       content(4, 6235750, 1854000, 5342400, 4395600, { sz: "quarter" }),
       ...footer(),
     ],
@@ -93,7 +103,7 @@ export const BLANK_LAYOUTS: LayoutDef[] = [
   {
     name: "仅标题",
     type: "titleOnly",
-    placeholders: [title(608400, 608400, 10969200, 705600), ...footer()],
+    placeholders: [title(608400, 608400, 10969200, 705600, false, { anchor: "ctr" }), ...footer()],
   },
   {
     name: "空白",
@@ -104,8 +114,8 @@ export const BLANK_LAYOUTS: LayoutDef[] = [
     name: "图片与标题",
     userDrawn: true,
     placeholders: [
-      content(1, 608400, 1555200, 5233077, 4608000, { type: "pic", sz: "half" }),
-      body(2, 6350400, 1555200, 5227200, 4608000, { sz: "half" }),
+      content(1, 608400, 1555200, 5233077, 4608000, { type: "pic", sz: "half", szPt: 16 }),
+      body(2, 6350400, 1555200, 5227200, 4608000, { sz: "half", szPt: 16 }),
       ...footer(),
       { type: "title" },
     ],
@@ -114,7 +124,7 @@ export const BLANK_LAYOUTS: LayoutDef[] = [
     name: "竖排标题与文本",
     type: "vertTitleAndTx",
     placeholders: [
-      { ...title(10234800, 914400, 1044000, 5029200, true), orient: "vert" },
+      { ...title(10234800, 914400, 1044000, 5029200, true, { szPt: 28, anchor: "ctr" }), orient: "vert" },
       body(1, 914400, 914400, 9169200, 5029200, { orient: "vert" }),
       ...footer(),
     ],
@@ -127,7 +137,11 @@ export const BLANK_LAYOUTS: LayoutDef[] = [
   {
     name: "末尾幻灯片",
     userDrawn: true,
-    placeholders: [...footer(), title(1198800, 2484000, 9799200, 1018800, true), body(13, 1198800, 3560400, 9799200, 471600, { sz: "quarter" })],
+    placeholders: [
+      ...footer(),
+      title(1198800, 2484000, 9799200, 1018800, true, { szPt: 60, algn: "ctr", anchor: "t" }),
+      body(13, 1198800, 3560400, 9799200, 471600, { sz: "quarter", szPt: 24, algn: "ctr" }),
+    ],
   },
 ];
 
@@ -144,7 +158,13 @@ function phAttrs(p: Ph): string {
 function spElement(id: number, name: string, p: Ph): string {
   const xfrm =
     p.x !== undefined ? `<a:xfrm><a:off x="${p.x}" y="${p.y}"/><a:ext cx="${p.w}" cy="${p.h}"/></a:xfrm>` : "";
-  return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${name}"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr><p:ph${phAttrs(p)}/></p:nvPr></p:nvSpPr><p:spPr>${xfrm}</p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody></p:sp>`;
+  // The layout states its own level-1 size/alignment; where it stays silent the master's txStyles answer.
+  const bodyPr = p.anchor ? `<a:bodyPr anchor="${p.anchor}"/>` : `<a:bodyPr/>`;
+  const lvl =
+    p.algn || p.szPt
+      ? `<a:lstStyle><a:lvl1pPr${p.algn ? ` algn="${p.algn}"` : ""}><a:defRPr${p.szPt ? ` sz="${p.szPt * 100}"` : ""}/></a:lvl1pPr></a:lstStyle>`
+      : `<a:lstStyle/>`;
+  return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${name}"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr><p:ph${phAttrs(p)}/></p:nvPr></p:nvSpPr><p:spPr>${xfrm}</p:spPr><p:txBody>${bodyPr}${lvl}<a:p/></p:txBody></p:sp>`;
 }
 
 const GROUP_PR = `<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>`;
@@ -180,7 +200,7 @@ function masterXml(): string {
   const ids = BLANK_LAYOUTS.map((_, i) => `<p:sldLayoutId id="${2147483649 + i}" r:id="rId${i + 1}"/>`).join("");
   const textStyle = (first: string): string =>
     `<a:lvl1pPr marL="0" algn="l" defTabSz="914400" rtl="0" eaLnBrk="1" latinLnBrk="0" hangingPunct="1"><a:defRPr sz="${first}" kern="1200"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill><a:latin typeface="+mn-lt"/><a:ea typeface="+mn-ea"/><a:cs typeface="+mn-cs"/></a:defRPr></a:lvl1pPr>`;
-  const txStyles = `<p:txStyles><p:titleStyle>${textStyle("4400")}</p:titleStyle><p:bodyStyle>${textStyle("2800")}</p:bodyStyle><p:otherStyle><a:defPPr><a:defRPr lang="zh-CN"/></a:defPPr>${textStyle("1800")}</p:otherStyle></p:txStyles>`;
+  const txStyles = `<p:txStyles><p:titleStyle>${textStyle("3600")}</p:titleStyle><p:bodyStyle>${textStyle("1800")}</p:bodyStyle><p:otherStyle><a:defPPr><a:defRPr lang="zh-CN"/></a:defPPr>${textStyle("1800")}</p:otherStyle></p:txStyles>`;
   return `${DECL}<p:sldMaster ${P_ROOT}><p:cSld><p:bg><p:bgRef idx="1001"><a:schemeClr val="bg1"/></p:bgRef></p:bg><p:spTree>${GROUP_PR}${shapes}</p:spTree></p:cSld><p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/><p:sldLayoutIdLst>${ids}</p:sldLayoutIdLst>${txStyles}</p:sldMaster>`;
 }
 

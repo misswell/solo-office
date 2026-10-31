@@ -1434,14 +1434,37 @@ export function renderWord(doc: WordDocument, view: RevisionView = "marks"): str
   }, gridPx)}${borders}${hf("header")}${hf("footer")}</div>${bandSources}`;
 }
 
-function renderSlideParagraph(p: SlideParagraph): string {
+interface InhText {
+  sizePt?: number;
+  align?: string;
+  anchor?: string;
+}
+
+/**
+ * What a placeholder's own text inherits: the layout's `a:lstStyle` first, then the
+ * master's `p:txStyles` sizes for the family. WPS writes neither the size nor the
+ * alignment on the slide's shape, so a blank paragraph is drawn from these.
+ */
+function inheritedTextStyle(slide: Slide | undefined, s: Shape, pres: Presentation): InhText | undefined {
+  if (!s.placeholder) return undefined;
+  const ph = (slide?.layoutPlaceholders ?? []).find((h) => placeholderFilled(s, h));
+  const family = placeholderFamily(s.placeholder);
+  return {
+    sizePt: ph?.sizePt ?? (family === "title" ? pres.titleStylePt : pres.bodyStylePt),
+    align: ph?.align,
+    anchor: ph?.anchor,
+  };
+}
+
+function renderSlideParagraph(p: SlideParagraph, inh?: InhText): string {
   const css: string[] = [];
-  if (p.align && ALIGN[p.align]) css.push(`text-align:${ALIGN[p.align]}`);
+  const align = p.align ?? inh?.align;
+  if (align && ALIGN[align]) css.push(`text-align:${ALIGN[align]}`);
   const runs = p.runs.map(renderInline).join("");
   return `<div class="sp-p" style="${css.join(";")};padding-left:${p.level * 18}px">${p.bullet ? `<span class="bullet">${esc(p.bullet)}</span>` : ""}${runs || "<br>"}</div>`;
 }
 
-function renderShape(s: Shape, pres: Presentation, idx?: number): string {
+function renderShape(s: Shape, pres: Presentation, idx?: number, slide?: Slide): string {
   // Inline position:absolute keeps exported standalone HTML faithful without a stylesheet.
   const common = `position:absolute;left:${s.x}px;top:${s.y}px;width:${s.width}px;height:${s.height}px`;
   const rot = s.rotation ? `transform:rotate(${s.rotation}deg);` : "";
@@ -1458,8 +1481,7 @@ function renderShape(s: Shape, pres: Presentation, idx?: number): string {
   }
   if (s.kind === "group") {
     return `<div class="shape"${pick} style="${common};${rot}">${(s.children ?? []).map((c) => renderShape(c, pres)).join("")}</div>`;
-  }
-  const style = [common, rot];
+  }  const style = [common, rot];
   if (s.geometry === "line") {
     // A line is a zero-height box in the model; its stroke is drawn on that line.
     const width = Math.max(1, s.lineWidth ?? 1);
@@ -1469,8 +1491,16 @@ function renderShape(s: Shape, pres: Presentation, idx?: number): string {
   if (s.fill) style.push(`background:${s.fill}`);
   if (s.lineColor) style.push(`border:${Math.max(1, s.lineWidth ?? 1)}px solid ${s.lineColor}`);
   if (s.geometry && s.geometry !== "rect") style.push(`clip-path:${clipFor(s.geometry)}`);
-  const text = (s.paragraphs ?? []).map(renderSlideParagraph).join("");
-  return `<div class="shape"${pick} style="${style.join(";")}"><div class="shape-text">${text}</div></div>`;
+  const inh = inheritedTextStyle(slide, s, pres);
+  const text = (s.paragraphs ?? []).map((p) => renderSlideParagraph(p, inh)).join("");
+  // A placeholder's paragraph is drawn at the size its layout states (a run may state its
+  // own), and its box stacks from the layout's bodyPr anchor — the title slide anchors the
+  // title at the bottom, so an 18px default would put the clicked-in text in the wrong place.
+  const textCss: string[] = [];
+  if (inh?.sizePt) textCss.push(`font-size:${inh.sizePt}pt`);
+  if (inh) textCss.push(`justify-content:${inh.anchor === "b" ? "flex-end" : inh.anchor === "ctr" ? "center" : "flex-start"}`);
+  const textStyle = textCss.length ? ` style="${textCss.join(";")}"` : "";
+  return `<div class="shape"${pick} style="${style.join(";")}"><div class="shape-text"${textStyle}>${text}</div></div>`;
 }
 
 function clipFor(geom: string): string {
@@ -1530,7 +1560,12 @@ function placeholderHints(slide: Slide): string {
     .filter(({ ph }) => !slide.shapes.some((shape) => placeholderFilled(shape, ph)))
     .map(({ ph, i }) => {
       const box = `position:absolute;left:${ph.x}px;top:${ph.y}px;width:${ph.width}px;height:${ph.height}px`;
-      return `<div class="ph-hint" data-ph="${i}" aria-hidden="true" style="${box}">${PLACEHOLDER_PROMPTS[ph.type ?? ""]}</div>`;
+      // The prompt is the placeholder's own text, so it is drawn at that placeholder's
+      // size and anchor; the dashed box stays the full box either way.
+      const size = ph.sizePt ? `;font-size:${ph.sizePt}pt` : "";
+      const horizontal = `;justify-content:${ph.align === "center" ? "center" : ph.align === "right" ? "flex-end" : "flex-start"}`;
+      const vertical = `;align-items:${ph.anchor === "b" ? "flex-end" : ph.anchor === "ctr" ? "center" : "flex-start"}`;
+      return `<div class="ph-hint" data-ph="${i}" aria-hidden="true" style="${box}${size}${horizontal}${vertical}">${PLACEHOLDER_PROMPTS[ph.type ?? ""]}</div>`;
     })
     .join("");
 }
@@ -1541,6 +1576,6 @@ export function renderSlideHtml(pres: Presentation, index: number, opts: { place
   const bg = slide.background ? `background:${slide.background};` : "";
   const hints = opts.placeholders ? placeholderHints(slide) : "";
   return `<div class="slide" style="width:${pres.slideWidthPx}px;height:${pres.slideHeightPx}px;${bg}">${slide.shapes
-    .map((s, i) => renderShape(s, pres, i))
+    .map((s, i) => renderShape(s, pres, i, slide))
     .join("")}${hints}</div>`;
 }

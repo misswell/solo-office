@@ -136,3 +136,68 @@ describe("blank deck placeholder prompts", () => {
     expect(phs[1].y).toBeCloseTo(3560400 / 9525, 3);
   });
 });
+
+describe("placeholder text inherits the layout's declared style", () => {
+  it("carries the size, alignment and anchor the layout states", () => {
+    const phs = Presentation.blank().slides[0].layoutPlaceholders ?? [];
+    expect(phs[0]).toMatchObject({ sizePt: 60, align: "center", anchor: "b" });
+    expect(phs[1]).toMatchObject({ sizePt: 24, align: "center" });
+    expect(phs[1].anchor).toBeUndefined();
+  });
+
+  it("renders a claimed title at the layout's 60pt, centred, bottom-anchored", () => {
+    const pres = Presentation.blank();
+    pres.slides[0].shapes.push({
+      kind: "shape",
+      name: "标题 1",
+      x: 125.9,
+      y: 96,
+      width: 1028.8,
+      height: 269.9,
+      placeholder: "ctrTitle",
+      paragraphs: [{ level: 0, runs: [{ text: "季度汇报" }] }],
+    });
+    const html = renderSlideHtml(pres, 0);
+    expect(html).toMatch(/class="shape-text" style="font-size:60pt;justify-content:flex-end"/);
+    expect(html).toContain("text-align:center");
+    expect(html).toContain("季度汇报");
+  });
+
+  it("leaves a silent layout to the master's size and alignment", () => {
+    const pres = Presentation.blank();
+    pres.slides[0].layoutPlaceholders = [
+      { type: "title", x: 64, y: 64, width: 1152, height: 74, anchor: "ctr" },
+    ];
+    pres.slides[0].shapes.push({
+      kind: "shape",
+      name: "标题 2",
+      x: 64,
+      y: 64,
+      width: 1152,
+      height: 74,
+      placeholder: "title",
+      paragraphs: [{ level: 0, runs: [{ text: "分析" }] }],
+    });
+    const html = renderSlideHtml(pres, 0);
+    expect(html).toMatch(/class="shape-text" style="font-size:36pt;justify-content:center"/);
+    expect(html).not.toContain("text-align:");
+  });
+
+  it("draws an empty prompt at the placeholder's own size and alignment", () => {
+    const html = renderSlideHtml(Presentation.blank(), 0, { placeholders: true });
+    expect(html).toMatch(/data-ph="0"[^>]*font-size:60pt;justify-content:center;align-items:flex-end/);
+    expect(html).toMatch(/data-ph="1"[^>]*font-size:24pt;justify-content:center;align-items:flex-start/);
+  });
+
+  it("reads the layout lstStyle and master txStyles back from the written package", () => {
+    const back = open(writePptx(Presentation.blank()));
+    const phs = back.slides[0].layoutPlaceholders ?? [];
+    expect(phs[0]).toMatchObject({ sizePt: 60, align: "center", anchor: "b" });
+    expect(phs[1]).toMatchObject({ sizePt: 24, align: "center" });
+    expect(back.titleStylePt).toBe(36);
+    expect(back.bodyStylePt).toBe(18);
+    const pkg = pkgOf(Presentation.blank());
+    expect(pkg.text("ppt/slideMasters/slideMaster1.xml")).toContain('<a:defRPr sz="3600"');
+    expect(pkg.text("ppt/slideLayouts/slideLayout1.xml")).toContain('<a:lvl1pPr algn="ctr"><a:defRPr sz="6000"/>');
+  });
+});

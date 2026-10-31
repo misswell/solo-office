@@ -11,6 +11,12 @@ export interface LayoutPlaceholder {
   y: number;
   width: number;
   height: number;
+  /** Level-1 character size the layout's `a:lstStyle` states, in points. */
+  sizePt?: number;
+  /** Level-1 paragraph alignment, in the editor's words. */
+  align?: string;
+  /** `a:bodyPr@anchor`: "t", "ctr" or "b". */
+  anchor?: string;
 }
 
 export interface Shape {
@@ -111,6 +117,12 @@ export class Presentation {
    * editor draws comes from the deck; a blank deck built here uses WPS's common value.
    */
   gridSpacingEmu = 72008;
+  /**
+   * Level-1 sizes of the master's `p:txStyles`, in points. A placeholder the layout leaves
+   * silent inherits these; the defaults are what the WPS blank template states (36 / 18).
+   */
+  titleStylePt = 36;
+  bodyStylePt = 18;
   /** Images inserted in the editor (package part → data URL); a save writes these parts. */
   addedMedia = new Map<string, string>();
   private theme = new Map<string, string>();
@@ -153,6 +165,7 @@ export class Presentation {
     this.src = pkg;
     this.readTheme(pkg);
     this.readMedia(pkg);
+    this.readMasterStyles(pkg);
     const root = find(pkg.xml("ppt/presentation.xml"), "presentation");
     this.presTree = parseOrderedXml(pkg.text("ppt/presentation.xml") ?? "");
     const sldSz = find(root, "sldSz");
@@ -361,7 +374,30 @@ export class Presentation {
         y: (p.y ?? 0) / EMU_PER_PX,
         width: (p.w ?? 0) / EMU_PER_PX,
         height: (p.h ?? 0) / EMU_PER_PX,
+        sizePt: p.szPt,
+        align: p.algn ? ALGN_IN[p.algn] : undefined,
+        anchor: p.anchor,
       }));
+  }
+
+  /** Level-1 title/body sizes from the one master `p:txStyles`; layout placeholders inherit them. */
+  private readMasterStyles(pkg: OpcPackage): void {
+    const rel = [...pkg.rels("ppt/presentation.xml").values()].find((r) => r.type.endsWith("/slideMaster"));
+    if (!rel) return;
+    const xml = pkg.text(pkg.resolve("ppt/presentation.xml", rel));
+    const styles = xml ? rawFind(parseOrderedXml(xml), "txStyles") : undefined;
+    if (!styles) return;
+    const level1Pt = (name: string): number | undefined => {
+      const style = rawFind(rawChildren(styles), name);
+      const lvl = style ? rawFind(rawChildren(style), "lvl1pPr") : undefined;
+      const rpr = lvl ? rawFind(rawChildren(lvl), "defRPr") : undefined;
+      const sz = Number(rawAttrs(rpr ?? {})["@_sz"]);
+      return Number.isFinite(sz) && sz > 0 ? sz / 100 : undefined;
+    };
+    const title = level1Pt("titleStyle");
+    const body = level1Pt("bodyStyle");
+    if (title !== undefined) this.titleStylePt = title;
+    if (body !== undefined) this.bodyStylePt = body;
   }
 
   private firstSlideLayout(): string | undefined {    let found: string | undefined;
@@ -455,6 +491,12 @@ function parseLayoutPlaceholders(xml: string): LayoutPlaceholder[] {
     const a = rawAttrs(ph);
     const o = rawAttrs(off);
     const e = rawAttrs(ext);
+    const txBody = rawFind(rawChildren(entry), "txBody");
+    const bodyPr = txBody ? rawFind(rawChildren(txBody), "bodyPr") : undefined;
+    const lst = txBody ? rawFind(rawChildren(txBody), "lstStyle") : undefined;
+    const lvl1 = lst ? rawFind(rawChildren(lst), "lvl1pPr") : undefined;
+    const defRPr = lvl1 ? rawFind(rawChildren(lvl1), "defRPr") : undefined;
+    const sz = Number(rawAttrs(defRPr ?? {})["@_sz"]);
     out.push({
       type: a["@_type"],
       idx: a["@_idx"] !== undefined ? Number(a["@_idx"]) : undefined,
@@ -462,6 +504,9 @@ function parseLayoutPlaceholders(xml: string): LayoutPlaceholder[] {
       y: Number(o["@_y"] ?? 0) / EMU_PER_PX,
       width: Number(e["@_cx"] ?? 0) / EMU_PER_PX,
       height: Number(e["@_cy"] ?? 0) / EMU_PER_PX,
+      sizePt: Number.isFinite(sz) && sz > 0 ? sz / 100 : undefined,
+      align: lvl1 ? ALGN_IN[rawAttrs(lvl1)["@_algn"] ?? ""] : undefined,
+      anchor: bodyPr ? rawAttrs(bodyPr)["@_anchor"] : undefined,
     });
   }
   return out;

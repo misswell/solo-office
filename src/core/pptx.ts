@@ -161,6 +161,18 @@ export class Presentation {
   private theme = new Map<string, string>();
   private media = new Map<string, string>();
   private pkg?: OpcPackage;
+  /**
+   * `p:clrMap` of the deck's master. Backgrounds name colours as `bg1`/`tx2` and the
+   * map says which clrScheme slot that is; the spec defaults hold when the master is silent.
+   */
+  private clrMap = new Map<string, string>([
+    ["bg1", "lt1"],
+    ["tx1", "dk1"],
+    ["bg2", "lt2"],
+    ["tx2", "dk2"],
+  ]);
+  /** CSS background per layout/master part; every slide on that part inherits the same value. */
+  private bgCache = new Map<string, string | undefined>();
 
   get slideWidthPx(): number {
     return this.slideWidthEmu / EMU_PER_PX;
@@ -247,9 +259,11 @@ export class Presentation {
       slide.layoutPlaceholders = this.layoutPlaceholdersOf(layoutPath);
     }
 
-    const bgPr = find(find(cSld, "bg"), "bgPr");
-    const bgClr = find(find(bgPr, "solidFill"), "srgbClr");
-    if (bgClr) slide.background = "#" + attr(bgClr, "val");
+    slide.background = this.backgroundCss(find(cSld, "bg"));
+    // A slide that names no background shows the layout's, and the layout's own master's;
+    // WPS writes the colour only on the master, so without this the dark and grey
+    // templates open on white.
+    if (!slide.background && slide.layoutPath) slide.background = this.inheritedBackground(pkg, slide.layoutPath);
 
     const spTree = find(cSld, "spTree");
     const rawTree = rawFind(slide.tree, "spTree");
@@ -373,12 +387,25 @@ export class Presentation {
   }
 
   private readTheme(pkg: OpcPackage): void {
-    for (const [path] of pkg.parts) {
-      if (!/^ppt\/theme\/theme\d+\.xml$/.test(path)) continue;
+    // The theme the slide master references owns the deck's colours. A package also
+    // ships themes for handouts and notes, and reading those last would repaint the
+    // slides with another palette (WPS's black template has a 44546A notes theme).
+    const masterRel = [...pkg.rels("ppt/presentation.xml").values()].find((r) => r.type.endsWith("/slideMaster"));
+    const masterPath = masterRel ? pkg.resolve("ppt/presentation.xml", masterRel) : undefined;
+    const themeRel = masterPath ? [...pkg.rels(masterPath).values()].find((r) => r.type.endsWith("/theme")) : undefined;
+    const owner = themeRel && masterPath ? pkg.resolve(masterPath, themeRel) : undefined;
+    const paths = owner && pkg.parts.has(owner)
+      ? [owner]
+      : [...pkg.parts.keys()].filter((p) => /^ppt\/theme\/theme\d+\.xml$/.test(p));
+    for (const path of paths) {
       const clrScheme = findDeep(pkg.xml(path), "clrScheme");
       for (const { name, node } of kids(clrScheme)) {
+        // WPS names the two base slots with `sysClr` (windowText / window) and keeps
+        // the concrete value in `lastClr`; the other slots are plain sRGB.
         const srgb = find(node, "srgbClr");
-        if (srgb) this.theme.set(name.toLowerCase(), "#" + attr(srgb, "val"));
+        const sys = srgb ? undefined : find(node, "sysClr");
+        const val = srgb ? attr(srgb, "val") : attr(sys, "lastClr");
+        if (val) this.theme.set(name.toLowerCase(), "#" + val);
       }
     }
   }
@@ -406,6 +433,64 @@ export class Presentation {
 
   themeColor(name: string): string | undefined {
     return this.theme.get(name);
+  }
+
+  /** The layout's `p:bg`, else the master's — backgrounds cascade and stop at the master. */
+  private inheritedBackground(pkg: OpcPackage, layoutPath: string): string | undefined {
+    const own = this.backgroundOfPart(pkg, layoutPath);
+    if (own) return own;
+    const rel = [...pkg.rels(layoutPath).values()].find((r) => r.type.endsWith("/slideMaster"));
+    return rel ? this.backgroundOfPart(pkg, pkg.resolve(layoutPath, rel)) : undefined;
+  }
+
+  /** A layout/master part's background as CSS, cached because slides share it. */
+  private backgroundOfPart(pkg: OpcPackage, path: string): string | undefined {
+    if (this.bgCache.has(path)) return this.bgCache.get(path);
+    const cSld = pkg.parts.has(path) ? findDeep(pkg.xml(path), "cSld") : undefined;
+    const css = this.backgroundCss(find(cSld, "bg"));
+    this.bgCache.set(path, css);
+    return css;
+  }
+
+  /** `p:bg` in the editor's CSS: a solid fill, or the linear gradient `a:gradFill` states. */
+  private backgroundCss(bg: any): string | undefined {
+    if (!bg) return undefined;
+    // `p:bgRef` names its colour directly; the bgFillStyleLst index only picks a style
+    // the deck already restates, and every WPS background here repeats the scheme colour.
+    const ref = find(bg, "bgRef");
+    if (ref) return this.colorCss(ref);
+    const pr = find(bg, "bgPr");
+    const solid = find(pr, "solidFill");
+    if (solid) return this.colorCss(solid);
+    const grad = find(pr, "gradFill");
+    return grad ? this.gradientCss(grad) : undefined;
+  }
+
+  /** The first colour under `parent`, with `lumMod` applied for a scheme reference. */
+  private colorCss(parent: any): string | undefined {
+    const srgb = find(parent, "srgbClr");
+    if (srgb) return "#" + attr(srgb, "val");
+    const sys = find(parent, "sysClr");
+    if (sys) return "#" + attr(sys, "lastClr");
+    const scheme = find(parent, "schemeClr");
+    if (!scheme) return undefined;
+    const name = String(attr(scheme, "val") ?? "");
+    const base = this.theme.get(this.clrMap.get(name) ?? name) ?? this.theme.get(name);
+    if (!base) return undefined;
+    const lumMod = Number(attr(find(scheme, "lumMod"), "val"));
+    return Number.isFinite(lumMod) && lumMod > 0 ? shadeHex(base, lumMod / 100000) : base;
+  }
+
+  private gradientCss(grad: any): string | undefined {
+    const stops: string[] = [];
+    for (const { node } of kids(find(grad, "gsLst"))) {
+      const color = this.colorCss(node);
+      if (color) stops.push(`${color} ${Number(attr(node, "pos") ?? 0) / 1000}%`);
+    }
+    if (stops.length < 2) return undefined;
+    // OOXML measures clockwise from left-to-right; CSS from straight up.
+    const deg = Number(attr(find(grad, "lin"), "ang") ?? 0) / 60000 + 90;
+    return `linear-gradient(${deg}deg, ${stops.join(", ")})`;
   }
 
   /** Marks a slide as edited, so a save regenerates it instead of copying it through. */
@@ -447,7 +532,13 @@ export class Presentation {
     const rel = [...pkg.rels("ppt/presentation.xml").values()].find((r) => r.type.endsWith("/slideMaster"));
     if (!rel) return;
     const xml = pkg.text(pkg.resolve("ppt/presentation.xml", rel));
-    const styles = xml ? rawFind(parseOrderedXml(xml), "txStyles") : undefined;
+    const tree = xml ? parseOrderedXml(xml) : undefined;
+    const map = tree ? rawFind(tree, "clrMap") : undefined;
+    for (const [from, to] of Object.entries(rawAttrs(map ?? {}))) {
+      if (!from.startsWith("@_") || !to) continue;
+      this.clrMap.set(from.slice(2), to);
+    }
+    const styles = tree ? rawFind(tree, "txStyles") : undefined;
     if (!styles) return;
     const styleOf = (name: string): any => rawFind(rawChildren(styles), name);
     const levels = (style: any): BodyLevel[] => {
@@ -545,6 +636,7 @@ export class Presentation {
       notesDirty: false,
     };
     slide.layoutPlaceholders = this.layoutPlaceholdersOf(chosen);
+    if (this.pkg && chosen) slide.background = this.inheritedBackground(this.pkg, chosen);
     this.slides.push(slide);
     this.presDirty = true;
     return slide;
@@ -573,6 +665,16 @@ export class Presentation {
     this.presDirty = true;
     this.slides.forEach((s, i) => ((s.index = i), (s.name = `第 ${i + 1} 页`)));
   }
+}
+
+/** A `#RRGGBB` scaled by a `lumMod` factor, as OOXML's shade of a theme colour. */
+function shadeHex(hex: string, factor: number): string {
+  const channel = (i: number): string =>
+    Math.max(0, Math.min(255, Math.round(parseInt(hex.slice(i, i + 2), 16) * factor)))
+      .toString(16)
+      .padStart(2, "0")
+      .toUpperCase();
+  return `#${channel(1)}${channel(3)}${channel(5)}`;
 }
 
 /** Placeholders a layout declares with geometry of its own; the ones that inherit from the master are skipped. */

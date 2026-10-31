@@ -391,6 +391,9 @@ export class Presentation {
 
     const nv = find(node, "nvSpPr") ?? find(node, "nvPicPr") ?? find(node, "nvGraphicFramePr") ?? find(node, "nvCxnSpPr");
     const label = String(attr(find(nv, "cNvPr"), "name") ?? "");
+    // A deck may paint with the theme (`a:schemeClr accent1`) instead of an sRGB literal;
+    // the master's `p:clrMap` says which clrScheme slot a `bg1`/`tx1` name means.
+    const resolve = (scheme: any): string | undefined => this.themeHex(scheme);
     const ph = find(find(nv, "nvPr"), "ph");
     const spPr = find(node, "spPr") ?? find(node, "grpSpPr");
     // A graphicFrame carries its own p:xfrm; shapes and pictures nest it under spPr.
@@ -417,8 +420,8 @@ export class Presentation {
       const tbl = findDeep(node, "tbl");
       const rows = findAll(tbl, "tr").map((tr) =>
         findAll(tr, "tc").map((tc): SlideCell => {
-          const runs = paragraphs(find(tc, "txBody")).flatMap((p) => p.runs);
-          return { text: runs.map((r) => r.text).join(""), runs, fill: solidHex(find(find(tc, "tcPr"), "solidFill")) };
+          const runs = paragraphs(find(tc, "txBody"), resolve).flatMap((p) => p.runs);
+          return { text: runs.map((r) => r.text).join(""), runs, fill: solidHex(find(find(tc, "tcPr"), "solidFill"), resolve) };
         }),
       );
       return { kind: "table", ...base, rows: rows.length ? rows : [[]], raw };
@@ -434,10 +437,10 @@ export class Presentation {
       ...base,
       textBox: attr(find(nv, "cNvSpPr"), "txBox") === "1" || undefined,
       geometry: geom(spPr),
-      fill: solidHex(find(spPr, "solidFill")),
-      lineColor: solidHex(find(ln, "solidFill")),
+      fill: solidHex(find(spPr, "solidFill"), resolve),
+      lineColor: solidHex(find(ln, "solidFill"), resolve),
       lineWidth: attr(ln, "w") ? Number(attr(ln, "w")) / EMU_PER_PX : undefined,
-      paragraphs: paragraphs(find(node, "txBody")),
+      paragraphs: paragraphs(find(node, "txBody"), resolve),
       textLevels: textLevels?.some(hasLevel) ? textLevels : undefined,
       raw,
     };
@@ -527,6 +530,12 @@ export class Presentation {
     return this.theme.get(name);
   }
 
+  /** The clrScheme slot a `a:schemeClr@val` names, after the master's `p:clrMap`. */
+  private themeHex(scheme: any): string | undefined {
+    const name = String(attr(scheme, "val") ?? "");
+    return this.theme.get(this.clrMap.get(name) ?? name) ?? this.theme.get(name);
+  }
+
   /** The layout's `p:bg`, else the master's — backgrounds cascade and stop at the master. */
   private inheritedBackground(pkg: OpcPackage, layoutPath: string): string | undefined {
     const own = this.backgroundOfPart(pkg, layoutPath);
@@ -558,19 +567,9 @@ export class Presentation {
     return grad ? this.gradientCss(grad) : undefined;
   }
 
-  /** The first colour under `parent`, with `lumMod` applied for a scheme reference. */
+  /** The first colour under `parent`, scheme references resolved and transforms applied. */
   private colorCss(parent: any): string | undefined {
-    const srgb = find(parent, "srgbClr");
-    if (srgb) return "#" + attr(srgb, "val");
-    const sys = find(parent, "sysClr");
-    if (sys) return "#" + attr(sys, "lastClr");
-    const scheme = find(parent, "schemeClr");
-    if (!scheme) return undefined;
-    const name = String(attr(scheme, "val") ?? "");
-    const base = this.theme.get(this.clrMap.get(name) ?? name) ?? this.theme.get(name);
-    if (!base) return undefined;
-    const lumMod = Number(attr(find(scheme, "lumMod"), "val"));
-    return Number.isFinite(lumMod) && lumMod > 0 ? shadeHex(base, lumMod / 100000) : base;
+    return solidHex(parent, (scheme) => this.themeHex(scheme));
   }
 
   private gradientCss(grad: any): string | undefined {
@@ -754,14 +753,58 @@ export class Presentation {
   }
 }
 
-/** A `#RRGGBB` scaled by a `lumMod` factor, as OOXML's shade of a theme colour. */
-function shadeHex(hex: string, factor: number): string {
-  const channel = (i: number): string =>
-    Math.max(0, Math.min(255, Math.round(parseInt(hex.slice(i, i + 2), 16) * factor)))
+/** RGB → HSL: hue in degrees, saturation and lightness in 0..1. */
+function hslOf(hex: string): [number, number, number] {
+  const n = parseInt(hex.replace(/^#/, ""), 16);
+  const r = ((n >> 16) & 255) / 255;
+  const g = ((n >> 8) & 255) / 255;
+  const b = (n & 255) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  if (max === min) return [0, 0, l];
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  const h = max === r ? (g - b) / d + (g < b ? 6 : 0) : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return [h * 60, s, l];
+}
+
+/** HSL back to `#RRGGBB`, the form the model and the stylesheet carry. */
+function hexOf(h: number, s: number, l: number): string {
+  const hue = (((h % 360) + 360) % 360) / 360;
+  const q = l <= 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  const channel = (t: number): string => {
+    const tt = ((t % 1) + 1) % 1;
+    const v = tt < 1 / 6 ? p + (q - p) * 6 * tt : tt < 1 / 2 ? q : tt < 2 / 3 ? p + (q - p) * (2 / 3 - tt) * 6 : p;
+    return Math.round(Math.max(0, Math.min(1, v)) * 255)
       .toString(16)
       .padStart(2, "0")
       .toUpperCase();
-  return `#${channel(1)}${channel(3)}${channel(5)}`;
+  };
+  return `#${channel(hue + 1 / 3)}${channel(hue)}${channel(hue - 1 / 3)}`;
+}
+
+/**
+ * Applies the colour transforms a colour node carries. DrawingML adjusts luminance in
+ * HSL, not by scaling each channel: `lumMod`/`lumOff` move L, `tint` lifts it toward
+ * white (`L·t + 1−t`), `shade` darkens it (`L·t`).
+ */
+function transformHex(hex: string, node: any): string {
+  const amount = (name: string): number | undefined => {
+    const v = Number(attr(find(node, name), "val"));
+    return Number.isFinite(v) ? v / 100000 : undefined;
+  };
+  let [h, s, l] = hslOf(hex);
+  const lumMod = amount("lumMod");
+  if (lumMod !== undefined) l *= lumMod;
+  const lumOff = amount("lumOff");
+  if (lumOff !== undefined) l += lumOff;
+  const tint = amount("tint");
+  if (tint !== undefined) l = l * tint + (1 - tint);
+  const shade = amount("shade");
+  if (shade !== undefined) l *= shade;
+  return hexOf(h, s, Math.max(0, Math.min(1, l)));
 }
 
 /**
@@ -838,12 +881,12 @@ function paragraphSpacing(pPr: any): Pick<SlideParagraph, "lineSpacingPct" | "sp
   };
 }
 
-function paragraphs(txBody: any): SlideParagraph[] {
+function paragraphs(txBody: any, resolve?: (node: any) => string | undefined): SlideParagraph[] {
   return findAll(txBody, "p").map((p) => {
     const pPr = find(p, "pPr");
     const runs: Inline[] = [];
     for (const child of kids(p)) {
-      if (child.name === "r" || child.name === "fld") runs.push(inlineOf(child.node));
+      if (child.name === "r" || child.name === "fld") runs.push(inlineOf(child.node, resolve));
       else if (child.name === "br") runs.push({ text: "\n" } as Inline);
     }
     return {
@@ -857,7 +900,7 @@ function paragraphs(txBody: any): SlideParagraph[] {
   });
 }
 
-function inlineOf(r: any): Inline {
+function inlineOf(r: any, resolve?: (node: any) => string | undefined): Inline {
   const rPr = find(r, "rPr");
   return {
     text: textOf(find(r, "t")),
@@ -867,7 +910,7 @@ function inlineOf(r: any): Inline {
     // 在这份语料里还没有数过的受众，所以仍收成「有线 = single」——与这一行改之前同一眼。
     underline: attr(rPr, "u") && attr(rPr, "u") !== "none" ? "single" : undefined,
     sizePt: attr(rPr, "sz") ? Number(attr(rPr, "sz")) / 100 : undefined,
-    color: solidHex(find(rPr, "solidFill")),
+    color: solidHex(find(rPr, "solidFill"), resolve),
     font: attr(find(rPr, "latin"), "typeface"),
   } as Inline;
 }
@@ -881,9 +924,15 @@ function geom(spPr: any): string | undefined {
   return attr(find(spPr, "prstGeom"), "prst");
 }
 
-function solidHex(fill: any): string | undefined {
-  const v = attr(find(fill, "srgbClr"), "val");
-  return v ? "#" + v : undefined;
+/** A fill/line colour as `#RRGGBB`; a theme reference goes through `resolve`. */
+function solidHex(fill: any, resolve?: (node: any) => string | undefined): string | undefined {
+  if (!fill) return undefined;
+  const srgb = find(fill, "srgbClr");
+  const sys = srgb ? undefined : find(fill, "sysClr");
+  const scheme = srgb || sys ? undefined : find(fill, "schemeClr");
+  const node = srgb ?? sys ?? scheme;
+  const hex = srgb ? "#" + attr(srgb, "val") : sys ? "#" + (attr(sys, "lastClr") ?? "") : scheme && resolve ? resolve(scheme) : undefined;
+  return hex && hex.length === 7 ? transformHex(hex, node) : undefined;
 }
 
 function findDeep(node: any, name: string): any {

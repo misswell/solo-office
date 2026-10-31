@@ -6358,10 +6358,10 @@ export type TablePropsPatch = {
  * **行高与标题行重复不在这一份里**：两句各有各的腿（`setCellHeight` 落 `w:trHeight`、表格工具
  * 「标题行重复」落 `w:tblHeader`），对话框再摆一格就是两个主人写同一句。
  *
- * `w:cantSplit` 的纸面这一版**只认「不许断」那一档**：铺排把每一行当成一枚整单位铺
- * （`doc-layout.ts:unitsOfBlock` 那一支），所以 `keepTogether: true` 与纸面逐像素同一张；
- * 「允许」那一档（摘掉这枚孩子）纸面还切不开一行——续行拆到下一页的那一刀
- * （`.scratch/HANDOFF.md` #222 待办）没落笔之前，这一档只把文件里那句话改对。
+ * `w:cantSplit` 两档都进纸面（`#234`）：没写这枚孩子的行按**行盒**切成几枚单位跨纸
+ * （`doc-layout.ts` 的 `rowSplittable`/`tableBandsOf`），写了它的行整行一枚——`keepTogether: true` 把它
+ * 重新钉回「整行不许拆」，「允许」那一档摘掉孩子，行就又能从行与行之间断开。两档都是文件说的话，
+ * 读回模型不靠纸面形状（`RowInfo.keepTogether` 由 `w:trPr` 认领）。
  */
 export type RowPropsPatch = { align?: "left" | "center" | "right" | ""; keepTogether?: boolean };
 

@@ -7,6 +7,7 @@ import {
   placementsOf,
   rowInPage,
   sheetOf,
+  splitRowBands,
   type LayoutUnit,
 } from "../src/ui/doc-layout.js";
 import { DEFAULT_SECTION, type Section } from "../src/core/docx.js";
@@ -418,5 +419,118 @@ describe("bandYieldPx：带子越过边距线的那一截", () => {
   it("距离本身写在边距线之外时，带子空着也让出那一截", () => {
     // `w:header="2160"` 落在 1440 缇的边距之外：摆位在纸上是 144px，正文得从它下面起排。
     expect(bandYieldPx(2160, 0, 1440)).toBeCloseTo(48, 10);
+  });
+});
+
+/**
+ * 表行按行盒切带（#234）：`splitRowBands` 只认几何，不认识 DOM——`tableBandsOf` 把每一格的行盒
+ * （`{top,bottom}`）收来，切法在这里钉住。三条不变量：
+ * - 各带的高之和恒等于行高（装箱读的是这个和，页数不因切法变）；
+ * - 刀口只落在**行与行之间**——任何一格的一枚行盒都不许被一刀穿过；
+ * - 行首那一带 `cut: null`（仍是整行一枚的口径），其余各带的 `cut` 就是它自己的上沿。
+ */
+describe("splitRowBands：可断的行按行盒切成几枚单位", () => {
+  const LINE = 25.92;
+  const line = (n: number, top: number): { top: number; bottom: number } => ({ top, bottom: top + n * LINE });
+  const total = (bands: { height: number }[]): number => bands.reduce((n, b) => n + b.height, 0);
+
+  it("格子里没有量到行盒时整行一枚，cut 为 null", () => {
+    expect(splitRowBands(100, 400, [])).toEqual([{ top: 100, height: 300, cut: null }]);
+    expect(splitRowBands(100, 400, [[]])).toEqual([{ top: 100, height: 300, cut: null }]);
+  });
+
+  it("0 高/负高的行不产刀口", () => {
+    expect(splitRowBands(100, 100, [])).toEqual([{ top: 100, height: 0, cut: null }]);
+    expect(splitRowBands(100, 99, [])).toEqual([{ top: 100, height: 0, cut: null }]);
+  });
+
+  it("一格五行切五带，首带 cut=null、其余 cut 是自己的上沿", () => {
+    const lines = Array.from({ length: 5 }, (_, i) => line(1, 100 + i * LINE));
+    const bands = splitRowBands(100, 100 + 5 * LINE, [lines]);
+    expect(bands.length).toBe(5);
+    for (const b of bands) expect(b.height).toBeCloseTo(LINE, 10);
+    expect(bands.map((b) => b.cut)).toEqual([null, 100 + LINE, 100 + 2 * LINE, 100 + 3 * LINE, 100 + 4 * LINE]);
+    expect(total(bands)).toBeCloseTo(5 * LINE, 10);
+  });
+
+  it("刀口取各格行盒上沿的并集", () => {
+    // 左格三行、右格两行：两格行高一致，刀口就是两条线，右格最后一行比左格短。
+    const left = [line(1, 0), line(1, LINE), line(1, 2 * LINE)];
+    const right = [line(1, 0), line(1, LINE)];
+    const bands = splitRowBands(0, 3 * LINE, [left, right]);
+    expect(bands.map((b) => b.height)).toEqual([LINE, LINE, LINE]);
+  });
+
+  it("穿行盒的候选丢掉：一格两行错开时不在它中间下刀", () => {
+    // 左格第一行 0..2 行高（字号大），右格两行各 1 行高；右格第二行的上沿落在左格第一行中间。
+    const left = [{ top: 0, bottom: 2 * LINE }];
+    const right = [line(1, 0), line(1, LINE)];
+    const bands = splitRowBands(0, 2 * LINE, [left, right]);
+    expect(bands).toEqual([{ top: 0, height: 2 * LINE, cut: null }]);
+  });
+
+  it("紧挨着的两个候选（<0.5px）只算一刀", () => {
+    // 两格的行首各差 0.2px：两处都不穿任何行盒，但只落一刀（靠下那一枚丢掉）。
+    const a = [{ top: 0, bottom: LINE }, { top: LINE, bottom: 2 * LINE }];
+    const b = [{ top: 0, bottom: LINE - 0.3 }, { top: LINE + 0.2, bottom: 2 * LINE + 0.2 }];
+    const bands = splitRowBands(0, 2 * LINE, [a, b]);
+    expect(bands).toEqual([
+      { top: 0, height: LINE, cut: null },
+      { top: LINE, height: LINE, cut: LINE },
+    ]);
+  });
+
+  it("两格行盒错开半格设备像素：容差按缩放放开后仍能下刀", () => {
+    // 装机件在 1.59 档量到两格行首差 0.795 视口 px（布局 0.5 = dpr 2 上的半格）：缺省 0.5 的容差把这一刀判成
+    // 穿过右格第一行，整行退成一枚整带；容差随缩放放到 1.59 之后，这半格仍算落在行沿上。
+    const a = [line(1, 0), line(1, LINE)];
+    const b = [line(1, 0.795), line(1, LINE + 0.795)];
+    expect(splitRowBands(0, 2 * LINE, [a, b])).toEqual([{ top: 0, height: 2 * LINE, cut: null }]);
+    const bands = splitRowBands(0, 2 * LINE, [a, b], 1.59);
+    expect(bands.map((b) => b.height)).toEqual([LINE, LINE]);
+    expect(bands[0]!.cut).toBeNull();
+  });
+
+  it("容差放宽也不许切穿错开超过容差的行盒", () => {
+    // 右格第二行整行压在左格第一行中间（错开一行高）：放宽到 1.59 也不下刀。
+    const a = [line(2, 0)];
+    const b = [line(1, 0), line(1, LINE)];
+    expect(splitRowBands(0, 2 * LINE, [a, b], 1.59)).toEqual([{ top: 0, height: 2 * LINE, cut: null }]);
+  });
+
+  it("行的上下沿本身不是刀口", () => {
+    const lines = [
+      { top: -LINE, bottom: 0 },
+      { top: 0, bottom: LINE },
+      { top: LINE, bottom: 2 * LINE },
+      { top: 2 * LINE, bottom: 3 * LINE },
+      { top: 3 * LINE, bottom: 4 * LINE },
+    ];
+    const bands = splitRowBands(0, 3 * LINE, [lines]);
+    expect(bands.length).toBe(3);
+    expect(bands[0]!.cut).toBeNull();
+    expect(total(bands)).toBeCloseTo(3 * LINE, 10);
+  });
+
+  it("每格的首行不是刀口：单行的行整枚一枚，不切出空的第一带", () => {
+    // 真机件上量到过这个假刀口：首行上沿进候选，一行的行被切成两带，垫片 1629px 插在格首、整行沉下去。
+    expect(splitRowBands(100, 100 + LINE, [[{ top: 100, bottom: 100 + LINE }]])).toEqual([
+      { top: 100, height: LINE, cut: null },
+    ]);
+    // 两格首行错开 6px：首行不进候选，这一带也就没有刀口（错开的那条线还会穿另一格的行盒）。
+    const a = [{ top: 106, bottom: 106 + LINE }];
+    const b = [{ top: 100, bottom: 100 + LINE }];
+    const bands = splitRowBands(100, 106 + LINE, [a, b]);
+    expect(bands).toHaveLength(1);
+    expect(bands[0]!.cut).toBeNull();
+    expect(bands[0]!.height).toBeCloseTo(6 + LINE, 10);
+  });
+
+  it("各行带的高加回去等于整行高（装箱不因切法换页）", () => {
+    const lines = Array.from({ length: 40 }, (_, i) => line(1, i * LINE));
+    const whole = splitRowBands(0, 40 * LINE, []);
+    const cut = splitRowBands(0, 40 * LINE, [lines]);
+    expect(total(whole)).toBeCloseTo(total(cut), 10);
+    expect(cut.length).toBe(40);
   });
 });

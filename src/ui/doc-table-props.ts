@@ -34,8 +34,8 @@ import { currentUnit, twipText, twipsFromUnit, unitDef } from "./doc-units.js";
  * 「左对齐」那一档落笔是**摘掉**那一句（这一族说左的方式就是什么都不写，写 `val="left"` 是替文件发明），
  * 与 `setCellAlign`、`syncRowHeader` 同一条口径；行高与标题行重复不在这一片：各有各的腿。第四格是
  * 「允许跨页断行」`w:trPr/w:cantSplit`（§17.4.5）：不勾写一枚空孩子，勾上把那枚摘掉——授权 46 件里
- * `w:cantSplit` 22 枚 / 2 件，形状全是空孩子。铺排这一版把每一行当整单位铺，所以「不勾」与纸面逐像素
- * 同一张；「勾上」（允许断行）只把文件那句话改对，把一行切成两张纸的那一刀仍未落笔（见 `RowPropsPatch`）。
+ * `w:cantSplit` 22 枚 / 2 件，形状全是空孩子。铺排这一版按行盒切可拆的行（`#234`），所以「不勾」把行钉成
+ * 整行一枚、「勾上」（允许断行）摘下孩子后行就能从行与行之间断开——两档都落到纸面上（见 `RowPropsPatch`）。
  */
 
 const STYLE_ID = "solo-table-props-styles";

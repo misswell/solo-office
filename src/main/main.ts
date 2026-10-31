@@ -493,6 +493,99 @@ function smoke(): void {
           };
           painterLeg = { hasButton: !!pb, armed, released, dirtyKept: (document.getElementById("title")?.textContent ?? "") === titP };
         }
+        // #234 表行真跨页：件「行内切纸-装机.docx」里第一张表唯一一行允许断（两格各 150 段字，铺出来把这一行
+        // 切成 5 截：4 道行内刀口、2 格各垫 4 枚），这一腿量的是**刚画完的那一版**：后面的打字/插表/撤销各腿
+        // 会改正文（第一次装机时它在末尾跑，表 A 已被改得不可断——页数读到 2、格内一枚垫片也没有）。件是专门的
+        // 夹具，认件名就跑，跑完才轮到别的腿。
+        // 第二张表唯一一行带 w:cantSplit（两格各 25 段字，一页装得下）。问五件事：① 允许断的那一行在纸上被
+        // 切成几截——格里的 .solo-sheet-gap 计数，且表里没有垫片行；② 每一道缝都有条带（条带数 == 格内垫片 +
+        // 垫片行）；③ 不许断的那一行整枚落在同一张纸上、格里一枚垫片都没有；④ 垫片是段落的孩子不是格的孩子
+        // （读回模型时 td 的孩子数不许变）；⑤ 存盘不脏。行数/文字/那句 w:cantSplit 由文件外的 python 反读。
+        const rsDoc = (document.getElementById("title")?.textContent ?? "").includes("行内切纸");
+        let rowSplitLeg = null;
+        if (rsDoc) {
+          // 起手等铺排停稳：文件是 solo:load 交过来的，画完正文才轮到 applySheets 量页，而量页本身分几趟落纸
+          // （补垫片、再量一遍）。只等条带出现会读到中间那一版——两格垫片还差 1px、行高差 2px。连读三次同一套
+          // 数（纸/条带/垫片/垫片总高）才算停稳。
+          let rsSig = "";
+          let rsSame = 0;
+          for (let tick = 0; tick < 60 && rsSame < 3; tick++) {
+            await wait(80);
+            const now = [
+              document.querySelectorAll("#view .page").length,
+              document.querySelectorAll("#view .page .solo-sheet-strip").length,
+              document.querySelectorAll("#view .page .solo-sheet-gap").length,
+              Math.round([...document.querySelectorAll("#view .page .solo-sheet-gap")].reduce((n, g) => n + g.getBoundingClientRect().height, 0)),
+            ].join("/");
+            rsSame = now === rsSig ? rsSame + 1 : 0;
+            rsSig = now;
+          }
+          const rsTables = [...document.querySelectorAll("#view .page table.doc-table")];
+          const rsA = rsTables.find((t) => (t.textContent ?? "").includes("甲"));
+          const rsB = rsTables.find((t) => (t.textContent ?? "").includes("丙"));
+          const rsGaps = (el) => (el ? [...el.querySelectorAll(".solo-sheet-gap")] : []);
+          const rsKids = (el) => (el ? [...el.querySelectorAll("td")].map((c) => c.children.length) : []);
+          const rsRows = (el) =>
+            el ? [...el.querySelectorAll("tr")].filter((tr) => !tr.classList.contains("solo-sheet-gap-row") && !tr.classList.contains("solo-repeat-header-row")).length : -1;
+          const rsGapRows = (el) => (el ? el.querySelectorAll("tr.solo-sheet-gap-row").length : -1);
+          const rsPages = () => [...document.querySelectorAll("#view .page")];
+          const gapsA = rsGaps(rsA);
+          const gapsB = rsGaps(rsB);
+          const rowA = rsA
+            ? [...rsA.querySelectorAll("tr")].find((tr) => !tr.classList.contains("solo-sheet-gap-row") && !tr.classList.contains("solo-repeat-header-row"))
+            : null;
+          const rowB = rsB ? [...rsB.querySelectorAll("tr")].find((tr) => !tr.classList.contains("solo-sheet-gap-row") && !tr.classList.contains("solo-repeat-header-row")) : null;
+          const statusCell = [...document.querySelectorAll(".solo-doc-status-loc")].find((b) => (b.title || "").indexOf("页数") === 0);
+          // 状态栏那一格照 WPS 写成「页面: 当前/总数」：总数在斜杠后面，拿第一个数字会把当前页当成页数。
+          const stTxt = statusCell ? statusCell.textContent || "" : "";
+          const stSlash = stTxt.indexOf("/");
+          const stTotal = stSlash >= 0 ? Number(stTxt.slice(stSlash + 1)) : -1;
+          const strips = document.querySelectorAll("#view .page .solo-sheet-strip").length;
+          const spansAll = document.querySelectorAll("#view .page .solo-sheet-gap").length;
+          const gapRowsAll = document.querySelectorAll("#view .page tr.solo-sheet-gap-row").length;
+          const stripEls = [...document.querySelectorAll("#view .page .solo-sheet-strip")];
+          // 每一道缝都得被一段空地推开：垫片落在**下页第一枚内容**之前，它的盒跨着条带（上沿在缝上方、下沿在缝下方）。
+          // 拿垫片的上沿去和条带对位是错的——同一道缝的行内那一刀按格各垫一枚，各格的上沿本来就不在缝上。
+          const cutEverySeam = stripEls.every((s) => {
+            const mid = s.getBoundingClientRect().top + 1;
+            return [...document.querySelectorAll("#view .page .solo-sheet-gap, #view .page tr.solo-sheet-gap-row")].some((g) => {
+              const r = g.getBoundingClientRect();
+              return r.top < mid && r.bottom > mid;
+            });
+          })
+            ? 1
+            : 0;
+          fire("solo:save");
+          await wait(900);
+          const rsBox = (el) => {
+            const b = el.getBoundingClientRect();
+            const p0 = rsPages()[0] ? rsPages()[0].getBoundingClientRect().top : 0;
+            return { t: Math.round(b.top - p0), b: Math.round(b.bottom - p0), h: Math.round(b.height) };
+          };
+          rowSplitLeg = {
+            pageEls: rsPages().length, rowA: rowA ? rsBox(rowA) : null, rowB: rowB ? rsBox(rowB) : null,
+            gapTops: gapsA.map((g) => Math.round(g.getBoundingClientRect().top - (rsPages()[0] ? rsPages()[0].getBoundingClientRect().top : 0))),
+            gapHs: gapsA.map((g) => Math.round(g.getBoundingClientRect().height)),
+            hasA: rsA ? 1 : 0, hasB: rsB ? 1 : 0,
+            rowsA: rsRows(rsA), rowsB: rsRows(rsB),
+            gapsA: gapsA.length, gapRowsA: rsGapRows(rsA), gapsB: gapsB.length, gapRowsB: rsGapRows(rsB),
+            inParaA: gapsA.filter((g) => g.parentElement && g.parentElement.classList.contains("para")).length,
+            inCellA: gapsA.filter((g) => g.parentElement && (g.parentElement.tagName === "TD" || g.parentElement.tagName === "TH")).length,
+            kidsA: rsKids(rsA), kidsB: rsKids(rsB),
+            wholeB: rowB
+              ? stripEls.every((s) => {
+                  const r = s.getBoundingClientRect();
+                  const b = rowB.getBoundingClientRect();
+                  return !(r.top > b.top + 1 && r.top < b.bottom - 1);
+                })
+                ? 1
+                : 0
+              : -1,
+            pages: stTotal, strips: strips, spansAll: spansAll, gapRowsAll: gapRowsAll,
+            cutEverySeam: cutEverySeam,
+            savedDirty: (document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0,
+          };
+        }
         const blocks = page.children.length;
         const last = page.children[blocks - 1];
         const range = document.createRange();
@@ -4517,7 +4610,8 @@ function smoke(): void {
             zoomBack.clones === zoom100.clones &&
             sameTops(zoomBack.tops, zoom100.tops),
         };
-        // #158：每一道缝都得有东西把它切开。条带的道数 == 段落垫片 + 垫片行，且状态栏「共 N 页」报的 N 与
+        // #158：每一道缝都得有东西把它切开。条带的道数 == 垫片**落点**的道数（段落/格内空 span 与垫片行
+        // 按位置去重；#234 的行内那一刀按格各垫一枚、同一道缝不再数成几道），且状态栏「共 N 页」报的 N 与
         // 条带数 + 1 同一份。旧写法在缝落进两枚表行之间时既不垫也不画（垫片进表格会改行高），于是纸数照旧往上涨、
         // 画出来的纸却少一道缝——两张纸糊在一起。DOM 门禁钉的是垫片行的形状，这一腿钉的是 shipping 盒子里
         // 「纸数与画出来的缝」不能再各说各话。
@@ -4525,10 +4619,14 @@ function smoke(): void {
           const spans = document.querySelectorAll("#view .page .solo-sheet-gap").length;
           const rows = document.querySelectorAll("#view .page tr.solo-sheet-gap-row").length;
           const strips = document.querySelectorAll("#view .page .solo-sheet-strip").length;
+          // 一道缝可以由几枚垫片切：行内那一刀按格垫（#234，一格一枚、都落在同一条刀口上），按落点去重才是
+          // 缝的道数。旧式相等（strips === spans + rows）在那个形状上会把一道缝数成两道。
+          const cuts = [...document.querySelectorAll("#view .page .solo-sheet-gap, #view .page tr.solo-sheet-gap-row")].map((el) => Math.round(el.getBoundingClientRect().top));
+          const seamCuts = [...new Set(cuts)].length;
           const cell = [...document.querySelectorAll(".solo-doc-status-loc")].find((b) => (b.title || "").indexOf("页数") === 0);
           const m = /([0-9]+)/.exec(cell ? cell.textContent || "" : "");
           const n = m ? Number(m[1]) : -1;
-          return { spans: spans, rows: rows, strips: strips, statusPages: n, cutEverySeam: strips === spans + rows, pagesMatch: n > 0 && strips + 1 === n };
+          return { spans: spans, rows: rows, strips: strips, seams: seamCuts, statusPages: n, cutEverySeam: strips === seamCuts, pagesMatch: n > 0 && strips + 1 === n };
         })();
         const docInsert = {
           tableRows,
@@ -4889,7 +4987,7 @@ function smoke(): void {
         const recovered = { cells: document.querySelectorAll(".sheet-wrap td").length, title: document.getElementById("title")?.textContent };
         // The run ends on a modified document, so quitting goes through the unsaved prompt.
         // A PDF the export asked for shows up in saveAsWrites, next to the pptx/xlsx saves.
-        return { docPart, bandLeg, bandTabsLeg, editMarksLeg, sortLeg, rulerLeg, painterLeg, leaderLeg, tabStopsLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, clearLeg, styleLeg, vertLeg, caseLeg, origLeg, origTableLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
+        return { docPart, bandLeg, bandTabsLeg, editMarksLeg, sortLeg, rowSplitLeg, rulerLeg, painterLeg, leaderLeg, tabStopsLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, clearLeg, styleLeg, vertLeg, caseLeg, origLeg, origTableLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, docNewPart, errorState, recovered };
       })()`;
       void last?.webContents
         .executeJavaScript(probe)

@@ -1046,7 +1046,10 @@ function renderTable(t: Table, doc: WordDocument, state: CommentState, gridPx?: 
       const shown = rev ? `${rev.author}${rev.date ? ` · ${rev.date.slice(0, 10)}` : ""} ${rev.kind === "del" ? "删除行" : "插入行"}` : "";
       const height = rowStyle(row);
       const header = row?.header ? ` ${TBL_HEADER_ATTR}="1"` : "";
-      return `<tr${carried}${header}${height ? ` style="${height}"` : ""}${shown ? ` title="${esc(shown)}"` : ""}>${cells
+      // 「允许跨页断行」不勾 = 这一行不许拆（`w:cantSplit`）。只盖「不许拆」这一档：缺席就是文件的缺省（允许），
+      // 而 `data-` 上多说一句「允许」会在重拼件里多出没人写的字节，与 `write-docx` 的「不说 = 允许」同一条口径。
+      const cantSplit = row?.keepTogether ? ` ${TBL_CANT_SPLIT_ATTR}="1"` : "";
+      return `<tr${carried}${header}${cantSplit}${height ? ` style="${height}"` : ""}${shown ? ` title="${esc(shown)}"` : ""}>${cells
         .map((c, c2) => {
           const merge = merges[r][c2]!;
           // The table's inside lines belong to the seam, so they draw on the cell that faces it, and a
@@ -1134,6 +1137,13 @@ export const CARRY_CLASS = "doc-carry";
  * 铺排（`doc-layout.ts`）与页缝重画按它认「开头连续的那几行」，所以两处读的是同一个字面。
  */
 export const TBL_HEADER_ATTR = "data-tbl-header";
+
+/**
+ * 「这一行不许跨页断开」（`w:trPr/w:cantSplit`，§17.4.5）在纸上那一句：文件写了才盖，没写 = 允许断行。
+ * 铺排（`doc-layout.ts` 的 `rowSplittable`）据此决定这一行是一枚整单位、还是按行盒切成几枚跨两张纸——
+ * 它是文件说的话，不是页面装饰，读回模型时不认它（行自己的 `RowInfo.keepTogether` 由归属号认领）。
+ */
+export const TBL_CANT_SPLIT_ATTR = "data-cant-split";
 
 /**
  * A block the model keeps as the source text it came in with: what is inside it is shown, and it is

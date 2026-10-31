@@ -201,7 +201,7 @@ describe("docx table rendering", () => {
     // 画 23px（`.scratch/row-height-css.html`），而表里的行高是铺排量的依据（`doc-layout.ts` 一行算一枚），
     // 认不到的下限就是「表比文件说的矮」。`height` 才是内容短时按它高、内容长时自己长的下限。
     // 第一行还带着文件说的标题行那一句（`w:trPr/w:tblHeader`），纸面按同一句盖 `data-tbl-header`。
-    expect(html).toContain('<tr data-tbl-header="1" style="height:40px;">');
+    expect(html).toContain('<tr data-tbl-header="1" data-cant-split="1" style="height:40px;">');
     expect(html).toContain('<tr style="display:none;height:20px;">');
   });
 
@@ -212,7 +212,7 @@ describe("docx table rendering", () => {
     const html = renderWord(doc);
     // 这一版没法把表行压到内容之下，exact 那句的「裁掉」画不出来；但下限必须画出来，且两句都不许退回
     // min-height（那条在这套引擎里整条无效，见 `.scratch/row-height-css.html`）。
-    expect(html).toContain('<tr data-tbl-header="1" style="height:40px;">');
+    expect(html).toContain('<tr data-tbl-header="1" data-cant-split="1" style="height:40px;">');
     expect(html).toContain('<tr style="display:none;height:20px;">');
     expect(html).not.toContain("min-height:");
   });

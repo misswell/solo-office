@@ -549,6 +549,9 @@ export class DeckEditor {
       shape.height = Math.round(box.height);
     }
     this.styleShape(drag.el, shape);
+    // 「溢出时缩字」跟着框走：同一个基字号重新量，框放大就回到文件写的字号，
+    // 框缩小再收下来。移动不改盒子的内高，不必重量。
+    if (drag.mode === "resize") fitShrunkText(drag.el);
     this.placeSelection();
   }
 

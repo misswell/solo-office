@@ -6350,15 +6350,20 @@ export type TablePropsPatch = {
 };
 
 /**
- * 「表格属性」那一击**行**那一段碰得到的句子：行自己那句对齐 `w:trPr/w:jc`（§17.4.75）。
- * 缺的键 = 这一句不改；`""` = 摘掉那一句，回到「没说」那一档（左）。
+ * 「表格属性」那一击**行**那一段碰得到的句子：行自己那句对齐 `w:trPr/w:jc`（§17.4.75）与
+ * 「允许跨页断行」那一枚 `w:trPr/w:cantSplit`（§17.4.5）。
+ * 缺的键 = 这一句不改；对齐的 `""` = 摘掉那一句，回到「没说」那一档（左）；`keepTogether: false` 同理，
+ * 摘掉 `w:cantSplit` 就是「允许」——这一族说「允许」的方式就是这一枚孩子不在。
  *
- * **行高、允许跨页断行、标题行重复不在这一份里**：前两句各有各的腿（`setCellHeight` 落 `w:trHeight`、
- * 表格工具「标题行重复」落 `w:tblHeader`），对话框再摆一格就是两个主人写同一句；`w:cantSplit` 则是
- * 铺排里还没有落笔处——引擎把每一行当成一枚整单位铺（`doc-layout.ts:unitsOfBlock` 那一支），勾与不勾
- * 画出来是同一张纸，摆一格就是写一句纸面不认的字节。
+ * **行高与标题行重复不在这一份里**：两句各有各的腿（`setCellHeight` 落 `w:trHeight`、表格工具
+ * 「标题行重复」落 `w:tblHeader`），对话框再摆一格就是两个主人写同一句。
+ *
+ * `w:cantSplit` 的纸面这一版**只认「不许断」那一档**：铺排把每一行当成一枚整单位铺
+ * （`doc-layout.ts:unitsOfBlock` 那一支），所以 `keepTogether: true` 与纸面逐像素同一张；
+ * 「允许」那一档（摘掉这枚孩子）纸面还切不开一行——续行拆到下一页的那一刀
+ * （`.scratch/HANDOFF.md` #222 待办）没落笔之前，这一档只把文件里那句话改对。
  */
-export type RowPropsPatch = { align?: "left" | "center" | "right" | "" };
+export type RowPropsPatch = { align?: "left" | "center" | "right" | ""; keepTogether?: boolean };
 
 /**
  * 「表格属性」那一次「确定」的全部落笔：表自己那几句 + 选区盖住的每一行那几句。
@@ -6528,6 +6533,28 @@ export function syncRowAlign(row: RowInfo, align: string): void {
   }
   const prefix = slotPrefix(row.slots);
   row.slots = upsertSlot(row.slots, "jc", `<${prefix}:jc ${prefix}:val="${align}"/>`, TRPR_CHILD_ORDER);
+}
+
+/**
+ * 「允许跨页断行」那一击写回行自己那句 `w:trPr/w:cantSplit`（§17.4.5）：勾掉（`on = true`）写一枚空孩子，
+ * 勾上（允许断行，`on = false`）把那一枚摘掉。与 `syncRowHeader` 同一条口径：这一族说「允许」的方式就是
+ * 这枚孩子不在，读回来也把它当缺席，补一枚 `<w:cantSplit w:val="0"/>` 只是多一句没人读的字节。
+ *
+ * 字段给铺排与写出读（读侧 `rowStyleOf` 早已把它并进 `RowInfo.keepTogether`，`write-docx.ts:rowPropsInner`
+ * 也早按字段拼），孩子给「拒绝」与读过件的行读——只改字段存盘会发现件里那一枚还在（或不在）。
+ * 只动这一枚孩子，别的孩子原样留在原位，插入位置按 `CT_TrPr` 的孩子序（授权 46 份里它排在 `w:trHeight`
+ * 之前：`.scratch/trpr-order-audience.py` 的 `cantSplit+trHeight` 一段）。
+ */
+export function syncRowCantSplit(row: RowInfo, on: boolean): void {
+  if (on) row.keepTogether = true;
+  else delete row.keepTogether;
+  if (!row.slots?.length) return;
+  if (!on) {
+    row.slots = row.slots.filter((s) => s.tag !== "cantSplit");
+    return;
+  }
+  const prefix = slotPrefix(row.slots);
+  row.slots = upsertSlot(row.slots, "cantSplit", `<${prefix}:cantSplit/>`, TRPR_CHILD_ORDER);
 }
 
 /** 一套属性在孩子里说过的那几枚：别人的待裁决不算进这一份快照。 */

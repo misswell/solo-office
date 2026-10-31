@@ -1,7 +1,7 @@
 import type { Block, BorderSet, Carried, CarriedInline, CellStyle, FormatRevision, HeaderFooter, HfSegment, Inline, LineSpacingRule, MarginTwips, ParaStyle, PageGeometry, PageSetup, Paragraph, ParagraphFormatRevision, PropSlot, Revision, RevisionEntry, RowInfo, RowStyle, RunStyle, Section, Table, TableBorder, TableCell, TablePropsDialogPatch, TablePropsPatch, TableStyle, WordDocument } from "../core/docx.js";
 import type { CommentAnchor, DocComment } from "../core/comments.js";
 import { bodyShape, commentTexts } from "../core/comments.js";
-import { DEFAULT_SECTION, EAST_ASIAN_TEXT, MARGIN_SIDES, RUN_STYLE_KEYS, applyFacePick, applyRunPatch, borderDelta, carriedShape, cellShapeOf, clearRunStyle, countTexts, hasLine, lineGridPitchTwips, ownParaStyle, ownRunStyle, paraSpacingPitch, paragraphTextsOf, rowShapeOf, runStyleOf, samePropValue, sectionEndsOf, signCellPlaceRevision, signCellRevision, signRowRevision, signTableRevision, stampNow, syncCellBox, syncCellVAlign, syncParaSlots, syncRowAlign, syncRowHeader, syncRowHeight, syncTableBox, syncTableProps, tableShapeOf, twipsToPx } from "../core/docx.js";
+import { DEFAULT_SECTION, EAST_ASIAN_TEXT, MARGIN_SIDES, RUN_STYLE_KEYS, applyFacePick, applyRunPatch, borderDelta, carriedShape, cellShapeOf, clearRunStyle, countTexts, hasLine, lineGridPitchTwips, ownParaStyle, ownRunStyle, paraSpacingPitch, paragraphTextsOf, rowShapeOf, runStyleOf, samePropValue, sectionEndsOf, signCellPlaceRevision, signCellRevision, signRowRevision, signTableRevision, stampNow, syncCellBox, syncCellVAlign, syncParaSlots, syncRowAlign, syncRowCantSplit, syncRowHeader, syncRowHeight, syncTableBox, syncTableProps, tableShapeOf, twipsToPx } from "../core/docx.js";
 import type { CellWhere, TableEdit } from "../core/doc-table-ops.js";
 import { allCells, applyRowHeights, cellOuterSides, cellRangeFor, cellRect, columnCells, cellsInRect, cellsInSweep, deleteCellHere, deleteColumnHere, deleteRowHere, deleteTableBlock, distributeColumns, distributeRows, gridColumns, gridWidths, insertCellHere, insertColumnHere, insertRowHere, mergeHere, pasteAppendTableHere, pasteAsNestedTableHere, setColumnWidth, splitHere, splitTableAt, tableToText, type RowHeightMove, type TableTextSeparator } from "../core/doc-table-ops.js";
 import { IMAGE_EXT_BY_MIME } from "../core/media.js";
@@ -4299,16 +4299,19 @@ export class DocEditor {
     const first = segments[0]!.table;
     // 行那一句逐行问（与 `setCellHeight` 同一口径：选区盖住哪几行就问哪几行）。编辑器自己造的行没有
     // `RowInfo`，它「什么都没说」——读端不替它现造一份，那是写端的事。
-    const rowAligns = segments.flatMap((segment) => {
+    const rowInfos = segments.flatMap((segment) => {
       const indexes = [...new Set(segment.cells.map((where) => where.row))].sort((a, b) => a - b);
-      return indexes.map((index) => segment.table.rows[index]?.[0]?.row?.jc);
+      return indexes.map((index) => segment.table.rows[index]?.[0]?.row);
     });
+    const rowAligns = rowInfos.map((info) => info?.jc);
+    const rowKeeps = rowInfos.map((info) => info?.keepTogether === true);
     const state: TablePropsState = {
       ...(first.align !== undefined ? { align: first.align } : {}),
       ...(first.indentTwips !== undefined ? { indentTwips: first.indentTwips } : {}),
       ...(first.layout !== undefined ? { layout: first.layout } : {}),
       ...(first.cellMargin !== undefined ? { cellMargin: { ...first.cellMargin } } : {}),
       ...(rowAligns[0] !== undefined ? { rowAlign: rowAligns[0] } : {}),
+      rowKeepTogether: rowKeeps[0] === true,
     };
     // 逐格问「选的这几张表在这一句上说不一致」：不一致的那一格摆「不改」而不是第一张的说法，
     // 否则原样确定会把这些表**改成第一张的**，用户一个字没填却动了文件。
@@ -4330,6 +4333,10 @@ export class DocEditor {
     }
     if (rowAligns.length > 1 && rowAligns.some((v) => v !== rowAligns[0])) {
       state.differ = { ...state.differ, rowAlign: true };
+      state.mixed = true;
+    }
+    if (rowKeeps.length > 1 && rowKeeps.some((v) => v !== rowKeeps[0])) {
+      state.differ = { ...state.differ, rowKeepTogether: true };
       state.mixed = true;
     }
     return state;
@@ -4376,8 +4383,9 @@ export class DocEditor {
       return [{ table, diff, wasShape: tableShapeOf(table), wasXml: table.tblPrXml }];
     });
     const wantRow = patch.rows?.align;
-    const rowEdits: { info: RowInfo; was: RowStyle; wasSlots: PropSlot[] }[] = [];
-    if (wantRow !== undefined) {
+    const wantKeep = patch.rows?.keepTogether;
+    const rowEdits: { info: RowInfo; align?: string; keep?: boolean; was: RowStyle; wasSlots: PropSlot[] }[] = [];
+    if (wantRow !== undefined || wantKeep !== undefined) {
       const seen = new Set<RowInfo>();
       for (const segment of this.selectionTableSegments()) {
         for (const where of segment.cells) {
@@ -4388,9 +4396,18 @@ export class DocEditor {
             info = {};
             for (const cell of row) cell.row = info;
           }
-          if (seen.has(info) || (info.jc ?? "") === wantRow) continue;
+          if (seen.has(info)) continue;
+          const align = wantRow !== undefined && (info.jc ?? "") !== wantRow ? wantRow : undefined;
+          const keep = wantKeep !== undefined && (info.keepTogether === true) !== wantKeep ? wantKeep : undefined;
+          if (align === undefined && keep === undefined) continue;
           seen.add(info);
-          rowEdits.push({ info, was: rowShapeOf(info), wasSlots: info.slots ?? [] });
+          rowEdits.push({
+            info,
+            ...(align !== undefined ? { align } : {}),
+            ...(keep !== undefined ? { keep } : {}),
+            was: rowShapeOf(info),
+            wasSlots: info.slots ?? [],
+          });
         }
       }
     }
@@ -4403,10 +4420,11 @@ export class DocEditor {
         signTableRevision(edit.table, { id: this.revSeq, author: this.authorName, date: stampNow() }, edit.wasShape, edit.wasXml);
       }
     }
-    if (wantRow !== undefined) {
-      if (rowEdits.length && this.trackRevisions) this.revSeq += 1;
+    if (rowEdits.length) {
+      if (this.trackRevisions) this.revSeq += 1;
       for (const edit of rowEdits) {
-        syncRowAlign(edit.info, wantRow);
+        if (edit.align !== undefined) syncRowAlign(edit.info, edit.align);
+        if (edit.keep !== undefined) syncRowCantSplit(edit.info, edit.keep);
         if (this.trackRevisions)
           signRowRevision(edit.info, { id: this.revSeq, author: this.authorName, date: stampNow() }, edit.was, edit.wasSlots);
       }

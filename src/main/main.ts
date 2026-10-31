@@ -2200,7 +2200,16 @@ function smoke(): void {
             // #216：行那一句是**另一格**（tp-row-align），读的是光标所在那一行自己那句，不被表那句带着走。
             rowAlign: tpwField("tp-row-align")?.value ?? "?",
             rowOpts: tpwField("tp-row-align")?.options?.length ?? 0,
+            // #222：「允许跨页断行」勾读的是那一行有没有 w:cantSplit（没写 = 允许 = 勾着）。
+            rowBreak: tpwField("tp-row-allow-break")?.checked === true ? 1 : 0,
           });
+          // 勾这一类不认 .value，要落的是 checked 再发一次 change（与固定列宽那枚同一条路）。
+          const tpwCheck = (el, on) => {
+            if (!el) return 0;
+            el.checked = on;
+            el.dispatchEvent(new Event("change", { bubbles: true }));
+            return 1;
+          };
           const tpwApply = () => {
             const b = tpwDlg()?.querySelector(".solo-tp-apply");
             return b ? (b.click(), 1) : 0;
@@ -2244,11 +2253,22 @@ function smoke(): void {
             const dirtyBefore = dirtyNow();
             const setIndent = tpwSet(tpwField("tp-indent"), "0", "input");
             const setRow = tpwSet(tpwField("tp-row-align"), "left", "change");
+            // #222：末行本来没说 w:cantSplit（勾着 = 允许断行）；勾掉这一下要在盘上落一枚空孩子。
+            const setBreak = tpwCheck(tpwField("tp-row-allow-break"), false);
             await wait(140);
             const err = tpwDlg()?.querySelector(".solo-tp-error")?.textContent ?? "";
             const applied = tpwApply();
             await wait(420);
-            tpwSteps.push({ name: "摆3", ...o, echo: echo, dirtyBefore: dirtyBefore, setIndent: setIndent, setRow: setRow, err: err, applied: applied, gone: tpwDlg() ? 0 : 1, before: before, rowsBefore: rowsBefore, rows: tpwRowRead("摆3"), after: tpwRead("摆3"), dirtyAfter: dirtyNow() });
+            tpwSteps.push({ name: "摆3", ...o, echo: echo, dirtyBefore: dirtyBefore, setIndent: setIndent, setRow: setRow, setBreak: setBreak, err: err, applied: applied, gone: tpwDlg() ? 0 : 1, before: before, rowsBefore: rowsBefore, rows: tpwRowRead("摆3"), after: tpwRead("摆3"), dirtyAfter: dirtyNow() });
+          }
+          // #222 续：再开一次只读起手——上一击写进模型的那枚 w:cantSplit 得让「允许跨页断行」灭掉。
+          // 「取消」不动模型也不写盘：盘上那件就是摆3落下的样子，正好交给本节末尾的 solo:save 与外部反读。
+          {
+            const o = await tpwOpen("摆3", 1);
+            const echo = tpwEcho();
+            tpwDlg()?.querySelector(".solo-tp-cancel")?.click();
+            await wait(220);
+            tpwSteps.push({ name: "摆3-回显", ...o, echo: echo, gone: tpwDlg() ? 0 : 1 });
           }
           fire("solo:save");
           await wait(1000);

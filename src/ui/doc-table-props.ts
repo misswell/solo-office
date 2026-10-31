@@ -32,8 +32,10 @@ import { currentUnit, twipText, twipsFromUnit, unitDef } from "./doc-units.js";
  * 所以行这一档在 WPS 的 ribbon 声明里没有主人——摆在这一片靠的是「件里那句话得有地方改」，
  * 而**它到底摆在哪张对话框的哪一格仍是未取证**。
  * 「左对齐」那一档落笔是**摘掉**那一句（这一族说左的方式就是什么都不写，写 `val="left"` 是替文件发明），
- * 与 `setCellAlign`、`syncRowHeader` 同一条口径；行的其余三格不在这一片：`w:trHeight` 与 `w:tblHeader`
- * 各有各的腿，`w:cantSplit` 在铺排里还没有落笔处（见 `RowPropsPatch` 头注）。
+ * 与 `setCellAlign`、`syncRowHeader` 同一条口径；行高与标题行重复不在这一片：各有各的腿。第四格是
+ * 「允许跨页断行」`w:trPr/w:cantSplit`（§17.4.5）：不勾写一枚空孩子，勾上把那枚摘掉——授权 46 件里
+ * `w:cantSplit` 22 枚 / 2 件，形状全是空孩子。铺排这一版把每一行当整单位铺，所以「不勾」与纸面逐像素
+ * 同一张；「勾上」（允许断行）只把文件那句话改对，把一行切成两张纸的那一刀仍未落笔（见 `RowPropsPatch`）。
  */
 
 const STYLE_ID = "solo-table-props-styles";
@@ -83,6 +85,8 @@ export type TablePropsState = {
   cellMargin?: MarginTwips;
   /** 选区盖住的那几行说的对齐（`w:trPr/w:jc`）；件里没这句时留空，格子停在「不改」。 */
   rowAlign?: string;
+  /** 选区盖住的那几行是不是都写了 `w:cantSplit`（「允许跨页断行」不勾）；没写 = 允许。 */
+  rowKeepTogether?: boolean;
   /** 选中的几张表说法不一致：格子摆第一张的，不一致的那几格摆「不改」。 */
   mixed?: boolean;
   /** 哪一句在所选几张表之间不一致——那一格不预填，免得「原样确定」把别的表改成第一张的说法。 */
@@ -93,6 +97,8 @@ export type TablePropsState = {
     margin?: Partial<Record<keyof MarginTwips, boolean>>;
     /** 所选几行各说各的（同一张表里两行一行居中一行没说，最常见于跨行选区）。 */
     rowAlign?: boolean;
+    /** 所选几行里有的写了 `w:cantSplit`、有的没写：那枚勾摆「混合」态。 */
+    rowKeepTogether?: boolean;
   };
 };
 
@@ -151,6 +157,7 @@ export function showTablePropsDialog(state: TablePropsState, apply: (patch: Tabl
     <div><span class="solo-tp-hint">默认单元格边距（${unit}）</span><div class="solo-tp-margin">${marginCells}</div></div>
     <div class="solo-tp-section"><span>行</span></div>
     <label class="solo-tp-row"><span>对齐</span><select name="tp-row-align">${alignOptions}</select></label>
+    <label class="solo-tp-check"><input type="checkbox" name="tp-row-allow-break" checked> 允许跨页断行</label>
     <p class="solo-tp-hint" data-hint="tp-mixed"></p>
     <p class="solo-tp-error" role="status"></p>
     <footer><button type="button" class="solo-tp-cancel">取消</button><button type="submit" class="solo-tp-apply">确定</button></footer></form>`;
@@ -158,6 +165,7 @@ export function showTablePropsDialog(state: TablePropsState, apply: (patch: Tabl
   const box = (name: string): HTMLInputElement => dialog.querySelector<HTMLInputElement>(`[name="${name}"]`)!;
   const pick = dialog.querySelector<HTMLSelectElement>('[name="tp-align"]')!;
   const rowPick = dialog.querySelector<HTMLSelectElement>('[name="tp-row-align"]')!;
+  const allowBreak = box("tp-row-allow-break");
   const fixed = box("tp-fixed");
   const error = dialog.querySelector<HTMLElement>(".solo-tp-error")!;
   const hint = dialog.querySelector<HTMLElement>('[data-hint="tp-mixed"]')!;
@@ -190,6 +198,10 @@ export function showTablePropsDialog(state: TablePropsState, apply: (patch: Tabl
     if (!ALIGNS.some(([v]) => v === state.rowAlign)) rowPick.add(new Option(`件里：${state.rowAlign}`, state.rowAlign));
     rowPick.value = state.rowAlign;
   }
+  // 「允许跨页断行」：件里写了 `w:cantSplit` 才是「不允许」，没写就是允许——勾是「允许」那一面。
+  // 几行各说各的时摆原生横线（混合态），用户一碰它就落到确定的勾/不勾。
+  allowBreak.checked = state.rowKeepTogether !== true;
+  allowBreak.indeterminate = state.differ?.rowKeepTogether === true;
   hint.textContent = state.mixed
     ? "所选的几张表、几行说法不一致：不一致的那几格是「不改」，填了/勾了的格子写给每一张表、每一行。"
     : "";
@@ -199,8 +211,15 @@ export function showTablePropsDialog(state: TablePropsState, apply: (patch: Tabl
     if (pick.value !== MIXED && pick.value !== (state.align ?? "")) patch.align = pick.value as TablePropsPatch["align"];
     // 行这一档落笔前换一次形状：「左对齐」= 摘掉那一句（`""`），不是补一句 `val="left"`——
     // 授权 46 件里 190 枚说的全是 `center`、`left` 一枚也没明写过，替文件写一句它没说过的拼法就是发明。
+    const rows: RowPropsPatch = {};
     if (rowPick.value !== MIXED && rowPick.value !== (state.rowAlign ?? ""))
-      patch.rows = { align: (rowPick.value === "left" ? "" : rowPick.value) as RowPropsPatch["align"] };
+      rows.align = (rowPick.value === "left" ? "" : rowPick.value) as RowPropsPatch["align"];
+    // 混合态还没被碰过时这一格不改；碰过之后，几行混着说时勾与不勾都是用户的意思。
+    if (!allowBreak.indeterminate) {
+      const keep = !allowBreak.checked;
+      if (state.differ?.rowKeepTogether || keep !== (state.rowKeepTogether === true)) rows.keepTogether = keep;
+    }
+    if (Object.keys(rows).length) patch.rows = rows;
     const indent = readTwips(box("tp-indent"), true);
     if (indent === null) {
       error.textContent = "左缩进要填数字（可以是负数），留空表示不改。";

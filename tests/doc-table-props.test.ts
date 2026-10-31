@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { WordDocument, rowShapeOf, signRowRevision, signTableRevision, syncRowAlign, syncTableProps, tableShapeOf } from "../src/core/docx.js";
+import { WordDocument, rowShapeOf, signRowRevision, signTableRevision, syncRowAlign, syncRowCantSplit, syncTableProps, tableShapeOf } from "../src/core/docx.js";
 import type { RowInfo, Table } from "../src/core/docx.js";
 import { writeDocx } from "../src/core/write-docx.js";
 import { renderWord } from "../src/core/render.js";
@@ -405,5 +405,91 @@ describe("docx 表格属性：行那一句 w:trPr/w:jc 的落笔处", () => {
     const back = save(reopened);
     expect(back).not.toContain("<w:trPrChange");
     expect(trPrOf(back, 0)).toBe('<w:trPr><w:cantSplit/><w:trHeight w:val="600"/><w:jc w:val="center"/></w:trPr>');
+  });
+});
+
+/**
+ * 「表格属性」行那一段的「允许跨页断行」`w:trPr/w:cantSplit`（§17.4.5）。受众是授权 46 件里 22 枚 / 2 件，
+ * 形状全是空孩子（`.scratch/trpr-order-audience.py`）；件里的排法是它坐在 `w:trHeight` 之前。
+ *
+ * 读侧（`rowStyleOf` 并进 `RowInfo.keepTogether`）、写出（`rowPropsInner`）本来就在；这一族补的是落笔处。
+ * 同一套 `ROWS` 夹具里第 1 行带着这枚孩子、第 3 行只带 `w:jc`、第 4 行整枚 `w:trPr` 都没有。
+ */
+describe("docx 表格属性：行「允许跨页断行」w:trPr/w:cantSplit 的落笔处", () => {
+  const ROWS = pack(
+    `<w:tbl><w:tblPr><w:tblStyle w:val="a3"/><w:tblW w:w="0" w:type="auto"/><w:tblLook w:val="04A0"/></w:tblPr>` +
+      `<w:tblGrid><w:gridCol w:w="1800"/></w:tblGrid>` +
+      `<w:tr><w:trPr><w:cantSplit/><w:trHeight w:val="600"/><w:jc w:val="center"/></w:trPr>` +
+      `<w:tc><w:p><w:r><w:t>一</w:t></w:r></w:p></w:tc></w:tr>` +
+      `<w:tr><w:trPr><w:trHeight w:val="600" w:hRule="atLeast"/></w:trPr>` +
+      `<w:tc><w:p><w:r><w:t>二</w:t></w:r></w:p></w:tc></w:tr>` +
+      `<w:tr><w:trPr><w:jc w:val="center"/></w:trPr>` +
+      `<w:tc><w:p><w:r><w:t>三</w:t></w:r></w:p></w:tc></w:tr>` +
+      `<w:tr><w:tc><w:p><w:r><w:t>四</w:t></w:r></w:p></w:tc></w:tr>` +
+      `</w:tbl>`,
+  );
+
+  it("允许断行 = 摘掉那一枚空孩子，不写 `val=\"0\"`；兄弟孩子与别的行逐字节不动", () => {
+    const doc = open(ROWS);
+    expect(rowInfoAt(doc, 0)?.keepTogether).toBe(true);
+    syncRowCantSplit(rowInfoAt(doc, 0)!, false);
+    expect(rowInfoAt(doc, 0)?.keepTogether).toBeUndefined();
+    const xml = save(doc);
+    expect(trPrOf(xml, 0)).toBe('<w:trPr><w:trHeight w:val="600"/><w:jc w:val="center"/></w:trPr>');
+    expect(xml).not.toContain("cantSplit");
+    // 正控制：没被点名的行留在原地。
+    expect(trPrOf(xml, 1)).toBe('<w:trPr><w:trHeight w:val="600" w:hRule="atLeast"/></w:trPr>');
+  });
+
+  it("不许断行：新的一枚按 `CT_TrPr` 的序坐在 `w:trHeight` 之前", () => {
+    const doc = open(ROWS);
+    const info = rowInfoAt(doc, 2)!;
+    syncRowCantSplit(info, true);
+    expect(info.slots?.map((s) => s.tag)).toEqual(["cantSplit", "jc"]);
+    expect(trPrOf(save(doc), 2)).toBe('<w:trPr><w:cantSplit/><w:jc w:val="center"/></w:trPr>');
+  });
+
+  it("编辑器造的行（整枚 `w:trPr` 都没有）：字段就够，写出器按模型拼这一枚", () => {
+    const doc = open(ROWS);
+    const table = tableOf(doc);
+    expect(rowInfoAt(doc, 3)).toBeUndefined();
+    const info: RowInfo = {};
+    for (const cell of table.rows[3]!) cell.row = info;
+    syncRowCantSplit(info, true);
+    expect(trPrOf(save(doc), 3)).toBe("<w:trPr><w:cantSplit/></w:trPr>");
+    // 再允许：字段与字节同一步退，整枚 `w:trPr` 回到不存在（没有别的孩子要写）。
+    syncRowCantSplit(info, false);
+    expect(trPrOf(save(doc), 3)).toBe("");
+  });
+
+  it("存了再开还是那枚孩子，第二次存同一串字节", () => {
+    const doc = open(ROWS);
+    syncRowCantSplit(rowInfoAt(doc, 1)!, true);
+    const once = writeDocx(doc);
+    const xml = text(OpcPackage.from(once).bytes("word/document.xml")!);
+    const again = open(once);
+    expect(rowInfoAt(again, 1)?.keepTogether).toBe(true);
+    expect(trPrOf(text(OpcPackage.from(writeDocx(again)).bytes("word/document.xml")!), 1)).toBe(
+      '<w:trPr><w:cantSplit/><w:trHeight w:val="600" w:hRule="atLeast"/></w:trPr>',
+    );
+    expect(text(OpcPackage.from(writeDocx(again)).bytes("word/document.xml")!)).toBe(xml);
+  });
+
+  it("开着修订：记录里带着改之前那一套，拒绝把 `w:cantSplit` 与字段一起放回原位", () => {
+    const doc = open(ROWS);
+    const info = rowInfoAt(doc, 0)!;
+    const was = rowShapeOf(info);
+    const wasSlots = info.slots ?? [];
+    syncRowCantSplit(info, false);
+    signRowRevision(info, { id: 88, author: "顾峰" }, was, wasSlots);
+    const bytes = writeDocx(doc);
+    const xml = text(OpcPackage.from(bytes).bytes("word/document.xml")!);
+    expect(xml).toContain('<w:trPrChange w:id="88" w:author="顾峰">');
+    expect(/<w:trPrChange[\s\S]*?<\/w:trPrChange>/.exec(xml)?.[0]).toContain("<w:cantSplit/>");
+
+    const reopened = open(bytes);
+    expect(reopened.resolveRevisions("reject", 88)).toBe(1);
+    expect(rowInfoAt(reopened, 0)).toMatchObject({ keepTogether: true, heightTwips: 600, jc: "center" });
+    expect(trPrOf(save(reopened), 0)).toBe('<w:trPr><w:cantSplit/><w:trHeight w:val="600"/><w:jc w:val="center"/></w:trPr>');
   });
 });

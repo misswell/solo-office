@@ -232,6 +232,32 @@
       button.rb:hover { background: #eaf2fd; border-color: #d6e4fb; }
       button.rb:disabled { opacity: .35; cursor: default; }
       button.rb.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+      /* WPS 那一档的命令钮是「图标在上、字在下」。图标是自家画的 24×24 细线 SVG（WPS 那边是彩色位图，
+         形状不同是已知差别，图形资源一份也没搬）；图标 span 里没有文字节点，按钮的 textContent 仍是那行字。
+         高度 2 + 20 + gap 1 + 行 12 + 1 = 36，压得住「命令行 + 组名行」那 64 px。 */
+      .ribbon.tabbed button.rb.ico {
+        display: inline-flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 1px;
+        min-width: 38px;
+        padding: 2px 5px 1px;
+        line-height: 1;
+      }
+      .ribbon.tabbed button.rb.ico .ic { display: block; width: 20px; height: 20px; color: #3f4750; }
+      .ribbon.tabbed button.rb.ico .ic svg {
+        display: block;
+        width: 100%;
+        height: 100%;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.5;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+      .ribbon.tabbed button.rb.ico .lb { font-size: 11px; line-height: 12px; white-space: nowrap; }
+      .ribbon.tabbed button.rb.ico.on .ic { color: #fff; }
       /* 字体框与字号框在 WPS 里同挂 `RB_Font` 的 `font_info_pair`（`KxWpsFontComboBoxCommand idMso="Font"` 写
          `minimumWidth="130"`、`layoutOnLeft="true"`，字号紧跟其后），所以这一对必须是同一只盒子：高度在这里写死，
          不靠 `<select>` 的 UA 默认值——`<input>` 自己量出来是 20，两格并排就错开 1px 顶边。宽度才各自说。 */

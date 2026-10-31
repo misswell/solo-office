@@ -386,6 +386,152 @@ const BORDER_LEGS: Record<"para" | "table" | "cells", [string, string][]> = {
   ],
 };
 
+/**
+ * 命令钮上的图标：24×24 的细线 SVG，全是自家画的（WPS 那套是装机件里的彩色位图，形状不同是已知差别，
+ * 一份图形资源也不搬）。键是自家命令名，不是 WPS 的 `icon="..."` 名。
+ * 图标里不放 `<text>`：按钮的 `textContent` 必须仍等于那行字——DOM 探针与烟测都按文字找按钮。
+ */
+const RIBBON_ICONS: Record<string, string> = {
+  undo: "<path d='M9 14 4 9l5-5'/><path d='M4 9h10.5a5.5 5.5 0 0 1 0 11H9'/>",
+  redo: "<path d='M15 14l5-5-5-5'/><path d='M20 9H9.5a5.5 5.5 0 0 0 0 11H15'/>",
+  rowAbove: "<path d='M4 4h16'/><path d='M12 8v9'/><path d='M8.5 11.5 12 8l3.5 3.5'/>",
+  rowBelow: "<path d='M4 20h16'/><path d='M12 16V7'/><path d='M8.5 12.5 12 16l3.5-3.5'/>",
+  colLeft: "<path d='M4 4v16'/><path d='M8 12h9'/><path d='M13.5 8.5 17 12l-3.5 3.5'/>",
+  colRight: "<path d='M20 4v16'/><path d='M16 12H7'/><path d='M10.5 8.5 7 12l3.5 3.5'/>",
+  wrap: "<path d='M4 6h16M4 12h11a3 3 0 0 1 0 6h-2'/><path d='M15 15l-2 3 2 3'/>",
+  bold: "<path d='M8 5h5a3 3 0 0 1 0 6H8zM8 11h6a3 3 0 0 1 0 6H8z'/>",
+  italic: "<path d='M10 5h7M14 19H7M14 5l-4 14'/>",
+  underline: "<path d='M7 5v6a5 5 0 0 0 10 0V5M6 20h12'/>",
+  strike: "<path d='M5 12h14M8 8a4 4 0 0 1 8 0M16 16a4 4 0 0 1-8 0'/>",
+  superscript: "<path d='M4 17 9 6l5 11M6 13h6'/><path d='M16 9h4v4h-4z'/>",
+  subscript: "<path d='M4 15 9 4l5 11M6 11h6'/><path d='M16 16h4v4h-4z'/>",
+  alignLeft: "<path d='M4 6h16M4 10h10M4 14h16M4 18h7'/>",
+  alignCenter: "<path d='M4 6h16M7 10h10M4 14h16M8 18h8'/>",
+  alignRight: "<path d='M4 6h16M10 10h10M4 14h16M13 18h7'/>",
+  alignJustify: "<path d='M4 6h16M4 10h16M4 14h16M4 18h16'/>",
+  valignTop: "<path d='M4 5h16'/><path d='M12 10v9'/><path d='M8.5 13.5 12 10l3.5 3.5'/>",
+  valignCenter: "<path d='M4 12h4M16 12h4'/><path d='M12 4v16'/><path d='M9 7l3-3 3 3M9 17l3 3 3-3'/>",
+  valignBottom: "<path d='M4 19h16'/><path d='M12 5v9'/><path d='M8.5 10.5 12 14l3.5-3.5'/>",
+  borderNone: "<path d='M4 4h16v16H4z' stroke-dasharray='2 2'/><path d='M5 19 19 5'/>",
+  borderBox: "<path d='M4 4h16v16H4z'/>",
+  borderAll: "<path d='M4 4h16v16H4z'/><path d='M12 4v16M4 12h16'/>",
+  merge: "<path d='M3 5h6v14H3zM15 5h6v14h-6z'/><path d='M9 12h6'/>",
+  split: "<path d='M3 5h18v14H3z'/><path d='M12 5v14'/>",
+  clearFormat: "<path d='M5 16l9-9a2 2 0 0 1 3 3l-9 9H5v-3z'/><path d='M4 21h16'/>",
+  colorScale: "<path d='M4 18h4v-4H4zM10 18h4v-8h-4zM16 18h4V6h-4z'/>",
+  dataBar: "<path d='M4 7h6v3H4zM4 12h10v3H4zM4 17h14v3H4z'/>",
+  highlight: "<path d='M5 15 14 6l4 4-9 9H5v-4z'/><path d='M13 7l4 4M4 21h16'/>",
+  find: "<path d='M10.5 4a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13z'/><path d='M15.5 15.5 20 20'/>",
+  filter: "<path d='M4 5h16l-6 7v6l-4 2v-8z'/>",
+  sortAsc: "<path d='M4 7h10M4 12h7M4 17h4'/><path d='M18 18V8'/><path d='M15 11l3-3 3 3'/>",
+  sortDesc: "<path d='M4 7h4M4 12h7M4 17h10'/><path d='M18 8v10'/><path d='M15 15l3 3 3-3'/>",
+  freeze: "<path d='M4 4h16v16H4z'/><path d='M4 9h16M9 4v16'/>",
+  unfreeze: "<path d='M4 4h16v16H4z'/><path d='M9 4v16M4 9h7M16 9h4M16 15h4'/>",
+  chartBar: "<path d='M5 19V9M11 19V5M17 19v-6'/><path d='M3 21h18'/>",
+  chartLine: "<path d='M4 16l5-5 4 3 6-7'/><path d='M3 21h18'/>",
+  chartPie: "<path d='M12 3a9 9 0 1 0 9 9h-9z'/><path d='M12 3v9h9'/>",
+  picture: "<path d='M3 5h18v14H3z'/><path d='M3 16l5-5 4 4 3-3 6 6'/><path d='M8.5 8.5h.01'/>",
+  formatPainter: "<path d='M14 3l7 7-3 3-7-7z'/><path d='M11 10l-6 6v4h4l6-6'/>",
+  selectAll: "<path d='M4 4h5M15 4h5M4 20h5M15 20h5M4 9v4M20 9v4'/><path d='M9 12h6'/>",
+  indentInc: "<path d='M4 6h16M4 12h16M4 18h16'/><path d='M8 9l3 3-3 3'/>",
+  indentDec: "<path d='M4 6h16M4 12h16M4 18h16'/><path d='M12 9l-3 3 3 3'/>",
+  ruler: "<path d='M3 8h18v8H3z'/><path d='M7 8v4M11 8v4M15 8v4M19 8v4'/>",
+  navPane: "<path d='M4 5h16v14H4z'/><path d='M9.5 5v14'/><path d='M12.5 9h4.5M12.5 12h4.5M12.5 15h3'/>",
+  bullet: "<path d='M9 7h11M9 12h11M9 17h11'/><path d='M4.5 7h.01M4.5 12h.01M4.5 17h.01'/>",
+  numberList: "<path d='M9 7h11M9 12h11M9 17h11'/><path d='M4 5h1v4M4 13h2l-2 3h2'/>",
+  locate: "<path d='M12 3v4M12 17v4M3 12h4M17 12h4'/><path d='M12 8a4 4 0 1 1 0 8 4 4 0 0 1 0-8z'/>",
+  pageSetup: "<path d='M5 3h14v18H5z'/><path d='M8 7h8M8 11h8M8 15h5'/>",
+  header: "<path d='M5 3h14v18H5z'/><path d='M5 8h14'/>",
+  footer: "<path d='M5 3h14v18H5z'/><path d='M5 16h14'/>",
+  table: "<path d='M3 5h18v14H3z'/><path d='M3 10h18M3 15h18M9 5v14M15 5v14'/>",
+  comment: "<path d='M4 5h16v11H9l-4 4v-4H4z'/><path d='M12 8v5M9.5 10.5h5'/>",
+  trackChanges: "<path d='M4 9a8 8 0 0 1 14-3'/><path d='M18 4v5h-5'/><path d='M20 15a8 8 0 0 1-14 3'/><path d='M6 20v-5h5'/>",
+  wordCount: "<path d='M4 6h10M4 12h8M4 18h6'/><path d='M15 17l2 2 3-4'/>",
+};
+
+/** 哪条命令挂哪枚图标。认不出的命令不挂——纯文字的小钮（小数位、上下对齐箭头那些）保持原样。 */
+const RIBBON_ICON_IDS: Record<string, string> = {
+  撤销: "undo",
+  重做: "redo",
+  "＋行": "rowAbove",
+  "－行": "rowBelow",
+  "＋列": "colLeft",
+  "－列": "colRight",
+  换行: "wrap",
+  粗: "bold",
+  斜: "italic",
+  线: "underline",
+  删: "strike",
+  上标: "superscript",
+  下标: "subscript",
+  左: "alignLeft",
+  中: "alignCenter",
+  右: "alignRight",
+  两: "alignJustify",
+  上: "valignTop",
+  下: "valignBottom",
+  "↑": "valignTop",
+  "↕": "valignCenter",
+  "↓": "valignBottom",
+  无框: "borderNone",
+  外框: "borderBox",
+  所有框: "borderAll",
+  合并: "merge",
+  拆分: "split",
+  清格式: "clearFormat",
+  清除格式: "clearFormat",
+  色阶: "colorScale",
+  数据条: "dataBar",
+  突出显示: "highlight",
+  查找: "find",
+  查找替换: "find",
+  筛选: "filter",
+  升序: "sortAsc",
+  降序: "sortDesc",
+  冻结: "freeze",
+  解冻: "unfreeze",
+  柱状图: "chartBar",
+  折线图: "chartLine",
+  饼图: "chartPie",
+  图片: "picture",
+  格式刷: "formatPainter",
+  全选: "selectAll",
+  "缩进+": "indentInc",
+  "缩进−": "indentDec",
+  "• 符号": "bullet",
+  "1. 编号": "numberList",
+  制表位: "ruler",
+  标尺: "ruler",
+  导航窗格: "navPane",
+  定位: "locate",
+  页面设置: "pageSetup",
+  页眉: "header",
+  页脚: "footer",
+  表格: "table",
+  新建批注: "comment",
+  修订: "trackChanges",
+  字数统计: "wordCount",
+};
+
+/**
+ * 把一枚命令钮改成「图标在上、字在下」。`textContent` 仍是那行字：图标 span 里没有文字节点，
+ * 所以按文字找按钮的探针、烟测与回显都照旧。键表里没有的命令原样返回。
+ */
+function decorateRibbonButton(b: HTMLButtonElement, label: string): void {
+  const id = RIBBON_ICON_IDS[label];
+  if (!id) return;
+  const art = document.createElement("span");
+  art.className = "ic";
+  art.setAttribute("aria-hidden", "true");
+  art.innerHTML = `<svg viewBox="0 0 24 24">${RIBBON_ICONS[id]}</svg>`;
+  const text = document.createElement("span");
+  text.className = "lb";
+  text.textContent = label;
+  b.replaceChildren(art, text);
+  b.classList.add("ico");
+  b.dataset.ic = id;
+}
+
 function buildRibbon(kind: "xlsx" | "docx" | "pptx"): void {
   if (ribbon.dataset.built === kind) return;
   ribbon.dataset.built = kind;
@@ -420,6 +566,7 @@ function buildSheetRibbon(): void {
     b.className = "rb";
     b.textContent = label;
     b.title = tip;
+    decorateRibbonButton(b, label);
     b.onclick = () => {
       grid?.commitEdit();
       run();
@@ -792,6 +939,7 @@ function buildDocRibbon(): void {
     b.className = "rb";
     b.textContent = label;
     b.title = tip;
+    decorateRibbonButton(b, label);
     b.onclick = run;
     ctl[key] = b;
     g.append(b);

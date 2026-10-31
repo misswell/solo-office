@@ -672,7 +672,7 @@ function smoke(): void {
         marker?.click();
         await wait(150);
         const after = document.querySelector("#view .page");
-        const docPart = { title: document.getElementById("title")?.textContent, editable: after?.getAttribute("contenteditable"), blocksBefore: blocks, blocksAfter: after?.children.length, typed: after?.textContent?.includes("SMOKE"), bulletsBefore: bullets, bulletsWearingOwnFont: bulletWorn, bulletsOwnSize: bulletSized, bulletsOwnColor: bulletInked, bulletsAfter: after?.querySelectorAll(".bullet").length, ribbonGroups: document.querySelectorAll("#ribbon .grp").length, fontBoxSpans, fontBoxEcho, ribbonPair, homeCaps: [...document.querySelectorAll("#ribbon .rbar[data-tab='home'] .grp")].map((g) => g.dataset.cap || "-").join("/"), tableCapGroups: document.querySelectorAll("#ribbon .rbar[data-tab='table'] .grp[data-cap]").length };
+        const docPart = { title: document.getElementById("title")?.textContent, editable: after?.getAttribute("contenteditable"), blocksBefore: blocks, blocksAfter: after?.children.length, typed: after?.textContent?.includes("SMOKE"), bulletsBefore: bullets, bulletsWearingOwnFont: bulletWorn, bulletsOwnSize: bulletSized, bulletsOwnColor: bulletInked, bulletsAfter: after?.querySelectorAll(".bullet").length, ribbonGroups: document.querySelectorAll("#ribbon .grp").length, fontBoxSpans, fontBoxEcho, ribbonPair, homeCaps: [...document.querySelectorAll("#ribbon .rbar[data-tab='home'] .grp")].map((g) => g.dataset.cap || "-").join("/"), tableCapGroups: document.querySelectorAll("#ribbon .rbar[data-tab='table'] .grp[data-cap]").length, homeIcons: document.querySelectorAll("#ribbon .rbar[data-tab='home'] button.rb.ico .ic svg path").length, homeIconText: [...document.querySelectorAll("#ribbon .rbar[data-tab='home'] button.rb.ico")].every((b) => b.textContent === b.querySelector(".lb")?.textContent) };
 
         // #210：w:u 那一族在装机那只盒子里画成什么样——这一腿一枚也不按，所以别的装机件字节账一字不动。
         // （探针整段是一枚模板字符串，这一段里既不写反引号也不写反斜杠。）
@@ -5018,6 +5018,9 @@ function smoke(): void {
         sheetRibbon.caps = homeGrps.map((g) => g.dataset.cap || "-").join("/");
         sheetRibbon.capInk = homeGrps.map((g) => getComputedStyle(g, "::after").content.replace(/"/g, "")).join("/");
         sheetRibbon.capBar = Math.round(document.querySelector("#ribbon .rbar[data-tab='home']").getBoundingClientRect().height);
+        // 图标不是只在类名上：数到带子里真排出来的 SVG 路径，且按钮的 textContent 仍是标签那行字（图标里没有文字节点）。
+        sheetRibbon.icons = document.querySelectorAll("#ribbon .rbar[data-tab='home'] button.rb.ico .ic svg path").length;
+        sheetRibbon.iconText = [...document.querySelectorAll("#ribbon .rbar[data-tab='home'] button.rb.ico")].every((b) => b.textContent === b.querySelector(".lb")?.textContent);
         // Persist the fill, the picture and the zoom state, so the saved file can
         // be checked by an independent reader (openpyxl) after the run.
         fire("solo:save");

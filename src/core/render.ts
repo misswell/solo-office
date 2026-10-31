@@ -1,7 +1,7 @@
 import type { Block, BandPlace, Carried, CarriedInline, HeaderFooter, IndentFields, Inline, NumberLevel, PageBorder, Paragraph, PropSlot, RowInfo, Section, Table, TableBorder, TableCell, TabStop, WordDocument } from "./docx.js";
 import { DEFAULT_SECTION, TAB_LEADER_TOKENS, hasLine, LINE_ONE, MARGIN_SIDES, PAGE_BORDER_SIDES, PBDR_ORDER, headingLevel, lineGridPitchTwips, twipsToPx } from "./docx.js";
 import type { CommentAnchor } from "./comments.js";
-import type { Presentation, Shape, SlideParagraph } from "./pptx.js";
+import type { LayoutPlaceholder, Presentation, Shape, Slide, SlideParagraph } from "./pptx.js";
 
 const esc = (s: string): string =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -1496,11 +1496,50 @@ function clipFor(geom: string): string {
   }
 }
 
-export function renderSlideHtml(pres: Presentation, index: number): string {
+/**
+ * WPS's own placeholder prompts, as its `wpp.qm` carries them. The date, footer and
+ * slide-number placeholders stay blank until the deck enables them, and a picture
+ * placeholder's affordance is an icon grid none of this model draws yet.
+ */
+const PLACEHOLDER_PROMPTS: Record<string, string> = {
+  title: "单击此处添加标题",
+  ctrTitle: "单击此处添加标题",
+  subTitle: "单击此处添加副标题",
+  body: "单击此处添加文本",
+  "": "单击此处添加文本",
+};
+
+/** A placeholder's family: a title-family placeholder is only filled by another title. */
+function placeholderFamily(type: string | undefined): "title" | "subtitle" | "body" | undefined {
+  if (type === "title" || type === "ctrTitle") return "title";
+  if (type === "subTitle") return "subtitle";
+  if (type === "body" || type === undefined || type === "") return "body";
+  return undefined;
+}
+
+function placeholderFilled(shape: Shape, ph: LayoutPlaceholder): boolean {
+  if (ph.idx !== undefined && shape.placeholderIdx !== undefined) return shape.placeholderIdx === ph.idx;
+  return !!shape.placeholder && placeholderFamily(shape.placeholder) === placeholderFamily(ph.type);
+}
+
+/** Prompts for the layout placeholders no shape on the slide has claimed. */
+function placeholderHints(slide: Slide): string {
+  return (slide.layoutPlaceholders ?? [])
+    .filter((ph) => placeholderFamily(ph.type) !== undefined)
+    .filter((ph) => !slide.shapes.some((shape) => placeholderFilled(shape, ph)))
+    .map((ph) => {
+      const box = `position:absolute;left:${ph.x}px;top:${ph.y}px;width:${ph.width}px;height:${ph.height}px`;
+      return `<div class="ph-hint" aria-hidden="true" style="${box}">${PLACEHOLDER_PROMPTS[ph.type ?? ""]}</div>`;
+    })
+    .join("");
+}
+
+export function renderSlideHtml(pres: Presentation, index: number, opts: { placeholders?: boolean } = {}): string {
   const slide = pres.slides[index];
   if (!slide) return "";
   const bg = slide.background ? `background:${slide.background};` : "";
+  const hints = opts.placeholders ? placeholderHints(slide) : "";
   return `<div class="slide" style="width:${pres.slideWidthPx}px;height:${pres.slideHeightPx}px;${bg}">${slide.shapes
     .map((s, i) => renderShape(s, pres, i))
-    .join("")}</div>`;
+    .join("")}${hints}</div>`;
 }

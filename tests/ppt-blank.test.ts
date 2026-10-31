@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { OpcPackage } from "../src/core/opc.js";
 import { Presentation } from "../src/core/pptx.js";
+import { renderSlideHtml } from "../src/core/render.js";
 import { writePptx } from "../src/core/write-pptx.js";
 
 const open = (bytes: Uint8Array): Presentation => Presentation.openBytes(bytes);
@@ -74,12 +75,45 @@ describe("blank deck package", () => {
     expect(open(writePptx(back)).slides).toHaveLength(2);
   });
 
-  it("keeps notes parts free of a notes master the blank package never writes", () => {
-    const pres = Presentation.blank();
+  it("keeps notes parts free of a notes master the blank package never writes", () => {    const pres = Presentation.blank();
     pres.slides[0].notes = "写在空白件上的备注";
     pres.slides[0].notesDirty = true;
     const pkg = pkgOf(pres);
     expect(pkg.text("ppt/notesSlides/notesSlide1.xml")).toContain("写在空白件上的备注");
     expect(pkg.text("ppt/notesSlides/_rels/notesSlide1.xml.rels")).not.toContain("notesMaster");
+  });
+});
+
+describe("blank deck placeholder prompts", () => {
+  it("carries the two title-slide placeholders the layout declares", () => {
+    const pres = Presentation.blank();
+    const phs = pres.slides[0].layoutPlaceholders ?? [];
+    expect(phs.map((p) => p.type)).toEqual(["ctrTitle", "subTitle"]);
+    expect(phs[0].x).toBeCloseTo(1198800 / 9525, 3);
+    expect(phs[0].height).toBeCloseTo(2570400 / 9525, 3);
+  });
+
+  it("prompts where no shape fills the placeholder, and only on editing surfaces", () => {
+    const pres = Presentation.blank();
+    const editing = renderSlideHtml(pres, 0, { placeholders: true });
+    expect(editing).toContain("单击此处添加标题");
+    expect(editing).toContain("单击此处添加副标题");
+    expect(renderSlideHtml(pres, 0)).not.toContain("ph-hint");
+    expect(renderSlideHtml(pres, 0)).not.toContain("单击此处");
+  });
+
+  it("drops a prompt once a shape claims that placeholder", () => {
+    const pres = Presentation.blank();
+    pres.slides[0].shapes.push({ kind: "shape", name: "标题 1", x: 100, y: 100, width: 400, height: 80, placeholder: "ctrTitle", paragraphs: [] });
+    const html = renderSlideHtml(pres, 0, { placeholders: true });
+    expect(html).not.toContain("单击此处添加标题");
+    expect(html).toContain("单击此处添加副标题");
+  });
+
+  it("reads the placeholders back from the layout part it wrote", () => {
+    const back = open(writePptx(Presentation.blank()));
+    const phs = back.slides[0].layoutPlaceholders ?? [];
+    expect(phs.map((p) => p.type)).toEqual(["ctrTitle", "subTitle"]);
+    expect(phs[1].y).toBeCloseTo(3560400 / 9525, 3);
   });
 });

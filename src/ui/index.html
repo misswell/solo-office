@@ -659,6 +659,8 @@
       .sdeck-grid { position: absolute; inset: 0; pointer-events: none; background-image: repeating-linear-gradient(90deg, #3341551f 0 1px, transparent 1px var(--grid-pitch)), repeating-linear-gradient(180deg, #3341551f 0 1px, transparent 1px var(--grid-pitch)); }
       .slide { position: relative; overflow: hidden; font-family: var(--font-ui); color: #14161a; }
       .shape { position: absolute; }
+      /* An empty layout placeholder's prompt. WPS's own prompt box metrics are not measured yet. */
+      .ph-hint { display: flex; align-items: center; justify-content: center; box-sizing: border-box; border: 1px dashed #b9c0c8; color: #8a929b; font-size: 16px; pointer-events: none; user-select: none; }
       .shape-text { width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: center; padding: 4px 8px; overflow: hidden; }
       .shape-text[contenteditable="true"] { cursor: text; }
       .sp-p { font-size: 14px; line-height: 1.3; }

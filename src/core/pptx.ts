@@ -1,6 +1,17 @@
-import { OpcPackage, asArray, children as kids, parseOrderedXml, rawAttrs, rawChildren, rawFind, rawFindAll, relsPathOf, tagOf, type Rel } from "./opc.js";
+import { OpcPackage, asArray, children as kids, parseOrderedXml, rawAttrs, rawChildren, rawFind, rawFindAll, relsPathOf, tagLocalOf, tagOf, type Rel } from "./opc.js";
 import { dataUrl, IMAGE_EXT_BY_MIME, IMAGE_MIME_BY_EXT } from "./media.js";
+import { BLANK_LAYOUTS } from "./pptx-blank.js";
 import type { Inline } from "./docx.js";
+
+/** A placeholder the slide inherits from its layout, geometry in slide pixels. */
+export interface LayoutPlaceholder {
+  type?: string;
+  idx?: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
 
 export interface Shape {
   kind: "shape" | "picture" | "table" | "group";
@@ -19,6 +30,8 @@ export interface Shape {
   rows?: SlideCell[][];
   children?: Shape[];
   placeholder?: string;
+  /** `p:ph@idx` of the placeholder this shape fills, when it fills one. */
+  placeholderIdx?: number;
   /** A text box the editor inserted: no preset geometry, no fill or line of its own. */
   textBox?: boolean;
   /** Package part of an image inserted in the editor; a save writes it out. */
@@ -58,6 +71,8 @@ export interface Slide {
   relId: string;
   /** Ordered nodes of `p:sld`, patched in place by a save. */
   tree: any[];
+  /** Placeholders inherited from the layout; the editor draws a prompt where no shape fills one. */
+  layoutPlaceholders?: LayoutPlaceholder[];
   /** Set by an edit; a clean slide is written back byte-identical. */
   dirty: boolean;
   notesDirty: boolean;
@@ -179,8 +194,10 @@ export class Presentation {
     const slide: Slide = { index, name: `第 ${index + 1} 页`, shapes: [], partPath: path, sldId, relId, tree: parseOrderedXml(pkg.text(path) ?? ""), dirty: false, notesDirty: false };
 
     const layoutRel = [...rels.values()].find((r) => r.type.endsWith("/slideLayout"));
-    if (layoutRel && !this.newSlideLayoutPath) {
-      this.newSlideLayoutPath = pkg.resolve(path, layoutRel);
+    if (layoutRel) {
+      const layoutPath = pkg.resolve(path, layoutRel);
+      if (!this.newSlideLayoutPath) this.newSlideLayoutPath = layoutPath;
+      slide.layoutPlaceholders = this.layoutPlaceholdersOf(layoutPath);
     }
 
     const bgPr = find(find(cSld, "bg"), "bgPr");
@@ -228,7 +245,12 @@ export class Presentation {
     const ph = find(find(nv, "nvPr"), "ph");
     const spPr = find(node, "spPr") ?? find(node, "grpSpPr");
     // A graphicFrame carries its own p:xfrm; shapes and pictures nest it under spPr.
-    const base = { name: label, ...this.frame(find(node, "xfrm") ?? find(spPr, "xfrm")), placeholder: ph ? String(attr(ph, "type") ?? "") : undefined };
+    const base = {
+      name: label,
+      ...this.frame(find(node, "xfrm") ?? find(spPr, "xfrm")),
+      placeholder: ph ? String(attr(ph, "type") ?? "") : undefined,
+      placeholderIdx: ph && attr(ph, "idx") !== undefined ? Number(attr(ph, "idx")) : undefined,
+    };
 
     if (name === "pic") {
       const blip = find(find(node, "blipFill"), "blip");
@@ -320,8 +342,29 @@ export class Presentation {
   }
 
   /** Lowest-numbered layout part in the package, for a deck whose slides name none. */
-  private firstSlideLayout(): string | undefined {
-    let found: string | undefined;
+  /** Placeholder geometry of a layout: the package's own part, or the one a blank deck generates. */
+  private layoutPlaceholdersOf(path: string | undefined): LayoutPlaceholder[] | undefined {
+    if (!path) return undefined;
+    if (this.pkg) {
+      const xml = this.pkg.text(path);
+      return xml ? parseLayoutPlaceholders(xml) : undefined;
+    }
+    const m = /slideLayout(\d+)\.xml$/.exec(path);
+    const def = m ? BLANK_LAYOUTS[Number(m[1]) - 1] : undefined;
+    // A placeholder without geometry takes the master's, which this model does not resolve.
+    return def?.placeholders
+      .filter((p) => p.x !== undefined)
+      .map((p) => ({
+        type: p.type,
+        idx: p.idx,
+        x: (p.x ?? 0) / EMU_PER_PX,
+        y: (p.y ?? 0) / EMU_PER_PX,
+        width: (p.w ?? 0) / EMU_PER_PX,
+        height: (p.h ?? 0) / EMU_PER_PX,
+      }));
+  }
+
+  private firstSlideLayout(): string | undefined {    let found: string | undefined;
     if (!this.pkg) return undefined;
     for (const path of this.pkg.parts.keys()) {
       if (!/^ppt\/slideLayouts\/slideLayout\d+\.xml$/.test(path)) continue;
@@ -365,6 +408,7 @@ export class Presentation {
       dirty: true,
       notesDirty: false,
     };
+    slide.layoutPlaceholders = this.layoutPlaceholdersOf(this.newSlideLayoutPath);
     this.slides.push(slide);
     this.presDirty = true;
     return slide;
@@ -393,6 +437,34 @@ export class Presentation {
     this.presDirty = true;
     this.slides.forEach((s, i) => ((s.index = i), (s.name = `第 ${i + 1} 页`)));
   }
+}
+
+/** Placeholders a layout declares with geometry of its own; the ones that inherit from the master are skipped. */
+function parseLayoutPlaceholders(xml: string): LayoutPlaceholder[] {
+  const spTree = rawFind(parseOrderedXml(xml), "spTree");
+  const out: LayoutPlaceholder[] = [];
+  for (const entry of spTree ? rawChildren(spTree) : []) {
+    if (tagLocalOf(entry) !== "sp") continue;
+    const nv = rawFind(rawChildren(entry), "nvSpPr");
+    const ph = nv ? rawFind(rawChildren(nv), "ph") : undefined;
+    const spPr = rawFind(rawChildren(entry), "spPr");
+    const xfrm = spPr ? rawFind(rawChildren(spPr), "xfrm") : undefined;
+    const off = xfrm ? rawFind(rawChildren(xfrm), "off") : undefined;
+    const ext = xfrm ? rawFind(rawChildren(xfrm), "ext") : undefined;
+    if (!ph || !off || !ext) continue;
+    const a = rawAttrs(ph);
+    const o = rawAttrs(off);
+    const e = rawAttrs(ext);
+    out.push({
+      type: a["@_type"],
+      idx: a["@_idx"] !== undefined ? Number(a["@_idx"]) : undefined,
+      x: Number(o["@_x"] ?? 0) / EMU_PER_PX,
+      y: Number(o["@_y"] ?? 0) / EMU_PER_PX,
+      width: Number(e["@_cx"] ?? 0) / EMU_PER_PX,
+      height: Number(e["@_cy"] ?? 0) / EMU_PER_PX,
+    });
+  }
+  return out;
 }
 
 function paragraphs(txBody: any): SlideParagraph[] {

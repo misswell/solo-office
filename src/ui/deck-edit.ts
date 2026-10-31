@@ -22,6 +22,8 @@ type Dir = (typeof HANDLE_DIRS)[number];
 /** Ruler strip thickness, and one centimetre in slide pixels (360000 EMU / 9525 per px). */
 const RULER_PX = 16;
 const CM_PX = 360000 / 9525;
+/** Placeholder prompts belong to the editing surfaces; 放映 and 阅读视图 show the slide as it plays. */
+const PROMPTS = { placeholders: true };
 
 /** Insert defaults, close to what a fresh shape looks like in an office suite. */
 const SHAPE_FILL = "#dce6f1";
@@ -168,7 +170,7 @@ export class DeckEditor {
       holder.className = "thumb" + (i === this.selectedSlide ? " on" : "");
       holder.style.width = "148px";
       holder.style.height = `${this.pres.slideHeightPx * scale}px`;
-      holder.innerHTML = `<span>${i + 1}</span><div style="transform:scale(${scale});transform-origin:0 0;width:${this.pres.slideWidthPx}px;height:${this.pres.slideHeightPx}px">${renderSlideHtml(this.pres, i)}</div>`;
+      holder.innerHTML = `<span>${i + 1}</span><div style="transform:scale(${scale});transform-origin:0 0;width:${this.pres.slideWidthPx}px;height:${this.pres.slideHeightPx}px">${renderSlideHtml(this.pres, i, PROMPTS)}</div>`;
       holder.onclick = () => {
         this.commitEditing();
         this.selectedSlide = i;
@@ -193,7 +195,7 @@ export class DeckEditor {
     this.wrapEl = wrap;
     wrap.style.width = `${this.pres.slideWidthPx}px`;
     wrap.style.height = `${this.pres.slideHeightPx}px`;
-    wrap.innerHTML = renderSlideHtml(this.pres, this.selectedSlide);
+    wrap.innerHTML = renderSlideHtml(this.pres, this.selectedSlide, PROMPTS);
     if (this.showGrid) {
       const grid = document.createElement("div");
       grid.className = "sdeck-grid";
@@ -262,7 +264,7 @@ export class DeckEditor {
       box.className = "sorter-slide";
       box.style.width = `${width}px`;
       box.style.height = `${this.pres.slideHeightPx * scale}px`;
-      box.innerHTML = `<div style="transform:scale(${scale});transform-origin:0 0;width:${this.pres.slideWidthPx}px;height:${this.pres.slideHeightPx}px">${renderSlideHtml(this.pres, i)}</div>`;
+      box.innerHTML = `<div style="transform:scale(${scale});transform-origin:0 0;width:${this.pres.slideWidthPx}px;height:${this.pres.slideHeightPx}px">${renderSlideHtml(this.pres, i, PROMPTS)}</div>`;
       cell.append(num, box);
       // 单击只挪选中（就地改类，不重画）：重画会把刚点中的格子从文档里摘掉，双击便到不了第二下。
       cell.onclick = () => {
@@ -295,7 +297,7 @@ export class DeckEditor {
     frame.className = "notes-slide";
     frame.style.width = `${width}px`;
     frame.style.height = `${this.pres.slideHeightPx * scale}px`;
-    frame.innerHTML = `<div style="transform:scale(${scale});transform-origin:0 0;width:${this.pres.slideWidthPx}px;height:${this.pres.slideHeightPx}px">${renderSlideHtml(this.pres, this.selectedSlide)}</div>`;
+    frame.innerHTML = `<div style="transform:scale(${scale});transform-origin:0 0;width:${this.pres.slideWidthPx}px;height:${this.pres.slideHeightPx}px">${renderSlideHtml(this.pres, this.selectedSlide, PROMPTS)}</div>`;
     const body = document.createElement("div");
     body.className = "notes-sheet-text";
     body.contentEditable = "plaintext-only";

@@ -2782,6 +2782,11 @@ function download(name: string, blob: Blob): void {
 
 $("open-btn").onclick = openCommand;
 saveBtn.onclick = () => void saveCommand();
+// 快速访问那一排的其余三枚（`QAT` 默认命令里的 PrintToPDF / Undo / Redo）走的是同一条命令，
+// 不另开路径：PDF 那一枚就是 `solo:export-pdf` 那趟，撤销/重做按当前打开的是哪种件分派。
+$("pdf-btn").onclick = () => window.dispatchEvent(new CustomEvent("solo:export-pdf"));
+$("undo-btn").onclick = () => undo();
+$("redo-btn").onclick = () => redo();
 // The start screen's 新建 buttons live inside #view and are rewritten on every
 // state change, so the click is caught by delegation instead of re-binding.
 view.addEventListener("click", (e) => {

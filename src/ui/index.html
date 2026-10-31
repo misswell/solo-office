@@ -37,6 +37,7 @@
       /* `body >` 不是多余：模块自己注入的浮层（对话框、审阅窗格）里也有 `<header>`，
          裸元素选择器会把这条深色顶栏画到别人卡片上。这条规则说的是窗口顶上那一格。 */
       body > header {
+        position: relative;
         display: flex;
         align-items: center;
         gap: 14px;
@@ -48,35 +49,43 @@
         -webkit-app-region: drag;
       }
       header button, header .doc-tab, header #open-btn { -webkit-app-region: no-drag; }
-      .brand {
-        font-size: 12px;
-        font-weight: 600;
-        letter-spacing: .12em;
-        text-transform: uppercase;
-        color: var(--ink-dim);
-      }
-      .brand b { color: var(--accent); }
-      .tools { display: flex; gap: 6px; }
-      button.tool {
+      /* 快速访问那一排：`wpsongmani.kui:212` 声明的 `QAT` 默认命令序是
+         AutoSaveFile → SaveFile → PrintToPDF → Print… → Undo → Redo（`:337` 的
+         `KRbQuicktoolCommand` 把它挂进窗口顶栏，紧挨页签条）。家里没有自动保存与那几条打印，
+         留下的就是 打开 / 保存 / 导出 PDF / 撤销 / 重做——顺序照上面那串。 */
+      .qat { display: flex; align-items: center; gap: 2px; }
+      .qat .tool {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        padding: 0;
         font: inherit;
-        font-size: 12.5px;
-        color: var(--ink);
-        background: #fff;
-        border: 1px solid #d5dae1;
-        border-radius: 6px;
-        padding: 5px 11px;
+        color: #3f4750;
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 4px;
         cursor: pointer;
       }
-      button.tool:hover { background: #eef3fa; }
-      button.tool:disabled { opacity: .4; cursor: default; }
+      .qat .tool:hover { background: #e8eef7; }
+      .qat .tool:disabled { opacity: .35; cursor: default; }
+      .qat .tool svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+      .qat-sep { width: 1px; height: 16px; background: #d9dee5; margin: 0 3px; }
+      /* 文件名居中：WPS 把文档名摆在窗口正中。绝对定位不随左边那排按钮的宽窄漂移，
+         两侧各留出快速访问与窗口钮的地界，长了省略。 */
       .title-slot {
-        flex: 1;
+        position: absolute;
+        left: 50%;
+        transform: translateX(-50%);
+        max-width: min(46%, 520px);
         text-align: center;
         font-size: 13px;
         color: var(--ink-dim);
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+        pointer-events: none;
       }
 
       /* ---- formula / address bar ---- */
@@ -760,10 +769,23 @@
   </head>
   <body>
     <header>
-      <div class="brand"><b>Solo</b> Office</div>
-      <div class="tools">
-        <button class="tool" id="open-btn">打开 ⌘O</button>
-        <button class="tool" id="save-btn" disabled>导出 ⌘S</button>
+      <div class="qat" id="qat">
+        <button class="tool" id="open-btn" title="打开 (⌘O)" aria-label="打开">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/></svg>
+        </button>
+        <button class="tool" id="save-btn" disabled title="保存 (⌘S)" aria-label="保存">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h11l3 3v15H5z"/><path d="M8 3v5h7V3"/><path d="M8 14h8v7H8z"/></svg>
+        </button>
+        <button class="tool" id="pdf-btn" title="导出 PDF" aria-label="导出 PDF">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M12 11v6M9.5 14.5 12 17l2.5-2.5"/></svg>
+        </button>
+        <span class="qat-sep" aria-hidden="true"></span>
+        <button class="tool" id="undo-btn" title="撤销 (⌘Z)" aria-label="撤销">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H9"/></svg>
+        </button>
+        <button class="tool" id="redo-btn" title="重做 (⇧⌘Z)" aria-label="重做">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 14l5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H15"/></svg>
+        </button>
       </div>
       <div class="title-slot" id="title">没有打开的文档</div>
     </header>

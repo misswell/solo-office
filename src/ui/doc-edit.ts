@@ -840,17 +840,13 @@ export class DocEditor {
     for (const el of [...page.querySelectorAll<HTMLElement>(`.${SHEET_STRIP_CLASS}, .${BAND_CLONE_CLASS}, .${PAGE_CORNER_CLASS}`)]) el.remove();
     // 调整宽度（`w:fitText`）改的是字距，也就是每一行推进多少——它得排在下面每一处「量」之前：带子让位、制表位
     // 落位与切纸读的都是画出来的行盒，晚一步就是按没摊开的宽度量出来的页界。
-    console.log("AS1 fitText");
     applyFitText(page);
     // 带子先量、再排：真机上带子贴在纸内，越过边距线的那一截从正文里占走（#157）。量出来的数写在纸盒上，
     // 铺排、页沿推距与状态栏那几格读的都是这一处——所以这一趟必须排在 `applySheetGaps` 之前，晚一步就是
     // 按「不让位」量出来的页界。
-    console.log("AS2 bandYield");
     applyBandYield(this.host, page, this.doc);
     // 制表位先落：每一枚制表符垫出去的宽度会改这一行往后的推进，铺排与页沿推距必须按**画完制表位的那一流**量。
-    console.log("AS3 tabStops");
     applyTabStops(page, this.doc);
-    console.log("AS4 sheetGaps");
     const laid = applySheetGaps(page, this.doc);
     if (!laid) return;
     const { strips, pages } = laid;
@@ -868,7 +864,6 @@ export class DocEditor {
         page.append(el);
       }
       this.paintBandCopies(strips, page, pages);
-      console.log("AS5 bandCopies", strips.length);
     }
     // 纸里的两份原件守着这一叠纸的首尾：页眉在第一张的纸沿里、页脚在最后一张的纸沿里，所以它们报的是
     // 首张与末张的号——中间每一张的下沿与下下一张的上沿都由一道缝管着（`paintBandCopies`）。

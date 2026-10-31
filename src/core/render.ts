@@ -1554,22 +1554,25 @@ function renderSlideParagraph(p: SlideParagraph, inh?: InhText, levels?: BodyLev
   const align = p.align ?? style.align;
   if (align && ALIGN[align]) css.push(`text-align:${ALIGN[align]}`);
   let bullet = p.bullet;
+  // A paragraph's own `a:pPr@marL`/`@indent` overrides whatever its level states.
+  const marLEmu = p.marLEmu ?? style.marLEmu;
+  const indentEmu = p.indentEmu ?? style.indentEmu;
   if (body && levels) {
-    const marL = Math.round((style.marLEmu ?? 0) / 9525);
-    const indent = Math.round((style.indentEmu ?? 0) / 9525);
+    const marL = Math.round((marLEmu ?? 0) / 9525);
+    const indent = Math.round((indentEmu ?? 0) / 9525);
     css.push(`padding-left:${marL}px`, `text-indent:${indent}px`);
-  } else if (style.marLEmu !== undefined) {
+  } else if (marLEmu !== undefined) {
     // A text box's own `a:lstStyle` states where its line starts; the 18px step is only
     // the fallback for a shape that says nothing.
-    css.push(`padding-left:${Math.round(style.marLEmu / 9525)}px`, `text-indent:${Math.round((style.indentEmu ?? 0) / 9525)}px`);
+    css.push(`padding-left:${Math.round(marLEmu / 9525)}px`, `text-indent:${Math.round((indentEmu ?? 0) / 9525)}px`);
   } else {
     css.push(`padding-left:${p.level * 18}px`);
   }
   // The stylesheet's 14px is a fallback for plain shapes; a body placeholder draws at
   // the master's size for its level (18pt on the first), never at that fallback.
   if (style.sizePt) css.push(`font-size:${scaledPt(style.sizePt, fit?.fontScalePct)}pt`);
-  // A slide's own `a:buChar` wins; otherwise the style's bullet, unless `a:buNone` suppresses it.
-  if (!bullet && !style.noBullet) bullet = style.bullet;
+  // A slide's own `a:buChar` wins; otherwise the style's bullet, unless either `a:buNone` suppresses it.
+  if (!bullet && !p.noBullet && !style.noBullet) bullet = style.bullet;
   // `a:normAutofit` gives back a share of the line height as well; a paragraph that states
   // no percentage is still drawn at the editor's single line, so the reduction applies to it.
   const keep = fit?.lineSpacingReductionPct !== undefined ? 1 - fit.lineSpacingReductionPct / 100 : 1;

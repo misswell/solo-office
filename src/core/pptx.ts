@@ -130,6 +130,11 @@ export interface SlideParagraph {
   align?: string;
   level: number;
   bullet?: string;
+  /** `a:pPr/a:buNone`: this paragraph draws no bullet even where its level names one. */
+  noBullet?: boolean;
+  /** `a:pPr@marL`/`@indent`, in EMU: the paragraph's own start and hanging indent. */
+  marLEmu?: number;
+  indentEmu?: number;
   runs: Inline[];
   /** `a:pPr/a:lnSpc/a:spcPct`: line spacing as a percentage of single. */
   lineSpacingPct?: number;
@@ -1004,6 +1009,9 @@ function paragraphs(txBody: any, resolve?: (node: any) => string | undefined): S
       align: ALGN_IN[attr(pPr, "algn") ?? ""],
       // Real producers nest `a:buChar char="•"`; an attribute is tolerated too.
       bullet: attr(find(pPr, "buChar"), "char") ?? attr(pPr, "buChar"),
+      noBullet: find(pPr, "buNone") ? true : undefined,
+      marLEmu: attr(pPr, "marL") !== undefined ? Number(attr(pPr, "marL")) : undefined,
+      indentEmu: attr(pPr, "indent") !== undefined ? Number(attr(pPr, "indent")) : undefined,
       runs,
       ...paragraphSpacing(pPr),
     };

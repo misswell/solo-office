@@ -154,6 +154,12 @@ export class Presentation {
    */
   titleStylePt = 36;
   bodyStylePt = 18;
+  /**
+   * Level-1 size of the master's `p:otherStyle`, in points: the default for text in shapes
+   * that are not placeholders. WPS writes 18pt in 33 of the 35 template decks and 10.35pt
+   * in the other two, and leaves the size off the runs themselves.
+   */
+  otherStylePt = 18;
   /** Master `p:bodyStyle` levels 1–9; a body paragraph's level picks its size, indent and bullet. */
   bodyLevels: BodyLevel[] = WPS_BODY_LEVELS.map((l) => ({ ...l }));
   /** Images inserted in the editor (package part → data URL); a save writes these parts. */
@@ -582,8 +588,10 @@ export class Presentation {
     };
     const title = levels(styleOf("titleStyle"))[0]?.sizePt;
     const body = levels(styleOf("bodyStyle"));
+    const other = levels(styleOf("otherStyle"))[0]?.sizePt;
     if (title !== undefined) this.titleStylePt = title;
     if (body[0]?.sizePt !== undefined) this.bodyStylePt = body[0].sizePt;
+    if (other !== undefined) this.otherStylePt = other;
     if (body.some((l) => l.sizePt !== undefined || l.marLEmu !== undefined || l.bullet)) this.bodyLevels = body;
   }
 

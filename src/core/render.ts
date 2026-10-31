@@ -1549,8 +1549,10 @@ function renderShape(s: Shape, pres: Presentation, idx?: number, slide?: Slide):
   // A placeholder's paragraph is drawn at the size its layout states (a run may state its
   // own), and its box stacks from the layout's bodyPr anchor — the title slide anchors the
   // title at the bottom, so an 18px default would put the clicked-in text in the wrong place.
+  // Text in a shape that is not a placeholder takes the master's `p:otherStyle` instead.
   const textCss: string[] = [];
   if (inh?.sizePt) textCss.push(`font-size:${inh.sizePt}pt`);
+  else if (!inh) textCss.push(`font-size:${pres.otherStylePt}pt`);
   if (inh) textCss.push(`justify-content:${inh.anchor === "b" ? "flex-end" : inh.anchor === "ctr" ? "center" : "flex-start"}`);
   const textStyle = textCss.length ? ` style="${textCss.join(";")}"` : "";
   return `<div class="shape"${pick} style="${style.join(";")}"><div class="shape-text"${textStyle}>${text}</div></div>`;

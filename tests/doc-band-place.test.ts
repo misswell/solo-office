@@ -19,6 +19,12 @@ import { PLACE_FOOTER, makeBandPlaceDocx } from "./helpers/make-band-place.js";
  * 都是 `w:right="360"`**（2 个全路径件 / 1 份模板名 `office rental contract.dotm`），链上借来的落在 **8 段**上、
  * 只说首行（`w:firstLine="422" w:firstLineChars="200"` ×6 与 `883` ×2，枚枚不带 `w:left`/`w:right`）。与正文
  * #165 同一只裁法：段自己用 `w:firstLineChars="0"` 答过首行，链上那枚缇就不许再叠上来。
+ *
+ * 框自己说的话是第三问（#241，`.scratch/anchor-place-census.mjs`）：授权 21 件的 `wp:anchor` 只有 **7 枚 / 6 件**，
+ * 6 枚坐在页脚、全是装页码的文本框，枚枚说 `<wp:positionH relativeFrom="margin"><wp:align>center</wp:align>` 加
+ * `<wp:positionV relativeFrom="paragraph"><wp:posOffset>0`，段自己一句 `w:jc` 都没写、从样式借来 `left`；正文那 1 枚
+ * 是一根 0 高、笔说 `a:noFill` 的线，画它等于画不出。所以摆到中间的是框说的话，而借来的 `left` 管的是框里那几行——
+ * 两问叠在同一个 `hf-p` 上，不是互相顶掉。
  */
 
 const openBand = () => {
@@ -40,7 +46,7 @@ const bandLineAt = (html: string, i: number): string => (html.match(/<div class=
 describe("docx 页眉页脚：段自己说的落点读进模型", () => {
   it("每段一格，格数与段数一样", () => {
     const band = openBand();
-    expect(band.paragraphs.length).toBe(11);
+    expect(band.paragraphs.length).toBe(15);
     expect(band.place?.length).toBe(band.paragraphs.length);
     expect(band.editable).toBe(true);
   });
@@ -151,6 +157,49 @@ describe("docx 页眉页脚：段自己说的落点画上纸", () => {
   });
 });
 
+describe("docx 页眉页脚：框自己说的落点读进模型", () => {
+  it("授权页脚那一句（margin 锚 + align=center）读成框的落点，段借来的 left 不改口", () => {
+    const band = openBand();
+    expect(band.place?.[11]?.frame).toEqual({ hAnchor: "margin", vAnchor: "text", xAlign: "center" });
+    // 框把整格推到中沿，不等于替框里那几行说话：段自己没说 `w:jc`，答案仍是样式链借来的 `left`。
+    expect(band.place?.[11]?.align).toBe("left");
+  });
+
+  it("三句授权语料 0 枚的话，一整句都不落——不肯半句就位", () => {
+    const band = openBand();
+    // ⑫ 横向偏移说 114300 EMU（语料 7 枚枚枚说 0）；⑬ `wrapTopAndBottom`（语料只有 wrapNone / 正文那一枚的
+    // wrapNone，会挤走正文的 0 枚）；⑭ 锚在 `column` 上（页脚那 6 枚锚的是 margin）。
+    expect(band.place?.[12]?.frame).toBeUndefined();
+    expect(band.place?.[13]?.frame).toBeUndefined();
+    expect(band.place?.[14]?.frame).toBeUndefined();
+    // 拒绝只针对落点：框里那几行仍是段自己的字，四格都还在「整段就是那只框」的账上。
+    expect(band.editable).toBe(true);
+    expect(band.boxedParagraphs?.slice(11)).toEqual([true, true, true, true]);
+  });
+});
+
+describe("docx 页眉页脚：框自己说的落点画上纸", () => {
+  const html = renderWord(WordDocument.openBytes(makeBandPlaceDocx()));
+
+  it("框把这一格收成墨宽推到中沿，段借来的 left 管框里的行", () => {
+    const line = bandLineAt(html, 11);
+    expect(line).toContain(`style="width:fit-content;margin-left:auto;margin-right:auto;text-align:left"`);
+    expect(line).toContain('data-field="PAGE"');
+  });
+
+  it("那三格只留段自己借来的 left，框的话一句都不落", () => {
+    // `text-align:left` 是段从样式链借来的答案（#211 已画），不是框补的；框的不落才是要钉的那一句。
+    for (const i of [12, 13, 14]) {
+      const line = bandLineAt(html, i);
+      expect(line).toContain(`style="text-align:left"`);
+      expect(line).not.toContain("width:fit-content");
+      expect(line).not.toContain("margin-left");
+      expect(line).not.toContain("position:relative");
+      expect(line).toContain('data-field="PAGE"');
+    }
+  });
+});
+
 describe("docx 页眉页脚：落点只上行，不动字节", () => {
   it("不开任何编辑，保存把页脚件原样交回", () => {
     const out = writeDocx(WordDocument.openBytes(makeBandPlaceDocx()));
@@ -173,7 +222,8 @@ describe("docx 页眉页脚：落点只上行，不动字节", () => {
     expect(say(again?.place)).toEqual(say(doc.sectionBand("footer", 0)?.place));
     // 缩进与对齐、框一样只是「读出来画上去」的：新落的三格缩进不许在保存清单里排成待写，也不许在重读时改口。
     expect(again?.place?.map((p) => p?.ind?.indentRight)).toEqual([
-      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, 360, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, 360, undefined, undefined, undefined,
+      undefined, undefined, undefined,
     ]);
   });
 });

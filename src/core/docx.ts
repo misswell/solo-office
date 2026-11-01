@@ -1552,6 +1552,36 @@ const replaceOnce = (xml: string, from: string, to: string): string => {
 /** What a box's pieces say, in the only form two copies of the same box can be compared in: text and atoms. */
 const hfBoxShape = (segs: HfSegment[]): string => JSON.stringify(segs.map((s) => (s.carry ? `<${s.carry.tag}>` : s.text ?? "")));
 
+/**
+ * Where a floating text box says to put itself, read as the sentence `w:framePr` would have used.
+ * `.scratch/anchor-place-census.mjs` measured the authorized 21 件's **7 枚 `wp:anchor`** (6 件): all
+ * `behindDoc="0"`, and only the 6 in footers are boxes with words in them — each says
+ * `<wp:positionH relativeFrom="margin"><wp:align>center</wp:align>` and
+ * `<wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset>`, while their own paragraphs say no
+ * `w:jc` and the `footer` style they borrow says `left`. So the box, not the paragraph, is what centers the page
+ * number, and reading only the box is what moves ink.
+ *
+ * Strictly by that shape and nothing wider: `wp:align` is the child's **text**, not an attribute; an
+ * `offset` other than 0, a `column`/`page` anchor, or a `wp:wrap*` other than `wrapNone` asks something this page
+ * has no evidence for, so the whole placement is declined rather than half-placed (0 枚 writes it — the one body
+ * anchor is a zero-height line whose pen says `a:noFill`).
+ */
+const anchorPlace = (runXml: string): FramePlace | undefined => {
+  const anchor = /<wp:anchor\b[\s\S]*?<\/wp:anchor>/.exec(runXml)?.[0];
+  if (!anchor || /<wp:wrap(?!None\b)/.test(anchor)) return undefined;
+  const posH = /<wp:positionH([^>]*)>([\s\S]*?)<\/wp:positionH>/.exec(anchor);
+  const posV = /<wp:positionV([^>]*)>([\s\S]*?)<\/wp:positionV>/.exec(anchor);
+  if (!posH || !posV) return undefined;
+  if (!/\brelativeFrom="margin"/.test(posH[1]) || !/\brelativeFrom="paragraph"/.test(posV[1])) return undefined;
+  // 偏移只认「0」这一句：`posOffset` 是 EMU，授权 7 枚全说 0，说别的这一页没有实据可对（0 受众不建模）。
+  const nonzeroOffset = (inside: string): boolean => /<wp:posOffset>\s*(?!0\s*<)[^<]*</.test(inside);
+  if (nonzeroOffset(posH[2]) || nonzeroOffset(posV[2])) return undefined;
+  const align = /<wp:align>\s*([^<]*?)\s*<\/wp:align>/.exec(posH[2])?.[1];
+  const xAlign = align === "start" ? "left" : align === "end" ? "right" : align === "left" || align === "center" || align === "right" ? align : undefined;
+  if (!xAlign) return undefined;
+  return { hAnchor: "margin", vAnchor: "text", xAlign };
+};
+
 /** Whether an element's children account for every byte between its tags, so splicing them back says the same thing. */
 const losslessKids = (xml: string): boolean => {
   const content = elementContent(xml);
@@ -4845,7 +4875,13 @@ export class WordDocument {
     const editable = walked !== null && parsed.every((p) => p.ok);
     const segments = editable ? parsed.map((p) => p.segs) : undefined;
     const paragraphs = segments ? segments.map(hfSegmentsText) : paraSpans.map(hfParagraphText);
-    const place = paraSpans.map((s) => this.paraPlace(s));
+    const place = paraSpans.map((s, i) => {
+      const own = this.paraPlace(s);
+      // 段自己说了 `w:framePr` 就听段的；只有那段什么都没说的带子，才让那只框补一句它摆在哪。
+      if (!parsed[i]?.boxed || own?.frame) return own;
+      const box = anchorPlace(s.xml);
+      return box ? { ...(own ?? {}), frame: box } : own;
+    });
     const hf: HeaderFooter = {
       part,
       id,

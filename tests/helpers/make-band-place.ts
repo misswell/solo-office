@@ -8,9 +8,57 @@ const NS_W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const NS_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 const NS_CT = "http://schemas.openxmlformats.org/package/2006/content-types";
 const NS_PKG = "http://schemas.openxmlformats.org/package/2006/relationships";
+const NS_WP = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+const NS_A = "http://schemas.openxmlformats.org/drawingml/2006/main";
+const NS_WPS = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape";
+const NS_MC = "http://schemas.openxmlformats.org/markup-compatibility/2006";
+const NS_V = "urn:schemas-microsoft-com:vml";
 const CT_W = "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml";
 const CT_FTR = "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml";
 const CT_STY = "application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml";
+
+/**
+ * One floating text box, reduced to the shape the authorized footers write: a single `mc:AlternateContent` whose
+ * `mc:Choice` holds the DrawingML box and whose `mc:Fallback` holds the VML copy of the same box, each with one
+ * `w:txbxContent` carrying the PAGE field. That two-copies shape is measured, not assumed — 24 `w:txbxContent`
+ * blocks across 12 of the authorized 46 份, exactly two per part (`.scratch/band-detail-authorized.py`).
+ *
+ * The three sentences that say *where* the box sits stay parameters, because that is the question this fixture is
+ * for: the centered leg says what the 6 footers say (`<wp:positionH relativeFrom="margin"><wp:align>center` over
+ * `posOffset 0` and `wrapNone`), and each declined leg changes one of them — an offset other than 0, a wrap that
+ * pushes the body away, a `column` anchor. The census counted **0 枚** of those three (`wp:anchor` is 7 枚 / 6 件
+ * in all, `.scratch/anchor-place-census.mjs`), so a page that drew them would be inventing.
+ */
+const anchoredBox = (sent: { posH?: string; posV?: string; wrap?: string } = {}): string => {
+  const posH = sent.posH ?? `<wp:positionH relativeFrom="margin"><wp:align>center</wp:align></wp:positionH>`;
+  const posV = sent.posV ?? `<wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>`;
+  const wrap = sent.wrap ?? "<wp:wrapNone/>";
+  // `pageFieldRuns` 自己就把每一枚包在 `w:r` 里：这里再包一层就成了「run 里套 run」，那是文件不会写的话，
+  // 带子会被整件扣住（读穿的那一关 rightly 拒绝）。
+  const words = `<w:p>${pageFieldRuns(undefined, "1")}</w:p>`;
+  const box =
+    `<wps:wsp><wps:cNvSpPr txBox="1"/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1828800" cy="182880"/></a:xfrm>` +
+    `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/><a:ln w="6350"><a:noFill/></a:ln></wps:spPr>` +
+    `<wps:txbx><w:txbxContent>${words}</w:txbxContent></wps:txbx><wps:bodyPr/></wps:wsp>`;
+  return (
+    `<mc:AlternateContent><mc:Choice Requires="wps"><w:drawing>` +
+    `<wp:anchor simplePos="0" relativeHeight="251658240" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">` +
+    `<wp:simplePos x="0" y="0"/>${posH}${posV}<wp:extent cx="1828800" cy="182880"/>` +
+    `<wp:effectExtent l="0" t="0" r="0" b="0"/>${wrap}<wp:docPr id="1" name="文本框 1"/>` +
+    `<a:graphic><a:graphicData uri="${NS_WPS}">${box}</a:graphicData></a:graphic></wp:anchor>` +
+    `</w:drawing></mc:Choice><mc:Fallback><w:pict><v:shape id="_x0000_s1026" type="#_x0000_t202">` +
+    `<v:textbox><w:txbxContent>${words}</w:txbxContent></v:textbox></v:shape></w:pict></mc:Fallback></mc:AlternateContent>`
+  );
+};
+
+/**
+ * A band paragraph that *is* one box: the anchored box is the paragraph's only run, as it is in all 6 authorized
+ * footers. `BandLeft` is the rung the files' `footer` style lends beneath them — they say no `w:jc` of their own —
+ * so the leg pins both halves of the sentence: the paragraph's own answer stays `left`, and the box is what moves
+ * the ink to the middle.
+ */
+const boxedPara = (sent: { posH?: string; posV?: string; wrap?: string } = {}): string =>
+  `<w:p><w:pPr><w:pStyle w:val="BandLeft"/></w:pPr><w:r><w:rPr><w:sz w:val="18"/></w:rPr>${anchoredBox(sent)}</w:r></w:p>`;
 
 /**
  * A footer that says where each of its paragraphs sits, in the shapes the authorized 46 份 write.
@@ -35,9 +83,16 @@ const CT_STY = "application/vnd.openxmlformats-officedocument.wordprocessingml.s
  * 同一轮重数的 `w:tabs`（自己说 12 段 / 20 枚定义，链上借 58 段各 2 枚，但带子里真正的制表符只有 **2 枚**）不进
  * 这些格：带子的段是 `white-space:pre-wrap` 下的裸 `\t`，给它定位要先改 DOM 结构，动到 `textContent` 读回与可编辑
  * 克隆的光标，是另一笔账。
+ *
+ * 最后四格是框自己说的落点（#241）。授权 21 件的 `wp:anchor` 只有 **7 枚 / 6 件**，其中 6 枚在页脚、全是装着页码的
+ * 文本框，枚枚说 `<wp:positionH relativeFrom="margin"><wp:align>center</wp:align>`，段自己一句 `w:jc` 都没写、从
+ * `footer` 样式借来 `left`（`.scratch/anchor-place-census.mjs`）——把页码摆到中间的是那只框，不是那一段。第 12 格
+ * 画这一句；后三格各改一句授权语料 0 枚的话（横向偏移非 0、`wrapTopAndBottom` 会挤走正文、锚在 `column` 上），
+ * 钉的是「不肯半句就位」：那三格必须一格属性都不落，而不是居中后再偏一点。
  */
 export const PLACE_FOOTER =
-  `${XML_DECL}<w:ftr xmlns:w="${NS_W}" xmlns:r="${NS_REL}">` +
+  `${XML_DECL}<w:ftr xmlns:w="${NS_W}" xmlns:r="${NS_REL}" xmlns:wp="${NS_WP}" xmlns:a="${NS_A}" ` +
+  `xmlns:wps="${NS_WPS}" xmlns:mc="${NS_MC}" xmlns:v="${NS_V}">` +
   `<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>自己说居中</w:t></w:r></w:p>` +
   `<w:p><w:pPr><w:pStyle w:val="BandDeep"/></w:pPr><w:r><w:t>链上借来居中</w:t></w:r></w:p>` +
   `<w:p><w:pPr><w:pStyle w:val="BandLeft"/><w:jc w:val="right"/></w:pPr><w:r><w:t>自己说的盖住样式说的</w:t></w:r></w:p>` +
@@ -53,6 +108,10 @@ export const PLACE_FOOTER =
   `<w:p><w:pPr><w:ind w:right="360"/></w:pPr><w:r><w:t>自己说右缩进</w:t></w:r></w:p>` +
   `<w:p><w:pPr><w:pStyle w:val="BandFirst"/></w:pPr><w:r><w:t>链上借来首行缩进</w:t></w:r></w:p>` +
   `<w:p><w:pPr><w:pStyle w:val="BandFirst"/><w:ind w:firstLineChars="0"/></w:pPr><w:r><w:t>自己说的不缩首行</w:t></w:r></w:p>` +
+  boxedPara() +
+  boxedPara({ posH: `<wp:positionH relativeFrom="margin"><wp:posOffset>114300</wp:posOffset></wp:positionH>` }) +
+  boxedPara({ wrap: `<wp:wrapTopAndBottom distT="0" distB="0" distL="0" distR="0"/>` }) +
+  boxedPara({ posH: `<wp:positionH relativeFrom="column"><wp:align>center</wp:align></wp:positionH>` }) +
   `</w:ftr>`;
 
 /**

@@ -3138,6 +3138,23 @@ export class WordDocument {
   }
 
   /**
+   * 件里自己说的起手缩放（`word/settings.xml` 的 `w:zoom w:percent`，百分数）。授权口径 docx 家族 28 件里
+   * **27 件说了**（100→19 枚、80→6 枚、120→2 枚——8 枚明说的不是 100），说的槽只有 `w:percent` 一个
+   * （`.scratch/zoom-audience.mjs`，逐件对拍在 `tests/doc-zoom-fit.test.ts`）。`undefined` = 件里这一句没说，
+   * 打开时由视图页那枚「页宽」接手。
+   *
+   * 认的是**精确**那一页：`.dotm` 还各带一页 `word/glossary/settings.xml`，那两页同名部件里说了话的是主页。
+   *
+   * 只读不写：这一句跟着的是**视图**，产品里没有一条命令声称在改它，而 WPS 落笔时怎么写那一句 未取证——
+   * 所以保存仍按 `word/settings.xml` 的原件字节带走，一个字节都不动（与「奇偶页不同」那条 0 受众的判死同一口径）。
+   */
+  zoomPercent(): number | undefined {
+    const raw = this.pkg ? new TextDecoder().decode(this.pkg.bytes("word/settings.xml") ?? new Uint8Array()) : "";
+    const v = /<(?:[\w-]+:)?zoom\b[^>]*?(?:[\w-]+:)?percent="(\d+(?:\.\d+)?)"/.exec(raw)?.[1];
+    return v === undefined ? undefined : Number(v);
+  }
+
+  /**
    * 「字数统计」报的数，由模型自己数出来。范围只有**正文**——表格里的那些段落算（它们是 `w:tbl` 里的 `w:p`，
    * 与正文同一段逻辑），页眉页脚、脚注尾注、文本框都不算：那几条在 WPS 的对话框里是勾选项，它的默认勾选
    * **未取证**，所以只数没有争议的那一块。

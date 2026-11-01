@@ -2782,13 +2782,16 @@ function mountDoc(app: Extract<Opened, { kind: "docx" }>): void {
   // 光标放到文首（WPS 同款）：字体/字号两格的回显问的是光标，没有光标两格只能空着；状态栏的行列
   // 也是跟着光标走的。放光标走 `moved`，sync 自己会再来一趟，不必在这里补一句。
   editor.caretToDocumentStart();
-  // 打开即按窗宽定初始缩放（#243「页宽」档）：走视图页那枚「页宽」同一条式子（`paperFitZoom`），
-  // 钳到与 ribbon 缩放同一界（0.4–2.5）。WPS 打开 `event plan.dotm` 状态栏显 121%，同一档的形状
-  // （窗口宽/纸宽恰合）；它的精确式子与「是否记住上次缩放」未取证（锁屏挡着受控实验）。
+  // 打开先问件里那一句：`word/settings.xml` 说了 `w:zoom w:percent` 就按那一个数起手（授权口径 28 件里 27 件说了，
+  // 其中 8 枚明说的不是 100），一句都没说才落回视图页那枚「页宽」——两条都走同一个 `applyZoom`，钳界与回显同源。
+  // WPS 打开 `event plan.dotm` 状态栏显 121%，而那份件里说的是 120：它是「按存的数起手」还是「记上次退出那一档」
+  // 未取证（锁屏挡着受控实验），这里按**文件里那一句话**办，不猜它的记忆。
   // §184 复验：page-zoom-dom 两档（93%/159%）0 红、table-tools 141 例 ×zoom 断言修正后单跑全绿；
   // 聚合 iframe 的宽视口（1.24×）下该页仍有断言与 saveBytes 兜底的交互问题，挂账 §184。
-  const z = paperFitZoom("width");
-  if (z !== undefined) applyZoom(z, true);
+  const stated = app.doc.zoomPercent();
+  // 件里那句是百分数；落在 0.4–2.5 之外（如 `w:percent="3000"`）由 `applyZoom` 自己钳，与 ⊖/⊕ 同一道界。
+  const z = stated === undefined ? paperFitZoom("width") : stated / 100;
+  if (z !== undefined) applyZoom(z, stated === undefined);
 }
 
 // -------------------------------------------------------------------- pptx

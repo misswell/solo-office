@@ -1759,13 +1759,18 @@ function syncDocRibbon(force = false): void {
   }
   mark("bullet", state?.list === "bullet");
   mark("number", state?.list === "number");
-  // 「样式」那一格既是清单又是回显。清单按**件里的段落样式**刷，签名相同就不重建（同一份文件里每趟选区变化
-  // 都 replaceChildren 一次，会把用户拉开的下拉合上）；换文档时 `force` 一定重建。回显问 `markState().styleId`：
+  // 「样式」那一格既是清单又是回显。清单按**件里段落样式自己说的那两句**筛（`w:qFormat` 说了、`w:semiHidden`
+  // 没说才露），顺序是 `w:uiPriority`（core 里排好，同档保声明序）；签名相同就不重建（同一份文件里每趟选区变化
+  // 都 replaceChildren 一次，会把用户拉开的下拉合上），换文档时 `force` 一定重建。回显问 `markState().styleId`：
   // `undefined` 是「不点名」，落在默认样式那一格（空值）——与纸面同一个 `shown`（原文视图读记录里的 prev）。
+  // 被筛掉的那几枚不在清单里，但当前段落点名它时仍要能认出**它自己的名字**（授权 22 枚非 qFormat 里 3 枚正文点名），
+  // 所以这一格插的那枚临时项用名字写，不像别处那样只能写出 id。
   const styleSel = ctl.style as HTMLSelectElement | undefined;
   if (styleSel) {
-    const list = editor?.paragraphStyles() ?? [];
+    const all = editor?.paragraphStyles() ?? [];
+    const list = all.filter((s) => s.shown);
     const ordered = [...list.filter((s) => s.isDefault), ...list.filter((s) => !s.isDefault)];
+    const nameOf = new Map(all.map((s) => [s.id, s.name]));
     const sig = JSON.stringify(ordered);
     if (force || styleSel.dataset.sig !== sig) {
       styleSel.dataset.sig = sig;
@@ -1779,7 +1784,7 @@ function syncDocRibbon(force = false): void {
         ...(ordered.length ? ordered.map((s) => make(s.isDefault ? "" : s.id, s.name)) : [make("", "正文")]),
       );
     }
-    echoChoice(styleSel, state?.styleId ?? "", ["", ...ordered.filter((s) => !s.isDefault).map((s) => s.id)], 1);
+    echoChoice(styleSel, state?.styleId ?? "", ["", ...ordered.filter((s) => !s.isDefault).map((s) => s.id)], 1, nameOf);
   }
   // 边框那一格的列子问的是「这一击落在哪一层」：光标在正文、在表上铺满整张、还是只圈了几格。所以它随选区
   // 重建，而不是随选区**回显**——一层的框是逐边的，说不出「现在挂着哪一档」。重建只在换层时发生，同一层里
@@ -1908,7 +1913,7 @@ function sizeEcho(): string {
  * preset the file never stated
  * (`.scratch/authorized-slot-census.py`; the 61-of-86 reading is the quarantined cohort's arithmetic).
  */
-function echoChoice(s: HTMLSelectElement, value: string | undefined, presets: string[], insertAt: number): void {
+function echoChoice(s: HTMLSelectElement, value: string | undefined, presets: string[], insertAt: number, names?: Map<string, string>): void {
   for (const o of [...s.options]) if (o.dataset.caret === "1") o.remove();
   if (value === undefined) {
     s.selectedIndex = -1;
@@ -1917,7 +1922,7 @@ function echoChoice(s: HTMLSelectElement, value: string | undefined, presets: st
   if (!presets.includes(value)) {
     const o = document.createElement("option");
     o.value = value;
-    o.textContent = value;
+    o.textContent = names?.get(value) ?? value;
     o.dataset.caret = "1";
     s.insertBefore(o, s.options[insertAt] ?? null);
   }

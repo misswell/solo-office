@@ -3116,6 +3116,8 @@ function smoke(): void {
         // （选它就是撤掉 w:pStyle）。这一腿问五件事：选项清单与次序、甲组换成「标题 1」后纸上换成 16 磅
         // Arial 深蓝粗体且段距跟着样式走、乙组自己写的缩进与粗体留着、丙组换回正文后 pStyle 撤掉且回显
         // 跟着光标回到空值、丁组换成「引用」后字符样式那张脸与那点墨留着而斜体从段落链借来。
+        // 清单那一格现在按件自己说的话筛（w:qFormat 说了、w:semiHidden 没说才露）并按 w:uiPriority 排；
+        // 己组点名的是被筛掉的那一枚，所以它还得多问一句：那一格说得出「致谢标题」这个名字，而不是一串 id。
         const galDoc = (document.getElementById("title")?.textContent ?? "").includes("样式画廊");
         let styleLeg = null;
         if (galDoc) {
@@ -3200,6 +3202,11 @@ function smoke(): void {
             return { afterLists: sel.left > lists.left ? 1 : 0, beforeFind: sel.left < find.left ? 1 : 0 };
           })();
           const galEcho = () => (galSel ? galSel.value : "?");
+          // 那一格此刻的字面：回显落在临时项上时，说的是样式自己的名字，不是 w:styleId 那串数字。
+          const galEchoLabel = () => {
+            if (!galSel || galSel.selectedIndex < 0) return "?";
+            return galSel.options[galSel.selectedIndex]?.textContent ?? "";
+          };
           galPut("甲组");
           await wait(180);
           const galEcho0 = galEcho();
@@ -3234,6 +3241,15 @@ function smoke(): void {
           galPut("丁组");
           await wait(180);
           const galEchoDing = galEcho();
+          // 己组点名的是被筛掉的那一枚（不说 w:qFormat）：清单里没有它，可那一格仍要叫得出它的名字；
+          // 光标移开之后临时项要收掉，清单回到件里露面的那几枚（不然下拉会随每一段越积越长）。
+          galPut("己组");
+          await wait(180);
+          const galEchoJi = galEcho();
+          const galEchoJiLabel = galEchoLabel();
+          galPut("甲组");
+          await wait(180);
+          const galOptsEnd = galSel ? [...galSel.options].map((o) => o.value + "=" + o.textContent) : [];
           if (galTrack0) {
             galTrackBtn()?.click();
             await wait(320);
@@ -3249,6 +3265,9 @@ function smoke(): void {
             echoBing: galEchoBing,
             echoDing0: galEchoDing0,
             echoDing: galEchoDing,
+            echoJi: galEchoJi,
+            echoJiLabel: galEchoJiLabel,
+            optsEnd: galOptsEnd,
             jia: galJia,
             yi: galYi,
             bing: galBing,

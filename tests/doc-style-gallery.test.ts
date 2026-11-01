@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { syncParaSlots, WordDocument, type Paragraph } from "../src/core/docx.js";
+import { syncParaSlots, WordDocument, type Paragraph, type StyleDef } from "../src/core/docx.js";
 import { renderWord } from "../src/core/render.js";
 import { writeDocx } from "../src/core/write-docx.js";
 import { OpcPackage, text } from "../src/core/opc.js";
@@ -7,7 +7,9 @@ import {
   DEFAULT_STYLE,
   EMPHASIS_CHAR_STYLE,
   HEADING_STYLE,
+  NO_QFORMAT_STYLE,
   QUOTE_STYLE,
+  SEMI_HIDDEN_STYLE,
   makeStyleGalleryDocx,
 } from "./helpers/make-style-gallery.js";
 import { unstamped } from "./helpers/unstamp.js";
@@ -20,8 +22,11 @@ import { unstamped } from "./helpers/unstamp.js";
  * 与字符样式借来的那几句也留着。纸上读到的字则必须跟着换：腿画在每枚 run 的 `styleOf` 上，不重新落到字段上，
  * 「换成标题 1」就只挪了段距、字还是正文那么大。
  *
- * 授权 46 份共 112 枚段落样式（每份 6～27 枚，`.scratch/para-style-gallery-audience.py`），103 枚带 `w:qFormat`，
- * 默认那枚 6/6 都叫 `Normal`；夹具照这个形状造了一枚默认、一枚标题链、一枚引用、一枚字符样式。
+ * 授权口径的两趟读数：`.scratch/para-style-gallery-audience.py` 在 46 份里数到 112 枚段落样式、103 枚带 `w:qFormat`；
+ * `.scratch/style-ui-audience.mjs` 在 28 件（office6 模板 + `.scratch/wps-corpus`，按 basename 去重）里数到 314 枚，
+ * 其中 292 枚说 `w:qFormat`、22 枚没说、9 枚说 `w:semiHidden`（枚枚同时说 qFormat + unhideWhenUsed）、
+ * `w:hidden` **0 枚**、`w:uiPriority` 313 枚说了（273 枚是 0 档，非 0 的 41 枚落在 7 件上，而那 7 件里
+ * 「按 priority 排」与「按声明排」不同一）；默认那枚 6/6 都叫 `Normal`。夹具照这些形状造。
  */
 
 const bytes = (): Uint8Array => makeStyleGalleryDocx();
@@ -62,13 +67,44 @@ const switchTo = (doc: WordDocument, needle: string, styleId: string | undefined
 };
 
 describe("开始页「样式」画廊：换的是 w:pStyle，不是把新样式抄到段落身上", () => {
-  it("只列件里声明的段落样式，按声明顺序，默认那枚标出来；字符样式不在里面", () => {
+  it("清单里每一枚段落样式都带著它自己那两句（露不露），并按 w:uiPriority 排——同档保声明序", () => {
+    // 声明序是 Normal → 标题 1 → 引用 → 致谢标题 → header；priority 是 0 → 9 → 2 → 10 → 99。
+    // 于是「引用」排在「标题 1」前面，正是授权里那 7 件的样子（按 priority 排与按声明排不同一）。
     expect(open(bytes()).paragraphStyles()).toEqual([
-      { id: DEFAULT_STYLE, name: "Normal", isDefault: true },
-      { id: HEADING_STYLE, name: "标题 1", isDefault: false },
-      { id: QUOTE_STYLE, name: "引用", isDefault: false },
+      { id: DEFAULT_STYLE, name: "Normal", isDefault: true, shown: true },
+      { id: QUOTE_STYLE, name: "引用", isDefault: false, shown: true },
+      { id: HEADING_STYLE, name: "标题 1", isDefault: false, shown: true },
+      { id: NO_QFORMAT_STYLE, name: "致谢标题", isDefault: false, shown: false },
+      { id: SEMI_HIDDEN_STYLE, name: "header", isDefault: false, shown: false },
     ]);
     expect(open(bytes()).paragraphStyles().some((s) => s.id === EMPHASIS_CHAR_STYLE)).toBe(false);
+  });
+
+  it("露不露只问件自己说的那两句：「没说」与「说了但是 0」在这一格里同判，说了的三态分得开", () => {
+    const d = open(bytes());
+    // 只在这一格里 peek 模型内部：画廊那一格交出去的是 `shown` 一个布尔，而「没说 qFormat / 说了是 / 说了不是」
+    // 是三句话，得有人证明它们没被压成一堆。元素下标是 TS 认的 private 访问口子，不改产品 API。
+    const defs = d["styles"] as unknown as Map<string, StyleDef>;
+    expect(defs.get(QUOTE_STYLE)!.qFormat).toBe(true);
+    expect(defs.get(NO_QFORMAT_STYLE)!.qFormat).toBeUndefined();
+    expect(defs.get(SEMI_HIDDEN_STYLE)!.semiHidden).toBe(true);
+    expect(defs.get(SEMI_HIDDEN_STYLE)!.unhideWhenUsed).toBe(true);
+    expect(defs.get(SEMI_HIDDEN_STYLE)!.qFormat).toBe(true);
+    expect(defs.get(SEMI_HIDDEN_STYLE)!.uiPriority).toBe(99);
+    // `w:hidden` 授权 0 枚：不建模，也不参加筛——只有说了 semiHidden 才算藏。
+    expect(defs.get(HEADING_STYLE)!.semiHidden).toBeUndefined();
+    const byId = new Map(d.paragraphStyles().map((s) => [s.id, s]));
+    expect([byId.get(NO_QFORMAT_STYLE)!.shown, byId.get(SEMI_HIDDEN_STYLE)!.shown]).toEqual([false, false]);
+  });
+
+  it("不露的那一枚照样落得下去、读得回来：筛的是画廊那一格，不是模型", () => {
+    const d = open(bytes());
+    expect(d.applyParaStyle(byText(d, "甲组"), NO_QFORMAT_STYLE)).toBe(true);
+    syncParaSlots(byText(d, "甲组"));
+    expect(pPrXml(part(writeDocx(d)), "甲组")).toBe(`<w:pPr><w:pStyle w:val="${NO_QFORMAT_STYLE}"/></w:pPr>`);
+    const back = open(writeDocx(d));
+    expect(byText(back, "甲组").styleId).toBe(NO_QFORMAT_STYLE);
+    expect(byText(back, "己组").styleId).toBe(NO_QFORMAT_STYLE);
   });
 
   it("甲组 换成标题 1：盘上只多一句 w:pStyle，纸上换成 16 磅 Arial 深蓝粗体", () => {

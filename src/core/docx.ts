@@ -2003,6 +2003,17 @@ export interface StyleDef {
   next?: string;
   rPr?: RunStyle;
   pPr?: Partial<ParaStyle>;
+  /**
+   * `w:qFormat`: the file's own sentence that this style belongs on the 速调 surface — the 开始页「样式」那一格.
+   * A bare element says yes; `w:val="0"` is a stated no, so this is three-valued and 「没说」 must stay apart.
+   */
+  qFormat?: boolean;
+  /** `w:semiHidden`: the file says this one is hidden in the UI by default. */
+  semiHidden?: boolean;
+  /** `w:unhideWhenUsed`: the file says a used one stays out of that hiding. */
+  unhideWhenUsed?: boolean;
+  /** `w:uiPriority/@w:val`: smaller wins, and that is the gallery's own order. */
+  uiPriority?: number;
 }
 
 /**
@@ -2225,6 +2236,7 @@ export class WordDocument {
     this.docDefaultRun = floor as RunStyle;
     for (const s of asArray(root?.style)) {
       const id = s["@_styleId"];
+      const pr = Number(s.uiPriority?.["@_val"]);
       this.styles.set(id, {
         name: s.name?.["@_val"] ?? id,
         ...(s["@_type"] === undefined ? {} : { type: String(s["@_type"]) }),
@@ -2232,6 +2244,12 @@ export class WordDocument {
         next: s.next?.["@_val"],
         rPr: s.rPr ? runStyle(s.rPr, this.theme) : undefined,
         pPr: s.pPr ? paraStyle(s.pPr) : undefined,
+        // 画廊那三句是**样式自己说的**，不是段落说的：`onOff` 把「没说 / 说了是 / 说了不是」分着带回来，
+        // 所以 `w:qFormat w:val="0"` 与一枚没写 qFormat 的样式在下一格里同判（都不露），而不是后者被补一句。
+        qFormat: onOff(s.qFormat),
+        semiHidden: onOff(s.semiHidden),
+        unhideWhenUsed: onOff(s.unhideWhenUsed),
+        uiPriority: Number.isFinite(pr) ? pr : undefined,
       });
       if (this.defaultParaStyleId === undefined && s["@_type"] === "paragraph" && s["@_default"] === "1") this.defaultParaStyleId = id;
     }
@@ -3292,22 +3310,40 @@ export class WordDocument {
   }
 
   /**
-   * The paragraph styles this part declares, in the order it declares them: the gallery 开始页 offers.
-   * §17.7.2.3 gives `w:type` the default `paragraph`, so a style that states none is one of these; character,
-   * table and numbering styles are not candidates. The default paragraph style is marked because picking it is
-   * 「不点名样式」 — the paragraph's `w:pStyle` goes away rather than naming the default.
+   * The paragraph styles this part declares, ordered and filtered by the sentences the styles themselves say:
+   * the gallery 开始页 offers. §17.7.2.3 gives `w:type` the default `paragraph`, so a style that states none is
+   * one of these; character, table and numbering styles are not candidates. The default paragraph style is
+   * marked because picking it is 「不点名样式」 — the paragraph's `w:pStyle` goes away rather than naming the default.
    *
-   * 授权 46 份共 **112 枚段落样式**（每份 6～27 枚，`.scratch/para-style-gallery-audience.py` 读 `word/styles.xml`
-   * 与 `word/document.xml` 的 `w:pStyle`），其中 103 枚带 `w:qFormat`——WPS 画廊露出来的正是这一批；这一格先摆
-   * **文件自己声明的每一枚段落样式**，不按 `w:qFormat` 筛，也不替它编名字（有的件在正文里只用到其中几枚）。
+   * `.scratch/style-ui-audience.mjs` 量授权 28 件（office6 模板 + `.scratch/wps-corpus`，按 basename 去重）里的
+   * **314 枚段落样式**：292 枚说了 `w:qFormat`、**22 枚没说**（wpspreset01/02/03 的 致谢标题/参考文献标题/声明标题、
+   * labor contract 的 封面标题、business plan 的 Body Text Indent/footer/WPSOffice手动目录 1…）；9 枚说了
+   * `w:semiHidden`（且枚枚同时说 qFormat + unhideWhenUsed，正是 header/footer/Normal (Web)/Balloon Text 那几枚）；
+   * `w:hidden` **0 枚**——所以这一族不建模，不按它筛；`w:uiPriority` 313/314 枚说了，其中 273 枚是 0 档，
+   * 非 0 的 41 枚（2/9/10/34/99/1624 档）落在 7 件上——那 7 件里按 priority 排与按声明排**并不同一**。
+   *
+   * 于是这一格问的三句都是件自己说的：露不露 = `w:qFormat` 说了且 `w:semiHidden` 没说；顺序 = `w:uiPriority`
+   * 小者在前、同档保声明序；`shown === false` 的那几枚仍在清单里（回显与 `applyParaStyle` 都要能认出它们），
+   * 只由画廊那一格筛掉——正文点过名的非 qFormat 样式有 3 枚，筛掉它们却不留名字，「当前样式」那一格就会报一串 id。
+   * 「说了 semiHidden 但文档里已有用它写的字时该不该露」（§17.5.2.66 与 `w:unhideWhenUsed` 的那一档）不在这里判：
+   * 授权 9 枚里 1 枚属此，而 WPS 那一格的实际长相还没机器取证（owner 的一次点击未到），所以按文件自己那句藏。
    */
-  paragraphStyles(): { id: string; name: string; isDefault: boolean }[] {
-    const out: { id: string; name: string; isDefault: boolean }[] = [];
+  paragraphStyles(): { id: string; name: string; isDefault: boolean; shown: boolean }[] {
+    const out: { id: string; name: string; isDefault: boolean; shown: boolean; rank: number; at: number }[] = [];
+    let at = 0;
     for (const [id, def] of this.styles) {
       if (def.type !== undefined && def.type !== "paragraph") continue;
-      out.push({ id, name: def.name, isDefault: id === this.defaultParaStyleId });
+      out.push({
+        id,
+        name: def.name,
+        isDefault: id === this.defaultParaStyleId,
+        shown: def.qFormat === true && def.semiHidden !== true,
+        rank: def.uiPriority ?? Number.MAX_SAFE_INTEGER,
+        at: at++,
+      });
     }
-    return out;
+    out.sort((a, b) => a.rank - b.rank || a.at - b.at);
+    return out.map(({ id, name, isDefault, shown }) => ({ id, name, isDefault, shown }));
   }
 
   /**

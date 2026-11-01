@@ -3747,8 +3747,12 @@ export class DocEditor {
     this.select(range, startEl);
   }
 
-  /** 件里声明的段落样式，按声明顺序——开始页「样式」那一格摆的就是这一份。 */
-  paragraphStyles(): { id: string; name: string; isDefault: boolean }[] {
+  /**
+   * 件里声明的段落样式：按件自己说的 `w:uiPriority` 排（同档保声明序），并带回 `shown`——那一格「样式」露不露，
+   * 问的是样式自己说的 `w:qFormat` 与 `w:semiHidden`（`WordDocument.paragraphStyles` 里有授权读数）。
+   * 清单仍是**全的**：正文点过名却不露的样式（授权 3 枚）得留在里面，否则「当前样式」那一格认不出它的名字。
+   */
+  paragraphStyles(): { id: string; name: string; isDefault: boolean; shown: boolean }[] {
     return this.doc.paragraphStyles();
   }
 

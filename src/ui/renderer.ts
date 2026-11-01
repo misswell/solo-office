@@ -19,6 +19,7 @@ import { currentUnit, onUnitChange, twipText, twipsFromUnit } from "./doc-units.
 import { DeckEditor, type DeckViewMode, type PresetGeometry } from "./deck-edit.js";
 import { DeckShow } from "./deck-show.js";
 import { dataUrl, IMAGE_MIME_BY_EXT } from "../core/media.js";
+import { paperFit, snapZoom } from "./zoom-fit.js";
 import { writePptx } from "../core/write-pptx.js";
 
 interface Bridge {
@@ -2094,13 +2095,25 @@ function buildDeckRibbon(): void {
 /** Document zoom; each editor applies it to its own surface, not to the chrome. */
 let zoomLevel = 1;
 
-function applyZoom(z: number): void {
-  zoomLevel = Math.min(2.5, Math.max(0.4, Math.round(z * 100) / 100));
+function applyZoom(z: number, fit = false): void {
+  zoomLevel = snapZoom(z, fit);
   if (current?.kind === "xlsx") grid?.setZoom(zoomLevel);
   else if (current?.kind === "docx") editor?.setZoom(zoomLevel);
   else deck?.setZoom(zoomLevel);
   const label = ctl.zoom as HTMLElement | undefined;
   if (label) label.textContent = `${Math.round(zoomLevel * 100)}%`;
+}
+
+/**
+ * WPS 的 `CT_View.kuip` 在 Writer 那一页的 `RB_Zoom` 里挂了 `ZoomPageWidth`／`ZoomOnePage` 这两枚；把纸量进
+ * 窗口那两枚式子（以及为什么按纸定档要向下取）在 `src/ui/zoom-fit.ts`，那一份不认识 DOM，单测直接钉它。
+ * 这里只把窗口与纸的数交进去。「双页」（`ZoomTwoPages`）判掉：我们的纸是一列连续铺开的，两页并排要的是另一套铺排，
+ * 不是另一个缩放数。
+ */
+function paperFitZoom(fit: "width" | "page"): number | undefined {
+  if (current?.kind !== "docx") return undefined;
+  const s = current.doc.sections[0] ?? DEFAULT_SECTION;
+  return paperFit(fit, view.clientWidth, view.clientHeight, twipsToPx(s.pageWidthTwips), twipsToPx(s.pageHeightTwips));
 }
 
 function zoomGroup(): HTMLElement {
@@ -2123,9 +2136,26 @@ function zoomGroup(): HTMLElement {
   label.textContent = "100%";
   label.title = "恢复 100%";
   label.onclick = () => applyZoom(1);
+  // 这一格是「此刻落笔的档」的回显，探针与装机腿都问它：给它一枚自己的标记，别让腿去猜哪一格里是百分数。
+  label.dataset.zoomEcho = "1";
   ctl.zoom = label;
   g.append(label);
   mk("⊕", "放大", () => applyZoom(zoomLevel + 0.1));
+  // 按纸定档那两枚只在有纸可量的一页出现：`ZoomPageWidth`/`ZoomOnePage` 是 Writer 那份 `CT_View.kuip` 挂的，
+  // 表格（`et`，只有 `ZoomDialog`/`ZoomFixed100`）与演示（`wpp`，只有 `ZoomFitInViewTab`/`ZoomInViewTab`）
+  // 那份各 0 枚——所以另两页连灰按钮都不该有，而不是摆一枚点了没用的。
+  if (current?.kind === "docx") {
+    for (const [fit, text, tip] of [
+      ["width", "页宽", "按窗口宽度放缩（WPS `ZoomPageWidth`）"],
+      ["page", "单页", "一整页放进窗口（WPS `ZoomOnePage`）"],
+    ] as const) {
+      const b = mk(text, tip, () => {
+        const z = paperFitZoom(fit);
+        if (z !== undefined) applyZoom(z, true);
+      });
+      b.dataset.fit = fit;
+    }
+  }
   return g;
 }
 
@@ -2752,13 +2782,13 @@ function mountDoc(app: Extract<Opened, { kind: "docx" }>): void {
   // 光标放到文首（WPS 同款）：字体/字号两格的回显问的是光标，没有光标两格只能空着；状态栏的行列
   // 也是跟着光标走的。放光标走 `moved`，sync 自己会再来一趟，不必在这里补一句。
   editor.caretToDocumentStart();
-  // 打开即按窗宽定初始缩放（#243「页宽」档）：缩放 = 可用宽 ÷ 纸宽（内容宽 − 滚动条预留），两位小数，
+  // 打开即按窗宽定初始缩放（#243「页宽」档）：走视图页那枚「页宽」同一条式子（`paperFitZoom`），
   // 钳到与 ribbon 缩放同一界（0.4–2.5）。WPS 打开 `event plan.dotm` 状态栏显 121%，同一档的形状
   // （窗口宽/纸宽恰合）；它的精确式子与「是否记住上次缩放」未取证（锁屏挡着受控实验）。
   // §184 复验：page-zoom-dom 两档（93%/159%）0 红、table-tools 141 例 ×zoom 断言修正后单跑全绿；
   // 聚合 iframe 的宽视口（1.24×）下该页仍有断言与 saveBytes 兜底的交互问题，挂账 §184。
-  const paperW = twipsToPx((app.doc.sections[0] ?? DEFAULT_SECTION).pageWidthTwips);
-  if (paperW > 0) applyZoom((view.clientWidth - 15) / paperW);
+  const z = paperFitZoom("width");
+  if (z !== undefined) applyZoom(z, true);
 }
 
 // -------------------------------------------------------------------- pptx

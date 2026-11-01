@@ -1089,7 +1089,13 @@ function smoke(): void {
           const ttTrackOff = revBtn()?.classList.contains("on") ? 1 : 0;
           // 现问：这一腿每按一次命令纸就重铺一回，开头抓住的那只盒当场离开文档——照旧引用量到的是 0 宽与旧列数。
           const ttFind = () => [...document.querySelectorAll("#view .page table.doc-table")].find((x) => (x.textContent ?? "").includes("甲"));
-          const ttBox = () => Math.round((ttFind()?.getBoundingClientRect().width ?? 0) * 10) / 10;
+          // 这一腿问的全是「纸上的长度」（写的数、涨的一列、抬起来的那一行都按缇→纸像素算），
+          // 而盒/行/列的宽高来自矩形——纸停在页宽档（#245）时那是视口像素。先除以这一张纸自己的档，再比长短。
+          const ttZ = () => {
+            const pg = ttFind()?.closest(".page");
+            return pg ? zPaper(pg) : 1;
+          };
+          const ttBox = () => Math.round(((ttFind()?.getBoundingClientRect().width ?? 0) / ttZ()) * 10) / 10;
           // 两样分开报：CSS 上写的那一句是文件的数（8000 缇 ÷ 15.0001 = 533.3px），盒量到的是纸面真实那只盒。
           // 这两个数在这一件上**不该相等**：同一趟更早的 #146 那一腿在这张表上落过框线（它按表形状认件），
           // 文件说了边的格子里那条 1px 在 collapse 模型下半宽出地界，所以盒恒比写的数宽 0.5px。
@@ -1309,8 +1315,8 @@ function smoke(): void {
             input.dispatchEvent(new Event("change", { bubbles: true }));
             return 1;
           };
-          const ttRowH = () => { const r = ttFind()?.rows[1]; return r ? Math.round(r.getBoundingClientRect().height * 10) / 10 : -1; };
-          const ttColW = (i) => { const c = ttFind()?.rows[1]?.cells[i]; return c ? Math.round(c.getBoundingClientRect().width * 10) / 10 : -1; };
+          const ttRowH = () => { const r = ttFind()?.rows[1]; return r ? Math.round((r.getBoundingClientRect().height / ttZ()) * 10) / 10 : -1; };
+          const ttColW = (i) => { const c = ttFind()?.rows[1]?.cells[i]; return c ? Math.round((c.getBoundingClientRect().width / ttZ()) * 10) / 10 : -1; };
           ttPut(ttFind()?.rows[1]?.cells[0]);
           await wait(240);
           const ttSizeHit = (ttSpin("高度") ? 1 : 0) + (ttSpin("宽度") ? 1 : 0);
@@ -1611,7 +1617,22 @@ function smoke(): void {
           await wait(320);
           const tpOpen = tpDlg()?.open === true ? 1 : 0;
           const tpTitle = tpDlg()?.querySelector("h2")?.textContent ?? "";
-          const tpRows = tpDlg()?.querySelectorAll(".solo-tp-row,.solo-tp-check").length ?? 0;
+          // 「表」那一节摆得出几格：对话框是平铺的，两节靠 .solo-tp-section 那道分节条隔开，
+          // 直接问整张对话框有几行会把「行」那一节（#216 的对齐、#222 的允许跨页断行）一起数进来。
+          const tpRows = (() => {
+            const dlg = tpDlg();
+            if (!dlg) return 0;
+            let sections = 0, n = 0;
+            for (const el of dlg.querySelectorAll(".solo-tp-section,.solo-tp-row,.solo-tp-check")) {
+              if (el.classList.contains("solo-tp-section")) {
+                sections++;
+                if (sections >= 2) break;
+                continue;
+              }
+              if (sections === 1) n++;
+            }
+            return n;
+          })();
           const tpEchoAlign = tpField("tp-align")?.value ?? "?";
           const tpEchoIndent = tpField("tp-indent")?.value ?? "?";
           const tpEchoFixed = tpField("tp-fixed")?.checked === true ? 1 : 0;
@@ -1825,8 +1846,10 @@ function smoke(): void {
           // 碰到的列之和留在原地）在装机的壳里落得下去、退得回来。件里那串字节的形状归 tests/doc-distribute.test.ts
           // 与 .scratch/col-distribute-dom.ts（它把同一份 writeDocx 的 XML 数出来）。
           const dcBtn = () => rb("分布列");
+          // 格的宽高来自矩形＝视口像素，而这一腿比的是纸上的长度（盒那一侧走 ttBox，已按档换算）。
+          // 两侧不同框时「摆宽一厘米」在纸上摊成 60.11px、盒却涨 37.8px，所以先除以这一张纸自己的档。
           const dcColsOf = () => [...(ttFind()?.rows[0]?.cells ?? [])]
-            .map((c) => Math.round(c.getBoundingClientRect().width * 100) / 100);
+            .map((c) => Math.round((c.getBoundingClientRect().width / ttZ()) * 100) / 100);
           const dcSpread = (a) => (a.length ? Math.round((Math.max(...a) - Math.min(...a)) * 100) / 100 : -1);
           const dcJoin = (a) => a.join(",");
           ttPut(ttRow0Cell(0));
@@ -1887,13 +1910,15 @@ function smoke(): void {
           // 的算式用的全是本趟量到的像素；两趟之间比的只有形状与算式（行数是前面几腿留的账），不是绝对行高。
           // WPS 真机在悬光标上落哪几行、atLeast 追不上内容时它怎么收尾，均 未取证。
           const drBtn = () => rb("分布行");
+          // 行高、盒高来自矩形＝视口像素，而「+600 缇」那一击的算式和 40px 那条约都在纸上：先除以档，
+          // 否则纸停在页宽档时起手报 58.69、撑完报 156.88，涨的 98.19px 谁也不是 600 缇。
           const drRowsOf = () => [...(ttFind()?.rows ?? [])]
             .filter((r) => !r.classList.contains("solo-sheet-gap-row") && !r.classList.contains("solo-repeat-header-row"))
-            .map((r) => Math.round(r.getBoundingClientRect().height * 100) / 100);
+            .map((r) => Math.round((r.getBoundingClientRect().height / ttZ()) * 100) / 100);
           const drSpread = (a) => (a.length ? Math.round((Math.max(...a) - Math.min(...a)) * 100) / 100 : -1);
           const drJoin = (a) => a.join(",");
           const drSum = (a) => Math.round(a.reduce((s, h) => s + h, 0) * 100) / 100;
-          const drBox = () => Math.round((ttFind()?.getBoundingClientRect().height ?? 0) * 100) / 100;
+          const drBox = () => Math.round(((ttFind()?.getBoundingClientRect().height ?? 0) / ttZ()) * 100) / 100;
           ttPut(ttRow0Cell(0));
           await wait(260);
           const drTrackStart = revBtn()?.classList.contains("on") ? 1 : 0;
@@ -2587,6 +2612,12 @@ function smoke(): void {
             const el = wrapPara(needle);
             if (!el) return null;
             const node = [...el.querySelectorAll("span")].map((x) => x.firstChild).find((n) => n && (n.textContent ?? "").includes("International"));
+            const page = el.closest(".page");
+            const z = page ? zPaper(page) : 1;
+            // 两套像素在这里必须先对齐再比长短（口径同 doc-layout.ts 文件头那条规矩）：
+            // Range 的矩形与 getBoundingClientRect 是视口像素，getComputedStyle 报的 padding 是纸的像素。
+            // 行宽不除、内宽把没缩放的边距从放大过的纸宽里减，两个数就分属两套像素，
+            // 「首行铺到内宽」这一条会永远差出一整档缩放（1.59 档下 876.7 vs 642.8）。
             let lines = 0;
             let first = 0;
             if (node) {
@@ -2594,13 +2625,12 @@ function smoke(): void {
               rg.selectNodeContents(node);
               const rects = [...rg.getClientRects()];
               lines = rects.length;
-              first = rects.length ? round1(rects[0].width) : 0;
+              first = rects.length ? round1(rects[0].width / z) : 0;
             }
-            const page = el.closest(".page");
-            const z = page ? zPaper(page) : 1;
             const cs = page ? getComputedStyle(page) : null;
             const pr = page ? page.getBoundingClientRect() : null;
-            const inner = pr && cs ? round1((pr.width - parseFloat(cs.paddingLeft || "0") - parseFloat(cs.paddingRight || "0")) / z) : 0;
+            const inner =
+              pr && cs ? round1(pr.width / z - parseFloat(cs.paddingLeft || "0") - parseFloat(cs.paddingRight || "0")) : 0;
             return { wb: getComputedStyle(el).wordBreak, lines: lines, first: first, inner: inner, box: round1(el.getBoundingClientRect().width / z) };
           };
           const wrapLong = (needle) => [...(wrapPara(needle)?.querySelectorAll("span") ?? [])].map((x) => x.firstChild).find((n) => n && (n.textContent ?? "").includes("International"));
@@ -2932,13 +2962,15 @@ function smoke(): void {
             szClicks.push("号2:abc");
           }
           const szJunk = { echo: szEcho("号2"), px: szPx("号2") };
-          if (szEcho("号2") !== "72") {
+          // 「打到没有」问纸上的磅数，不问框里那一串：框的回显在号数制里是名字（72 无名字才显数字），
+          // 拿显示字面当闸门，第二趟会把已经落过的再打一遍——这一腿问的正是「起手盘上已经是这一句」。
+          if (szPx("号2") !== 96) {
             szType("号2", "72");
             await wait(240);
             szClicks.push("号2:72");
           }
           // 24 不在 WPS 那 21 档里（fontSizeList 无 24）：能打字的这条路正是为了这种数。
-          if (szEcho("号3") !== "24") {
+          if (szPx("号3") !== 32) {
             szType("号3", "24");
             await wait(240);
             szClicks.push("号3:24");
@@ -3275,6 +3307,68 @@ function smoke(): void {
             trackBefore: galTrack0,
             trackBack: galTrackOn(),
             savedDirty: (document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0,
+          };
+        }
+        // #245：视图页 RB_Zoom 里 WPS 声明的两枚按纸定档的腿（ongmani/CT_View.kuip 的 ZoomPageWidth
+        // 与 ZoomOnePage；et/wpp 那两份各 0 枚，所以只有文字这一页摆）在装机这只壳里走一趟。
+        // 无头探针的窗口是 756×308，「单页」那一档被自家 0.4 下界挡住，只能验式子；装机壳开的是
+        // 1280×820（main.ts:33），这一腿问的是 owner 真能看见的那几件事：这两枚挂在视图页（没切到的
+        // 那一档整条 bar 是 hidden，所以起手在「开始」时它们不该看得见）、切过去点一遍之后纸的显示宽
+        // 贴住可用宽、一整张纸那一格真的放进可视高、那一格报的百分数就是落的档。纸的像素不在腿里硬编：
+        // 按 100% 量 .page 的 clientWidth，由壳外那一步跟件里那句 w:pgSz 对，两枚档的预测也用件里的数。
+        // 另问两件：全程不置脏、且没存盘 → 盘上字节一字不动。
+        const zfDoc = (document.getElementById("title")?.textContent ?? "").includes("视图档");
+        let zoomFitLeg = null;
+        if (zfDoc) {
+          const zfView = document.getElementById("view");
+          const zfPage = () => document.querySelector("#view .page");
+          const zfScale = () => parseFloat(zfPage()?.style.getPropertyValue("--solo-scale") || "1");
+          const zfShown = () => (zfPage() ? Math.round(zfPage().getBoundingClientRect().width) : 0);
+          const zfFitLegs = () => [...document.querySelectorAll("#ribbon .rb")].filter((b) => b.dataset.fit);
+          const zfBtn = (fit) => zfFitLegs().find((b) => b.dataset.fit === fit);
+          const zfEcho = () => document.querySelector("#ribbon button[data-zoom-echo]");
+          const zfDirty = () => ((document.getElementById("title")?.textContent ?? "").includes("●") ? 1 : 0);
+          const zfDirty0 = zfDirty();
+          const zfTab0 = document.querySelector(".rtabs button.on")?.textContent ?? "";
+          // 这两枚挂在视图页那一格：没切到的档整条 bar 是 hidden，所以起手（多半在「开始」）看不见。
+          const zfHomeHidden = zfFitLegs().length > 0 && zfFitLegs().every((b) => !b.offsetParent);
+          const zfTab = [...document.querySelectorAll(".rtabs button")].find((b) => b.textContent === "视图");
+          if (zfTab && !zfTab.classList.contains("on")) {
+            zfTab.click();
+            await wait(220);
+          }
+          const zfMount = zfScale(); // 打开那份件时落的是页宽档，所以「恢复 100%」这一击有东西可摆回
+          zfEcho()?.click(); // 那一格自己就是「恢复 100%」
+          await wait(220);
+          const zfAt100 = { scale: zfScale(), clientW: zfPage()?.clientWidth ?? 0, shownW: zfShown() };
+          // 先按 ⊕ 走一档，证明点这两枚是「按纸算」而不是「维持现状」。
+          const zfPlus = [...document.querySelectorAll("#ribbon .rb")].find((b) => b.title === "放大");
+          zfPlus?.click();
+          await wait(220);
+          const zfDrift = zfScale();
+          zfBtn("width")?.click();
+          await wait(220);
+          const zfWidth = { scale: zfScale(), echo: zfEcho()?.textContent ?? "", shownW: zfShown() };
+          zfBtn("page")?.click();
+          await wait(220);
+          const zfPageFit = { scale: zfScale(), echo: zfEcho()?.textContent ?? "", shownW: zfShown() };
+          zfBtn("page")?.click();
+          await wait(220);
+          zoomFitLeg = {
+            tab0: zfTab0,
+            homeHidden: zfHomeHidden ? 1 : 0,
+            tabShown: document.querySelector(".rtabs button.on")?.textContent ?? "",
+            legs: zfFitLegs().map((b) => b.dataset.fit + ":" + (b.disabled ? "灰" : "亮") + ":" + (b.offsetParent ? "可见" : "藏")),
+            viewW: zfView?.clientWidth ?? 0,
+            viewH: zfView?.clientHeight ?? 0,
+            mount: zfMount,
+            at100: zfAt100,
+            drift: zfDrift,
+            width: zfWidth,
+            page: zfPageFit,
+            again: zfScale(),
+            dirty0: zfDirty0,
+            dirty: zfDirty(),
           };
         }
         // #227：开始页那两枚「上标/下标」在装机这只壳里走一趟。WPS 的 CT_Home.kuip:50-51 声明这两条命令，
@@ -3739,7 +3833,9 @@ function smoke(): void {
             const ts = [...el.querySelectorAll("span.tab")];
             const t = ts[idx ?? 0];
             if (!t) return null;
-            const z = parseFloat(page.style.getPropertyValue("zoom")) || 1;
+            // 口径同 zPaper（探针顶部那条）：#245 之后纸盒上写的是 --solo-scale，style.zoom 恒空，
+            // 读错一枚就把视口像素当纸的像素交出去——这一族一度把制表位后的墨报成 147.1px（真值 48.0）。
+            const z = zPaper(page);
             const base = page.getBoundingClientRect().left;
             const rg = document.createRange();
             const nxt = ts[(idx ?? 0) + 1] ?? null;
@@ -4081,6 +4177,10 @@ function smoke(): void {
             if (!t || !c) return null;
             const ts = getComputedStyle(t);
             const cs = getComputedStyle(c);
+            const pg = c.closest(".page");
+            // 这一格里其余各项都属意「纸的像素」（内联的 margin-left、computed 的边宽都不随放大变），
+            // 只有格宽高来自矩形——那是视口像素。纸停在页宽档时不除会把 133.3×40 报成 212×63.6。
+            const oz = pg ? zPaper(pg) : 1;
             const r = c.getBoundingClientRect();
             return {
               ml: t.style.marginLeft,
@@ -4090,8 +4190,8 @@ function smoke(): void {
               cellBg: cs.backgroundColor,
               cellTop: cs.borderTopStyle + "/" + cs.borderTopWidth + "/" + cs.borderTopColor,
               va: cs.verticalAlign,
-              w: Math.round(r.width * 10) / 10,
-              h: Math.round(r.height * 10) / 10,
+              w: Math.round((r.width / oz) * 10) / 10,
+              h: Math.round((r.height / oz) * 10) / 10,
             };
           };
           const otPut = (n) => {
@@ -4404,7 +4504,7 @@ function smoke(): void {
         const bandStripEls = [...document.querySelectorAll("#view .solo-sheet-strip")];
         // 条带与复件的摆位写的是「纸的像素」，zoom 把纸连同缝一起放大。这一腿报的数一律换算回纸的像素：
         // 漏乘或多乘 zoom，stripSpace 就会是 false、缝距就会差出一大截，纸盒里量的与 CSS 写的对不上。
-        const bandZoom = parseFloat(bandPaper?.style.getPropertyValue("zoom")) || 1;
+        const bandZoom = bandPaper ? zPaper(bandPaper) : 1;
         const bandPaperTop = bandPaper?.getBoundingClientRect().top ?? 0;
         const bandLocal = (el) => Math.round(((el.getBoundingClientRect().top - bandPaperTop) / bandZoom) * 10) / 10;
         // 复件按各自那一张的缝摆：报的是「复件的字到缝沿的实际间距」，节说的那个距离不进这一段（那是模型里的数）。
@@ -4575,7 +4675,7 @@ function smoke(): void {
               fp.getBoundingClientRect().top >= last.getBoundingClientRect().bottom - 1
             );
           })(),
-          zoom: bandPaper?.style.getPropertyValue("zoom") || "",
+          zoom: bandPaper ? zPaper(bandPaper) : 1,
         };
         // #156：换缩放档问的还是同一张纸。Ribbon 的 ⊕ 每步 +10%，五步到 150%；缝的道数、复件份数、每一条缝在
         // 纸上的位置（都换算回纸的像素）都得与 100% 同一份。铺排那趟曾拿视口像素的行盒去比纸的像素的容量，150%
@@ -4583,7 +4683,7 @@ function smoke(): void {
         const bandAt = () => {
           const paper = document.querySelector("#view .page");
           const els = [...document.querySelectorAll("#view .solo-sheet-strip")];
-          const z = parseFloat(paper?.style.getPropertyValue("zoom")) || 1;
+          const z = paper ? zPaper(paper) : 1;
           const top0 = paper ? paper.getBoundingClientRect().top : 0;
           // 现问：换档重画过一整趟，条带与复件都是这一趟新造的节点（原件与母本还在），拿 docBands 之前抓住的
           // 那一份去认「照的是哪一份」会把复件与新的条带错开——一律现问。
@@ -4700,7 +4800,7 @@ function smoke(): void {
           tblpPr: (() => {
             const p = document.querySelector("#view .page");
             if (!p) return [];
-            const zz = Number.parseFloat(p.style.getPropertyValue("zoom")) || 1;
+            const zz = zPaper(p);
             const box = p.getBoundingClientRect();
             const r2 = (n) => Math.round(n * 100) / 100;
             return [...p.querySelectorAll("table")].map((el) => {
@@ -4727,7 +4827,7 @@ function smoke(): void {
           shapeDraw: (() => {
             const p = document.querySelector("#view .page");
             if (!p) return [];
-            const zz = Number.parseFloat(p.style.getPropertyValue("zoom")) || 1;
+            const zz = zPaper(p);
             const r1 = (n) => Math.round(n * 10) / 10;
             return [...p.querySelectorAll(".shape-carry")].map((el) => {
               const r = el.getBoundingClientRect();
@@ -5167,7 +5267,7 @@ function smoke(): void {
         const recovered = { cells: document.querySelectorAll(".sheet-wrap td").length, title: document.getElementById("title")?.textContent };
         // The run ends on a modified document, so quitting goes through the unsaved prompt.
         // A PDF the export asked for shows up in saveAsWrites, next to the pptx/xlsx saves.
-        return { docPart, bandLeg, bandTabsLeg, editMarksLeg, sortLeg, rowSplitLeg, rulerLeg, painterLeg, leaderLeg, tabStopsLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, clearLeg, styleLeg, vertLeg, caseLeg, origLeg, origTableLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptViews, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, sheetBorder, sheetRibbon, docNewPart, errorState, recovered };
+        return { docPart, bandLeg, bandTabsLeg, editMarksLeg, sortLeg, rowSplitLeg, rulerLeg, painterLeg, leaderLeg, tabStopsLeg, tablePlaceLeg, tablePropsWriteLeg, tableUnitsLeg, wrapLeg, keepLeg, sizeLeg, clearLeg, styleLeg, zoomFitLeg, vertLeg, caseLeg, origLeg, origTableLeg, underLeg, paraBox, paraBoxCmd, tblBoxCmd, tableToolsCmd: ttCmd, docInsert, docOutline, pptPart, pptInsert, pptShow, pptViews, pptSaved, sheetPart, sheetFill, sheetPic, sheetCF, sheetGT, sheetNote, sheetChart, sheetChartEdit, sheetChartGeometry, sheetZoom, sheetBorder, sheetRibbon, docNewPart, errorState, recovered };
       })()`;
       void last?.webContents
         .executeJavaScript(probe)

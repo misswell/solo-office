@@ -2745,9 +2745,19 @@ export class WordDocument {
    * `wp:anchor` is deliberately not read: it states a spot on the page rather than a place in the line, and the
    * body has no anchor placement to put it at (#218 covers floating *tables*). An anchored shape keeps its bytes
    * and stays undrawn — the run carries it, and the page shows the words inside it (`carry.show`) without the
-   * figure. That is a known gap, not a case no document writes: `.scratch/wgp-census.mjs` counts 7 枚 across 6 件
-   * of the 21 authorized templates, 4 of them borrowing paint from the theme and 4 of them sitting in a footer
-   * rather than the body. No position is invented for them here.
+   * figure. That is a known gap, and it is a measured one (`.scratch/anchor-place-census.mjs`, over the 21
+   * authorized templates): **7 枚 in 6 件**, all `behindDoc="0"`, of which
+   *
+   * - **6 枚 sit in a footer** — a 192×192px `wps:wsp` text box holding the page number, `wrapNone`, placed by
+   *   `<wp:positionH relativeFrom="margin"><wp:align>center</wp:align>` and `positionV relativeFrom="paragraph"`
+   *   at `posOffset=0`. Their own paragraphs carry no `w:jc` and the `footer` style they borrow says `w:jc="left"`,
+   *   so the file asks for a box centered across the margin box while the paragraph beside it stays left. The band
+   *   currently reads the words out of that box and lays them per the paragraph — the placement is the open part.
+   * - **1 枚 sits in a body** (`business plan.dotm`) and draws nothing: a `prst="line"` whose `wp:extent` is
+   *   5253990×0 EMU (551.6×0px) and whose only pen is `<a:ln w="9525"><a:noFill/></a:ln>` — an empty pen is the
+   *   file saying no ink. `wrapTopAndBottom` on it has 0 visible audience.
+   *
+   * No position is invented for them here.
    */
   private inlineShapeOf(node: any, rels: Map<string, Rel2>): InlineShape | undefined {
     const drawing = this.drawingOf(node);

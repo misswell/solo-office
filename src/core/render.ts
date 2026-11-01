@@ -1,4 +1,4 @@
-import type { Block, BandPlace, Carried, CarriedInline, HeaderFooter, IndentFields, Inline, NumberLevel, PageBorder, Paragraph, PropSlot, RowInfo, Section, Table, TableBorder, TableCell, TabStop, WordDocument } from "./docx.js";
+import type { Block, BandPlace, Carried, CarriedInline, HeaderFooter, IndentFields, Inline, InlineShape, NumberLevel, PageBorder, Paragraph, PropSlot, RowInfo, Section, ShapeGlyph, Table, TableBorder, TableCell, TabStop, WordDocument } from "./docx.js";
 import { DEFAULT_SECTION, TAB_LEADER_TOKENS, hasLine, LINE_ONE, MARGIN_SIDES, PAGE_BORDER_SIDES, PBDR_ORDER, headingLevel, lineGridPitchTwips, twipsToPx } from "./docx.js";
 import type { CommentAnchor } from "./comments.js";
 import type { ArrowEnd, BodyLevel, LayoutPlaceholder, Presentation, Shape, Slide, SlideParagraph, TextBody } from "./pptx.js";
@@ -271,6 +271,84 @@ function carryTag(carry: CarriedInline): string {
   return `<span class="${RUN_CARRY_CLASS}" data-carry="${carry.key}" data-tag="${esc(carry.tag)}" contenteditable="false">${esc(carry.show)}</span>`;
 }
 
+/** One number as this page writes it into SVG: enough to place a shape to the pixel, short enough to assert on. */
+const svgNum = (v: number): string => String(Math.round(v * 1000) / 1000);
+
+/**
+ * One figure of a DrawingML group as SVG, still in the group's child units — the `<svg>` around it carries the
+ * transform. `a:ln@w` is the pen the file states and CSS pixels are what it converts to, so the stroke is written
+ * `non-scaling-stroke`: the group's own scale is not uniform (this file maps 5550×4437 child units onto 530.0×295.8
+ * px, 1.43× more stretch one way than the other), and letting the scale thicken the pen would draw a 4px connector
+ * at 3.4px in one direction and 5.3px in the other.
+ *
+ * `a:xfrm@rot` turns the shape about its own centre and `flipH`/`flipV` mirror it *inside* that centre first, so
+ * the mirror is applied before the turn — the order the operations sit in here is the order a reader works them
+ * from the shape outward.
+ */
+function glyphTag(g: ShapeGlyph): string {
+  const cx = g.x + g.w / 2;
+  const cy = g.y + g.h / 2;
+  // Outermost first, which is where each line below lands: a transform list reaches its points from the right, so
+  // the shape lands in its box, then mirrors inside that box, then turns about its centre.
+  const ops: string[] = [];
+  if (g.rotation) ops.push(`rotate(${svgNum(g.rotation)} ${svgNum(cx)} ${svgNum(cy)})`);
+  if (g.flipH || g.flipV)
+    ops.push(`translate(${svgNum(cx)} ${svgNum(cy)}) scale(${g.flipH ? -1 : 1} ${g.flipV ? -1 : 1}) translate(${svgNum(-cx)} ${svgNum(-cy)})`);
+  // A `a:custGeom` path is written in its own box, from 0,0; the other presets name the box directly.
+  if (g.kind === "custGeom") ops.push(`translate(${svgNum(g.x)} ${svgNum(g.y)})`);
+  const transform = ops.length ? ` transform="${ops.join(" ")}"` : "";
+  // SVG paints an unstated fill black; a shape the file leaves unpainted draws as nothing.
+  const fill = ` fill="${esc(g.fill ?? "none")}"`;
+  const pen = g.stroke ? ` stroke="${esc(g.stroke)}" stroke-width="${svgNum(g.strokeWidth ?? 1)}" vector-effect="non-scaling-stroke"` : "";
+  if (g.kind === "line")
+    return `<line x1="${svgNum(g.x)}" y1="${svgNum(g.y)}" x2="${svgNum(g.x + g.w)}" y2="${svgNum(g.y + g.h)}"${pen}${transform}/>`;
+  if (g.kind === "custGeom") return `<path d="${esc(g.d ?? "")}"${fill}${pen}${transform}/>`;
+  return `<rect x="${svgNum(g.x)}" y="${svgNum(g.y)}" width="${svgNum(g.w)}" height="${svgNum(g.h)}"${
+    g.radius === undefined ? "" : ` rx="${svgNum(g.radius)}"`
+  }${fill}${pen}${transform}/>`;
+}
+
+/**
+ * A `w:drawing` this reader understood, drawn. The box is the `wp:extent` the file states; the figures live in the
+ * group's child space and the `<svg>` `viewBox` is that space, so the two coordinate systems meet without this page
+ * inventing a third. The words sit over them as HTML, because a shape's text is the document's paragraphs —
+ * styles, 字号 and 加粗 included — and those belong to `renderParagraph`, not to a glyph.
+ *
+ * The text is *not* scaled by the group transform: what a grouped shape's font size becomes under a non-uniform
+ * group scale is 未取证, and 12–22 磅 in a 150×46 px box is what the file's own `w:sz` says. `skipped` rides as the
+ * box's tooltip, which is how the page admits the part of the figure it left off.
+ */
+function shapeTag(shape: InlineShape, carry: CarriedInline, para: (p: Paragraph) => string): string {
+  const sx = shape.width / shape.viewBox.w;
+  const sy = shape.height / shape.viewBox.h;
+  const boxes = shape.texts
+    .map((t) => {
+      const anchor = t.anchor === "ctr" || t.anchor === "anchorCtr" ? "center" : t.anchor === "b" || t.anchor === "bottom" ? "flex-end" : undefined;
+      const style = [
+        "position:absolute",
+        `left:${svgNum((t.x - shape.viewBox.x) * sx)}px`,
+        `top:${svgNum((t.y - shape.viewBox.y) * sy)}px`,
+        `width:${svgNum(t.w * sx)}px`,
+        `height:${svgNum(t.h * sy)}px`,
+        "overflow:hidden",
+        anchor ? `display:flex;flex-direction:column;justify-content:${anchor}` : "",
+      ]
+        .filter(Boolean)
+        .join(";");
+      // `shape-words`, not the deck's `shape-text`: that class carries a stylesheet rule written for a slide shape
+      // (fill the box, flex the paragraphs), and a Writer figure has no business inheriting it.
+      return `<div class="shape-words" style="${style}">${t.paragraphs.map(para).join("")}</div>`;
+    })
+    .join("");
+  const note = shape.skipped?.length ? ` title="${esc(`未画：${shape.skipped.join("、")}`)}"` : "";
+  const box = `position:relative;display:inline-block;width:${svgNum(shape.width)}px;height:${svgNum(shape.height)}px`;
+  return (
+    `<span class="${RUN_CARRY_CLASS} shape-carry" data-carry="${carry.key}" data-tag="${esc(carry.tag)}" contenteditable="false"${note} style="${box}">` +
+    `<svg viewBox="${svgNum(shape.viewBox.x)} ${svgNum(shape.viewBox.y)} ${svgNum(shape.viewBox.w)} ${svgNum(shape.viewBox.h)}" preserveAspectRatio="none" ` +
+    `style="position:absolute;left:0;top:0;width:100%;height:100%">${shape.glyphs.map(glyphTag).join("")}</svg>${boxes}</span>`
+  );
+}
+
 /**
  * A page field inside a header/footer band, drawn as a labelled box. A page number that reads like the text
  * beside it would be typed over and deleted by accident; `页码` says it is one thing, and the caret cannot
@@ -289,13 +367,15 @@ const HF_BAR_STYLE = "display:none;gap:6px;margin-top:4px";
 const HF_BTN_STYLE = "font:inherit;font-size:11px;padding:2px 8px;border:1px solid #c3c9d2;border-radius:5px;background:#f2f4f7;color:#26292e;cursor:pointer";
 
 /** Runs between an open range's markers are wrapped, so the anchored text reads as one block. */
-function wordRuns(inlines: Inline[], state: CommentState): string {
+function wordRuns(inlines: Inline[], state: CommentState, para: (p: Paragraph) => string): string {
   const out: string[] = [];
   let i = 0;
   while (i < inlines.length) {
     const inline = inlines[i];
     if (inline.carry) {
-      out.push(carryTag(inline.carry));
+      // A drawing this reader can paint draws its figure; its `data-carry` is still the only thing tying the box
+      // back to the bytes, so a save of a document nobody edited still writes the `w:drawing` it was given.
+      out.push(inline.shape ? shapeTag(inline.shape, inline.carry, para) : carryTag(inline.carry));
       i += 1;
       continue;
     }
@@ -637,7 +717,7 @@ function renderParagraph(p: Paragraph, doc: WordDocument, counters: Map<string, 
     prefix = `<span class="bullet"${markStyle.length ? ` style="${markStyle.join(";")}"` : ""}>${mark}</span>`;
     style.push(`padding-left:${8 + ilvl * 24}px`);
   }
-  const body = wordRuns(p.inlines, state) || "&nbsp;";
+  const body = wordRuns(p.inlines, state, (q) => renderParagraph(q, doc, counters, state, gridPx)) || "&nbsp;";
   // A paragraph-level revision rides on the paragraph element itself: the break that ends it is not
   // text a run can carry. Class and data attributes only, never inline style, so the editor cannot
   // read a mark back as formatting — and the properties record has to survive the round trip through

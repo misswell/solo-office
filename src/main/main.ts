@@ -4697,6 +4697,40 @@ function smoke(): void {
               };
             });
           })(),
+          // #240：行内 DrawingML 组在装机这只壳里画成了什么。报每枚 .shape-carry 的盒子像素（除回 zoom）、
+          // SVG 自己说的那套刻度（viewBox 字面）、笔画按 tag 分.count、覆盖层数与首枚覆盖层相对盒子的 left/top。
+          // 比对留给 .scratch/shape-install-check.sh（530×295.8px、rect 14 / line 20 / path 4、7 枚覆盖层是它自己
+          // 从授权件算的），这一腿只报几何与计数，一个字的文档内容也不出页面。
+          shapeDraw: (() => {
+            const p = document.querySelector("#view .page");
+            if (!p) return [];
+            const zz = Number.parseFloat(p.style.getPropertyValue("zoom")) || 1;
+            const r1 = (n) => Math.round(n * 10) / 10;
+            return [...p.querySelectorAll(".shape-carry")].map((el) => {
+              const r = el.getBoundingClientRect();
+              const svg = el.querySelector("svg");
+              const kinds = {};
+              for (const g of svg ? svg.children : []) {
+                const k = g.tagName.toLowerCase();
+                kinds[k] = (kinds[k] || 0) + 1;
+              }
+              const words = el.querySelector(".shape-words");
+              const wr = words ? words.getBoundingClientRect() : null;
+              return {
+                w: r1(r.width / zz),
+                h: r1(r.height / zz),
+                vb: svg ? svg.getAttribute("viewBox") : "",
+                n: svg ? svg.children.length : 0,
+                by: Object.keys(kinds)
+                  .sort()
+                  .map((k) => k + " " + kinds[k])
+                  .join(","),
+                boxes: el.querySelectorAll(".shape-words").length,
+                first: wr ? r1((wr.left - r.left) / zz) + "/" + r1((wr.top - r.top) / zz) : "",
+                title: el.getAttribute("title") || "",
+              };
+            });
+          })(),
         };
 
         // 导航窗格: the page leaves one [data-outline] mark per paragraph whose outline level resolves, and the

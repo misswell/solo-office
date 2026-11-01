@@ -44,12 +44,7 @@ export class ThemeFonts {
    * freshly built one — gets `none`.
    */
   static fromPackage(pkg: OpcPackage): ThemeFonts {
-    let path: string | undefined;
-    for (const rel of pkg.rels("word/document.xml").values()) if (rel.type.endsWith("/theme")) {
-      path = pkg.resolve("word/document.xml", rel);
-      break;
-    }
-    if (!path || !pkg.parts.has(path)) path = [...pkg.parts.keys()].find((p) => /^word\/theme\/[^/]+\.xml$/i.test(p));
+    const path = themePartPath(pkg);
     const xml = path ? pkg.text(path) : undefined;
     if (!xml) return ThemeFonts.none;
     const scheme = rawFind(parseOrderedXml(xml), "fontScheme");
@@ -105,4 +100,20 @@ export function themeFontScript(eastAsiaLang: string | undefined): string | unde
   if (/^ja/i.test(v)) return "Jpan";
   if (/^ko/i.test(v)) return "Hang";
   return undefined;
+}
+
+/**
+ * The theme part a `word/` document reads its theme from, taken off its own relationship when one exists (a theme
+ * can be an external target, and a package can hold more than one) and falling back to the one `word/theme/` part.
+ * Which part carries the theme is one answer, not one per question asked of it — the font slots and the colour
+ * scheme both start here.
+ */
+export function themePartPath(pkg: OpcPackage): string | undefined {
+  let path: string | undefined;
+  for (const rel of pkg.rels("word/document.xml").values()) if (rel.type.endsWith("/theme")) {
+    path = pkg.resolve("word/document.xml", rel);
+    break;
+  }
+  if (!path || !pkg.parts.has(path)) path = [...pkg.parts.keys()].find((p) => /^word\/theme\/[^/]+\.xml$/i.test(p));
+  return path;
 }

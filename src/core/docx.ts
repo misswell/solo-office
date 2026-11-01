@@ -1,5 +1,6 @@
 import { OpcPackage, asArray, childSpans, children, decodeEntities, elementContent } from "./opc.js";
 import { ThemeFonts, themeFontScript } from "./theme-fonts.js";
+import { ThemeColors, hexColor } from "./theme-colors.js";
 import { isMark } from "./run-identity.js";
 import { rewriteTocCachedPages } from "./doc-toc.js";
 import { dataUrl } from "./media.js";
@@ -120,6 +121,12 @@ export interface Inline extends RunStyle {
    * loses its bookmarks loses the places other parts of it point to.
    */
   carry?: CarriedInline;
+  /**
+   * A `w:drawing` this reader understood enough to paint. The bytes still travel in `carry` and still go back
+   * unchanged — this is a second reading of the same element for the page, not a replacement the writer builds
+   * from, so a save of a document nobody edited stays byte for byte what it was.
+   */
+  shape?: InlineShape;
   /** The tracked change (`w:ins` / `w:del`) this run sits inside, if it is one. */
   rev?: Revision;
   /** A `w:rPrChange` on this run: formatting someone revised and nobody has decided yet. */
@@ -142,6 +149,64 @@ export interface Inline extends RunStyle {
    * it came in with; one that has is re-spelled, which is what lets the toolbar work on a run it did not write.
    */
   asRead?: RunStyle;
+}
+
+/**
+ * A figure inside a DrawingML group, in the group's own child units: `a:off`/`a:ext` as the file wrote them,
+ * not pixels. The page scales them with the group's `a:chOff`/`a:chExt`, which is the one transform the file
+ * states — a shape's own box and the group's child space are two different rulers and this model keeps both.
+ */
+export interface ShapeGlyph {
+  /** `a:prstGeom@prst`, or `custGeom` for an `a:custGeom`. A preset this reader does not draw is not read. */
+  kind: "rect" | "roundRect" | "line" | "custGeom";
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** `roundRect`: the corner radius in the same child units, from `a:avLst` or the preset's own default. */
+  radius?: number;
+  /** `custGeom`: one `a:path`'s `d` in SVG words, its `a:pt` values already scaled into the shape's box. */
+  d?: string;
+  /** The paint the shape states or the theme's style entry resolves to. Absent means this reader does not know it. */
+  fill?: string;
+  /** `true` on a stated `a:noFill` — an absence the file spoke, which is not the same as silence. */
+  noFill?: boolean;
+  stroke?: string;
+  /**
+   * `a:ln@w` in **pixels**, not the child units the box is spelled in: a pen width is an absolute the file states,
+   * so the page draws it with a non-scaling stroke rather than letting the group's (non-uniform) scale thicken it.
+   */
+  strokeWidth?: number;
+  /** `a:xfrm@rot`, in degrees clockwise, and the flips applied inside the box before that rotation. */
+  rotation?: number;
+  flipH?: boolean;
+  flipV?: boolean;
+}
+
+/** A text box of a DrawingML group: its box in child units and the body paragraphs it holds. */
+export interface ShapeText {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** `wps:bodyPr@anchor`: where the lines sit inside the box. */
+  anchor?: string;
+  paragraphs: Paragraph[];
+}
+
+/**
+ * A `w:drawing` the page can draw. `width`/`height` are the `wp:extent` in pixels — the box the drawing sits in
+ * inline — and `viewBox` is the coordinate space the glyphs are spelled in, which for a group is its
+ * `a:chOff`/`a:chExt` and for a lone shape its own box.
+ */
+export interface InlineShape {
+  width: number;
+  height: number;
+  viewBox: { x: number; y: number; w: number; h: number };
+  glyphs: ShapeGlyph[];
+  texts: ShapeText[];
+  /** Shape kinds this reader met and does not draw, so the caller can say the page is incomplete rather than exact. */
+  skipped?: string[];
 }
 
 /**
@@ -1947,6 +2012,12 @@ export class WordDocument {
    * deliberately does not.
    */
   private theme: ThemeFonts = ThemeFonts.none;
+  /**
+   * The same theme part's colour half: `a:clrScheme` for a `a:schemeClr` to name, and `a:fillStyleLst`/`a:lnStyleLst`
+   * for a shape that borrows its paint through `wps:style` rather than stating it. Only a DrawingML shape asks;
+   * a document read from a package with no theme gets `none` and every borrowed paint stays undrawn.
+   */
+  private colors: ThemeColors = ThemeColors.none;
   /** Resolved style chains, keyed by the style id the paragraph names. See `paraLent`. */
   private lentMemo = new Map<string | undefined, Partial<ParaStyle> | undefined>();
   /** The same memo for `runLent`, keyed by which kind of chain was walked as well as by the style. */
@@ -2063,6 +2134,7 @@ export class WordDocument {
   private read(pkg: OpcPackage): void {
     this.pkg = pkg;
     this.theme = ThemeFonts.fromPackage(pkg);
+    this.colors = ThemeColors.fromPackage(pkg);
     this.readStyles(pkg);
     this.readNumbering(pkg);
     this.readMedia(pkg);
@@ -2553,6 +2625,9 @@ export class WordDocument {
     };
     const out: Inline[] = [];
     let unmodelled = false;
+    // A drawing the reader can paint rides along with the bytes it came in. The two are not alternatives: the
+    // figure on the page is what a reader sees, and the bytes are what a save puts back.
+    let shape: InlineShape | undefined;
     // The run's children come paired with the part's own text, not just off the parsed tree: a drawing's
     // frame and effects live below the fields the model reads, and the only faithful copy of them is the
     // bytes the file wrote.
@@ -2601,11 +2676,21 @@ export class WordDocument {
           // A picture this reader cannot resolve — an external `r:link`, a frame it does not know — still has
           // bytes, and the run that holds them is not empty. Carrying the drawing keeps the shape on the page
           // and the citation in the body intact; reading it as nothing would delete both.
-          if (child.span)
-            out.push({ ...base, text: "", carry: { key: this.carryKey++, tag: child.tag, xml: child.span.xml, show: carriedText(child.span.xml) } });
+          if (child.span) {
+            shape = this.inlineShapeOf(child.node, rels);
+            out.push({
+              ...base,
+              text: "",
+              carry: { key: this.carryKey++, tag: child.tag, xml: child.span.xml, show: shape ? "" : carriedText(child.span.xml) },
+              ...(shape ? { shape } : {}),
+            });
+          }
           break;
         }
         default:
+          // A shape wrapped in `mc:AlternateContent` is the same `w:drawing` one level out; the wrapper is what
+          // WPS writes for a DrawingML figure, so the wrap is crossed here rather than left as blank paper.
+          if (child.tag === "AlternateContent") shape = this.inlineShapeOf(child.node, rels);
           if (child.tag !== "rPr") unmodelled = true;
       }
     }
@@ -2613,7 +2698,14 @@ export class WordDocument {
     // OLE object — reads as nothing at all, and a paragraph that reads as nothing is one a save deletes.
     // The bytes go back where they came from instead of the drawing going down with the reader's blind spot.
     if (!out.length && span && unmodelled)
-      return [{ ...base, text: "", carry: { key: this.carryKey++, tag: "r", xml: span, show: carriedText(span) } }];
+      return [
+        {
+          ...base,
+          text: "",
+          carry: { key: this.carryKey++, tag: "r", xml: span, show: shape ? "" : carriedText(span) },
+          ...(shape ? { shape } : {}),
+        },
+      ];
     // 一枚 run 装了并排的孩子时，这串文字属于整枚 run，孩子各拿一份引用：孩子自己没有 `w:rPr`，共用的是上面
     // 那一套槽，所以「件里这段话说的是中文」只能这样问回去。一个孩子时不必写——问题本来就只有一句文字。
     if (out.length > 1) {
@@ -2621,6 +2713,184 @@ export class WordDocument {
       for (const inline of out) inline.runText = runText;
     }
     return out;
+  }
+
+  /**
+   * The `w:drawing` a node holds: the run's own child, the one wrapped in `mc:AlternateContent`, or — when the
+   * caller already handed over the drawing — the node itself.
+   *
+   * Only the `mc:Choice` half is read. `mc:Fallback` spells the same figure a second time in VML for a renderer
+   * with no DrawingML, and a page that draws the Choice must not draw the copy beside it. Both halves keep their
+   * bytes in the run's `carry`, which is what the writer puts back.
+   */
+  private drawingOf(node: any): any {
+    const kids = children(node);
+    const direct = kids.find((kid) => kid.name === "drawing");
+    if (direct) return direct.node;
+    const choice = kids.find((kid) => kid.name === "Choice");
+    if (choice) return children(choice.node).find((kid) => kid.name === "drawing")?.node;
+    // A `w:drawing` says so by holding a `wp:inline` or a `wp:anchor`; anything else handed over (a `w:pict`,
+    // whose VML this reader does not draw) has no figure to give.
+    return kids.some((kid) => kid.name === "inline" || kid.name === "anchor") ? node : undefined;
+  }
+
+  /**
+   * A `wp:inline` shape read as the figures the page draws — the geometry, paint and text the file states, in the
+   * coordinate space the file states them in.
+   *
+   * `wp:extent` sizes the box in EMU and `a:chOff`/`a:chExt` spell the ruler the children are measured against;
+   * the two are not proportional in the authorized sample (5550×4437 child units across 530.0×295.8 px), so the
+   * page keeps both and scales each axis on its own rather than assuming the group is square.
+   *
+   * `wp:anchor` is deliberately not read: it states a spot on the page rather than a place in the line, and the
+   * body has no anchor placement to put it at (#218 covers floating *tables*). An anchored shape keeps its bytes
+   * and stays undrawn — the run carries it, and the page shows the words inside it (`carry.show`) without the
+   * figure. That is a known gap, not a case no document writes: `.scratch/wgp-census.mjs` counts 7 枚 across 6 件
+   * of the 21 authorized templates, 4 of them borrowing paint from the theme and 4 of them sitting in a footer
+   * rather than the body. No position is invented for them here.
+   */
+  private inlineShapeOf(node: any, rels: Map<string, Rel2>): InlineShape | undefined {
+    const drawing = this.drawingOf(node);
+    const inline = drawing ? childNode(drawing, "inline") : undefined;
+    if (!inline) return undefined;
+    const extent = childNode(inline, "extent");
+    const width = num(extent?.["@_cx"]);
+    const height = num(extent?.["@_cy"]);
+    if (!width || !height || width <= 0 || height <= 0) return undefined;
+    const data = childNode(childNode(inline, "graphic"), "graphicData");
+    const group = childNode(data, "wgp");
+    const skipped: string[] = [];
+    let viewBox: InlineShape["viewBox"];
+    let shapes: any[];
+    if (group) {
+      const xfrm = childNode(childNode(group, "grpSpPr"), "xfrm");
+      const chOff = childNode(xfrm, "chOff");
+      const chExt = childNode(xfrm, "chExt");
+      const box = { x: num(chOff?.["@_x"]) ?? 0, y: num(chOff?.["@_y"]) ?? 0, w: num(chExt?.["@_cx"]) ?? 0, h: num(chExt?.["@_cy"]) ?? 0 };
+      if (box.w <= 0 || box.h <= 0) return undefined;
+      // A group inside the group needs its transform composed twice. The authorized sample holds one group and no
+      // nested one, so the inner one keeps its bytes and stays undrawn rather than half-placed.
+      if (childList(group, "wgp").length) addTo(skipped, "组内组");
+      viewBox = box;
+      shapes = childList(group, "wsp");
+    } else {
+      const wsp = childNode(data, "wsp");
+      if (!wsp) return undefined;
+      const box = childNode(childNode(wsp, "spPr"), "xfrm");
+      const off = childNode(box, "off");
+      const ext = childNode(box, "ext");
+      const w = num(ext?.["@_cx"]);
+      const h = num(ext?.["@_cy"]);
+      if (!w || !h || w <= 0 || h <= 0) return undefined;
+      // A lone shape is its own coordinate space: the box is the viewBox, so the shape lands at its origin.
+      viewBox = { x: num(off?.["@_x"]) ?? 0, y: num(off?.["@_y"]) ?? 0, w, h };
+      shapes = [wsp];
+    }
+    const figures = this.shapeFigures(shapes, rels, skipped);
+    return { width: width / EMU_PER_PX, height: height / EMU_PER_PX, viewBox, ...figures, ...(skipped.length ? { skipped } : {}) };
+  }
+
+  /**
+   * The `wps:wsp` of a DrawingML group as glyphs and text boxes, still in the group's child units. A shape with
+   * both a paint and a `wps:txbx` contributes to each — the figure it draws and the words inside it are two
+   * questions the same element answers.
+   */
+  private shapeFigures(list: any[], rels: Map<string, Rel2>, skipped: string[]): { glyphs: ShapeGlyph[]; texts: ShapeText[] } {
+    const glyphs: ShapeGlyph[] = [];
+    const texts: ShapeText[] = [];
+    for (const wsp of list) {
+      const spPr = childNode(wsp, "spPr");
+      const xfrm = childNode(spPr, "xfrm");
+      const ext = childNode(xfrm, "ext");
+      const w = num(ext?.["@_cx"]);
+      const h = num(ext?.["@_cy"]);
+      // A stated box is one number in each direction, and *zero* is a statement: `a:ext cx="3987810" cy="0"` is
+      // how a horizontal connector is written, not an empty shape. Only a shape that names no box, or no room in
+      // either direction, has nowhere to draw.
+      if (w === undefined || h === undefined) {
+        addTo(skipped, "形状无位置");
+        continue;
+      }
+      if (w === 0 && h === 0) continue;
+      const prstGeom = childNode(spPr, "prstGeom");
+      const prst = prstGeom?.["@_prst"];
+      const custom = childNode(spPr, "custGeom");
+      const geometry = custom ? "custGeom" : prst === "rect" || prst === "roundRect" || prst === "line" ? prst : undefined;
+      if (!geometry) {
+        // A preset this reader does not draw keeps its bytes and stays off the page; the note is how the page says so.
+        addTo(skipped, prst ? `形状 ${prst}` : "形状无预设");
+        continue;
+      }
+      const d = geometry === "custGeom" ? custGeomPath(custom, w, h) : undefined;
+      if (geometry === "custGeom" && !d) {
+        addTo(skipped, "自定义几何路径");
+        continue;
+      }
+      const off = childNode(xfrm, "off");
+      const rot = num(xfrm?.["@_rot"]) ?? 0;
+      const paint: ShapeGlyph = {
+        kind: geometry,
+        x: num(off?.["@_x"]) ?? 0,
+        y: num(off?.["@_y"]) ?? 0,
+        w,
+        h,
+        ...(d ? { d } : {}),
+        ...(geometry === "roundRect" ? { radius: (Math.min(w, h) * (presetAdjust(prstGeom) ?? 16667)) / 100000 } : {}),
+        ...(rot !== 0 ? { rotation: rot / 60000 } : {}),
+        ...(xfrm?.["@_flipH"] === "1" ? { flipH: true } : {}),
+        ...(xfrm?.["@_flipV"] === "1" ? { flipV: true } : {}),
+      };
+      const fill = this.shapePaint(spPr, childNode(wsp, "style"), "fill");
+      if (fill.kind === "unknown") addTo(skipped, "填充");
+      else if (fill.kind === "none") paint.noFill = true;
+      // A connector has no interior to paint. Its `a:solidFill` is the colour it would take if it were converted
+      // to a shape; drawing it would turn every line in the diagram into a solid block.
+      else if (fill.kind === "stated" && fill.color && geometry !== "line") paint.fill = fill.color;
+      const line = this.shapePaint(spPr, childNode(wsp, "style"), "line");
+      const pen = num(childNode(spPr, "ln")?.["@_w"]) ?? (line.kind === "stated" ? line.width : undefined);
+      if (line.kind === "unknown") addTo(skipped, "描边");
+      else if (line.kind === "stated") {
+        if (line.color) paint.stroke = line.color;
+        if (pen !== undefined) paint.strokeWidth = pen / EMU_PER_PX;
+      }
+      glyphs.push(paint);
+      const content = childNode(childNode(wsp, "txbx"), "txbxContent");
+      if (content) {
+        const anchor = childNode(wsp, "bodyPr")?.["@_anchor"];
+        texts.push({
+          x: paint.x,
+          y: paint.y,
+          w,
+          h,
+          ...(typeof anchor === "string" ? { anchor } : {}),
+          paragraphs: children(content)
+            .filter((kid) => kid.name === "p")
+            .map((kid) => this.paragraph(kid.node, rels)),
+        });
+      }
+    }
+    return { glyphs, texts };
+  }
+
+  /**
+   * The paint a shape's fill or line slot ends up with, following the two spellings the corpus uses: stated in
+   * `a:spPr`, or borrowed from the theme through `wps:style/a:fillRef`/`a:lnRef` and coloured by the `a:schemeClr`
+   * sitting on that reference.
+   *
+   * `kind` keeps the three silences apart. `absent` is a file that said nothing, `none` is `a:noFill` — an absence
+   * the file spoke — and `unknown` is a paint this reader does not expand (a gradFill, a `phClr` carrying
+   * `a:shade`). Only `unknown` is recorded as a gap on the page.
+   */
+  private shapePaint(spPr: any, style: any, slot: "fill" | "line"): ShapePaint {
+    const stated = paintChild(slot === "fill" ? spPr : childNode(spPr, "ln"));
+    if (stated) return stated.tag === "noFill" ? { kind: "none" } : solidOf(stated.el, this.colors);
+    const ref = childNode(style, slot === "fill" ? "fillRef" : "lnRef");
+    if (!ref) return { kind: "absent" };
+    const entry = slot === "fill" ? this.colors.fillStyle(num(ref["@_idx"]) ?? 0) : this.colors.lineStyle(num(ref["@_idx"]) ?? 0);
+    if (!entry) return { kind: "unknown" };
+    const borrowed = childNode(ref, "schemeClr")?.["@_val"];
+    const color = entry.placeholder ? (typeof borrowed === "string" ? this.colors.color(borrowed) : undefined) : entry.color;
+    return color ? { kind: "stated", color, width: entry.width } : { kind: "unknown" };
   }
 
   private table(tbl: any, rels: Map<string, Rel2>, source?: string): Table {
@@ -4781,6 +5051,111 @@ function embedOf(xml: string): string | undefined {
   return /\br:(?:embed|link)="([^"]+)"/.exec(xml)?.[1];
 }
 
+/** EMU per CSS px — the ratio DrawingML sizes are written in, for a picture's extent and a shape's pen alike. */
+const EMU_PER_PX = 9525;
+
+/** The first child with one of these local names, or `undefined`. */
+function childNode(node: any, ...names: string[]): any {
+  for (const kid of children(node)) if (names.includes(kid.name)) return kid.node;
+  return undefined;
+}
+
+/** Every child with this local name, in the order the file wrote them. */
+function childList(node: any, name: string): any[] {
+  return children(node)
+    .filter((kid) => kid.name === name)
+    .map((kid) => kid.node);
+}
+
+/** The paint-bearing children of an `a:spPr` or an `a:ln`. `noFill` is one: it says *none*, which is not silence. */
+const PAINT_TAGS = ["solidFill", "gradFill", "blipFill", "pattFill", "grpFill", "noFill"];
+
+function paintChild(node: any): { tag: string; el: any } | undefined {
+  const kid = children(node).find((c) => PAINT_TAGS.includes(c.name));
+  return kid ? { tag: kid.name, el: kid.node } : undefined;
+}
+
+/** The elements an `a:solidFill` can hold a colour in. */
+const COLOR_TAGS = ["schemeClr", "srgbClr", "sysClr"];
+
+/**
+ * An `a:solidFill` reduced to a colour, or `unknown` for a paint whose colour this reader cannot name — a solid
+ * whose colour carries `a:shade`/`a:tint`/`a:satMod` arithmetic the file never spells out, or a colour form it does
+ * not know. The caller has already thrown away the gradFill and pattern cases.
+ */
+function solidOf(fill: any, colors: ThemeColors): ShapePaint {
+  const color = children(fill).find((kid) => COLOR_TAGS.includes(kid.name));
+  if (!color) return { kind: "unknown" };
+  // A modifier under the colour is arithmetic this reader does not run, so the colour it states is not this one.
+  if (children(color.node).length) return { kind: "unknown" };
+  const val =
+    color.name === "schemeClr"
+      ? colors.color(String(color.node["@_val"] ?? ""))
+      : hexColor(color.node[color.name === "sysClr" ? "@_lastClr" : "@_val"]);
+  return val ? { kind: "stated", color: val } : { kind: "unknown" };
+}
+
+/** A gap worth telling the reader about, once. */
+function addTo(list: string[], what: string): void {
+  if (!list.includes(what)) list.push(what);
+}
+
+/**
+ * `a:prstGeom/a:avLst/a:gd@fmla` for the preset's one adjustment, in 1/100000. Only the literal `val N` form is
+ * a value the file states; a formula is the preset's own arithmetic over other adjustments and stays undefined,
+ * which the caller answers with the preset's documented default.
+ */
+function presetAdjust(prstGeom: any): number | undefined {
+  const gd = children(childNode(prstGeom, "avLst")).find((kid) => kid.name === "gd" && kid.node["@_name"] === "adj");
+  const m = /^val\s+(-?\d+(?:\.\d+)?)$/.exec(String(gd?.node?.["@_fmla"] ?? ""));
+  return m ? Number(m[1]) : undefined;
+}
+
+/**
+ * The first `a:path` of an `a:custGeom` as path data in the shape's own box. `a:path@w`/`@h` name the ruler its
+ * `a:pt` values are measured against, so each point crosses into `a:ext` on the ratio the two state.
+ *
+ * `a:moveTo`, `a:lnTo`, `a:cubicBezTo`, `a:quadBezTo` and `a:close` are the forms the authorized sample uses. Any
+ * other child — an `a:rect` shortcut, a command form this reader has not met — answers `undefined`, because half a
+ * curve is not the curve the file drew and a wrong one is worse than none.
+ */
+function custGeomPath(cust: any, w: number, h: number): string | undefined {
+  const path = childNode(childNode(cust, "pathLst"), "path");
+  if (!path) return undefined;
+  const pw = num(path["@_w"]) ?? w;
+  const ph = num(path["@_h"]) ?? h;
+  if (!pw || !ph) return undefined;
+  const at = (v: number, scale: number): string => String(Math.round(v * scale * 1000) / 1000);
+  const parts: string[] = [];
+  for (const kid of children(path)) {
+    const coords = children(kid.node)
+      .filter((c) => c.name === "pt")
+      .map((c) => `${at(num(c.node["@_x"]) ?? 0, w / pw)} ${at(num(c.node["@_y"]) ?? 0, h / ph)}`);
+    if (kid.name === "moveTo") {
+      if (coords.length !== 1) return undefined;
+      parts.push(`M ${coords[0]}`);
+    } else if (kid.name === "lnTo") {
+      if (!coords.length) return undefined;
+      parts.push(`L ${coords.join(" L ")}`);
+    } else if (kid.name === "cubicBezTo") {
+      if (coords.length !== 3) return undefined;
+      parts.push(`C ${coords.join(" ")}`);
+    } else if (kid.name === "quadBezTo") {
+      if (coords.length !== 2) return undefined;
+      parts.push(`Q ${coords.join(" ")}`);
+    } else if (kid.name === "close") parts.push("Z");
+    else return undefined;
+  }
+  return parts.length ? parts.join(" ") : undefined;
+}
+
+/**
+ * What one of a shape's two paint slots said. `absent` is a file that said nothing, `none` is the `a:noFill` the
+ * file spoke, `unknown` is a paint this reader does not expand, and `stated` carries the colour and, for a line
+ * borrowed from `a:lnStyleLst`, the width that entry states.
+ */
+type ShapePaint = { kind: "absent" } | { kind: "none" } | { kind: "unknown" } | { kind: "stated"; color?: string; width?: number };
+
 function imageOf(node: any, rels: Map<string, Rel2>, media: Map<string, string>, pkg?: OpcPackage): Inline["image"] {
   const stack = [node];
   let embed: string | undefined;
@@ -4803,7 +5178,6 @@ function imageOf(node: any, rels: Map<string, Rel2>, media: Map<string, string>,
   const path = rel && pkg ? pkg.resolve("word/document.xml", rel) : undefined;
   const src = path ? media.get(path) : undefined;
   if (!src || !path) return undefined;
-  const EMU_PER_PX = 9525;
   return {
     src,
     width: extent ? Number(extent["@_cx"]) / EMU_PER_PX : 320,

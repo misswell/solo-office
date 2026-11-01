@@ -205,15 +205,16 @@ export function buildXml(nodes: any[]): string {
 
 // ------------------------------------------------------------- raw part trees
 
-/** Element name of an ordered-node entry, or undefined for text/attribute entries. */
+/** Element name of an ordered-node entry, or undefined for text/attribute entries — and for no entry at all. */
 export function tagOf(entry: any): string | undefined {
+  if (!entry) return undefined;
   for (const key of Object.keys(entry)) {
     if (key !== "#text" && key !== ATTRS && !key.startsWith("@_")) return key;
   }
   return undefined;
 }
 
-/** An ordered element's children as a plain array. */
+/** An ordered element's children as a plain array. A part that states no such element states no children. */
 export function rawChildren(entry: any): any[] {
   const tag = tagOf(entry);
   return tag ? (entry[tag] as any[]) : [];
